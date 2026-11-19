@@ -28,8 +28,10 @@ fi
 
 depends=(
   'avahi'
+  'binutils'  # inspect the installed KWin ABI and packaged bridge
   'curl'
   'dkms'
+  'gcc'  # check the installed KWin header signature
   'iproute2'
   'jq'
   'kmod'
@@ -54,10 +56,13 @@ depends=(
   'numactl'
   'openssl'
   'opus'
+  'pkgconf'
+  'pyside6'
   'python>=3.9'
   'socat'
   'udev'
   'util-linux'
+  'vulkan-headers'  # required by the installed KWin header probe
   'vulkan-icd-loader'
   'wayland-utils'
   'xorg-xdpyinfo'
@@ -70,11 +75,13 @@ makedepends=(
   'desktop-file-utils'
   "gcc${_gcc_dep_suffix}"
   'git'
+  'kwin'  # public allocator headers/library for the native KWin GPU bridge
   'make'
   'ninja'
   'nodejs'
   'npm'
   'python-jinja'  # required by the glad OpenGL/EGL loader generator
+  'qt6-base'  # Qt Core headers used by KWin's public allocator API
   'shaderc'
 )
 
@@ -133,13 +140,14 @@ fi
 
 prepare() {
     cd "$pkgname"
-    git submodule update --recursive --init
+    if [[ -n "${_validation_expected_tree:-}" ]]; then
+      [[ $(git rev-parse HEAD) == "${_commit}" ]] || { echo 'Extracted source commit mismatch.' >&2; return 1; }
+      [[ $(git rev-parse 'HEAD^{tree}') == "${_validation_expected_tree}" ]] || { echo 'Extracted source tree mismatch.' >&2; return 1; }
+    fi
+    git -c submodule.fetchJobs="${BUILD_JOBS:-2}" submodule update --recursive --init --depth 1
     if [[ "${_use_cuda::1}" == "t" ]]; then
-      sh "${srcdir}/cuda-${CARCH}.run" --silent --toolkit --override \
-        --toolkitpath="${srcdir}/cuda" --no-opengl-libs --no-man-page --no-drm
-      # Match CUDA 12.9 headers to Arch's glibc 2.41+ declarations.
-      patch -p2 --forward --directory="${srcdir}/cuda" \
-        < "packaging/linux/patches/${CARCH}/cuda-12-math_functions.patch"
+      bash scripts/prepare-linux-cuda.sh "${srcdir}/cuda-${CARCH}.run" \
+        "${srcdir}/cuda" "packaging/linux/patches/${CARCH}/cuda-12-math_functions.patch"
     fi
 }
 
@@ -164,6 +172,8 @@ build() {
       -D BUILD_DOCS=OFF
       -D BUILD_WERROR=ON
       -D CMAKE_INSTALL_PREFIX=/usr
+      -D VIBESHINE_ARCH_KWIN_BRIDGE_REFRESH=ON
+      -D VIBESHINE_KWIN_GPU_LIBRARY_INSTALL_DIR=/usr/lib/vibeshine/kwin-bridge
       -D SUNSHINE_EXECUTABLE_PATH=/usr/bin/vibeshine
       -D SUNSHINE_ASSETS_DIR="share/vibeshine"
       -D SUNSHINE_PUBLISHER_NAME='Nonary'
@@ -182,14 +192,32 @@ build() {
       )
     fi
 
+    if [[ -n "${CCACHE_DIR:-}" ]]; then
+      _cmake_options+=(
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
+      )
+    fi
+
     _cmake_options+=(-DBUILD_TESTS="${_build_tests:-ON}")
 
+    if [[ "${_build_tests:-ON}" != "OFF" ]]; then
+      mkdir -p build/.cmake/api/v1/query
+      touch build/.cmake/api/v1/query/codemodel-v2
+    fi
     cmake "${_cmake_options[@]}"
 
     appstreamcli validate "build/io.github.Nonary.vibeshine.metainfo.xml"
     appstream-util validate "build/io.github.Nonary.vibeshine.metainfo.xml"
     desktop-file-validate "build/io.github.Nonary.vibeshine.desktop"
     desktop-file-validate "build/io.github.Nonary.vibeshine.terminal.desktop"
+
+    if [[ "${_build_tests:-ON}" != "OFF" ]]; then
+      # Compile all configured components before expensive host/CUDA compilation.
+      # File API discovers new test targets; final full build and CTest still run.
+      python3 "$srcdir/$pkgname/scripts/build-linux-component-tests.py" build
+    fi
 
     cmake --build build
 }
@@ -203,11 +231,12 @@ check() {
       grep -q 'sm_61\.' cuda-device-code.txt
     fi
     if [[ "${_build_tests:-ON}" != "OFF" ]]; then
-      ctest --test-dir . --output-on-failure -j2
+      ctest --test-dir . --output-on-failure --no-tests=error -j2
     fi
 }
 
 package() {
     export MAKEFLAGS="${MAKEFLAGS:--j$(nproc)}"
-    DESTDIR="$pkgdir" cmake --install build
+    DESTDIR="$pkgdir" cmake --install build || return
+    chmod 0644 "$pkgdir/usr/lib/vibeshine/kwin-bridge/libvibeshine-kwin-gpu.so"
 }

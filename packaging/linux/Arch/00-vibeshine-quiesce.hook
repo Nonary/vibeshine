@@ -1,0 +1,12 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = vibeshine
+
+[Action]
+Description = Safely stopping Vibeshine before package replacement
+When = PreTransaction
+Exec = /usr/libexec/vibeshine/vibeshine-package-preflight
+AbortOnFail

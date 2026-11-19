@@ -162,6 +162,7 @@ export function getConfigSelectOptions(
         vhf_ds5: 'config.gamepad_vhf_ds5',
         usbip_ds5: 'config.gamepad_usbip_ds5',
         vhf_switch: 'config.gamepad_vhf_switch',
+        vhf_steam: 'config.gamepad_vhf_steam',
       };
       const prioritizedByPlatform: Record<string, string[]> = {
         freebsd: ['switch', 'xone'],
@@ -176,6 +177,7 @@ export function getConfigSelectOptions(
           'vhf_ds5',
           'usbip_ds5',
           'vhf_switch',
+          'vhf_steam',
         ],
       };
       const fallbackOrder = ['x360', 'ds5', 'ds4'];
@@ -224,9 +226,9 @@ export function getConfigSelectOptions(
       if (platform === 'windows') {
         if (hasNvidia) options.push({ label: 'NVIDIA NVENC', value: 'nvenc' });
         if (hasIntel) options.push({ label: 'Intel QuickSync', value: 'quicksync' });
-        if (hasAmd) options.push({ label: 'AMD AMF/VCE (FFmpeg)', value: 'amdvce_ffmpeg' });
+        if (hasAmd) options.push({ label: 'AMD AMF/VCE (Legacy FFmpeg)', value: 'amdvce_ffmpeg' });
         if (hasAmd) {
-          options.push({ label: 'AMD AMF/VCE (Experimental)', value: 'amdvce_experimental' });
+          options.push({ label: 'AMD AMF/VCE (Native)', value: 'amdvce_experimental' });
         }
       } else if (platform === 'linux') {
         options.push(

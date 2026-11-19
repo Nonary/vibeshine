@@ -60,7 +60,7 @@ foreach(_truehdr_runtime_file IN ITEMS
 endforeach()
 ]=])
     string(CONFIGURE "${_truehdr_stage_code}" _truehdr_stage_code @ONLY)
-    install(CODE "${_truehdr_stage_code}")
+    install(CODE "${_truehdr_stage_code}" COMPONENT application)
     unset(_truehdr_stage_code)
     install(FILES ${SUNSHINE_TRUEHDR_RUNTIME_FILES}
         DESTINATION "."
@@ -99,6 +99,9 @@ if (TARGET playnite-launcher)
 endif()
 if (TARGET sunshine_wgc_capture)
     install(TARGETS sunshine_wgc_capture RUNTIME DESTINATION "tools" COMPONENT application)
+endif()
+if (TARGET sunshine_end_stream_hotkey)
+    install(TARGETS sunshine_end_stream_hotkey RUNTIME DESTINATION "tools" COMPONENT application)
 endif()
 if (TARGET sunshine_display_helper)
     install(TARGETS sunshine_display_helper RUNTIME DESTINATION "tools" COMPONENT application)
@@ -193,20 +196,26 @@ unset(_sunshine_driver_file_size)
 unset(_sunshine_driver_file)
 
 if(EXISTS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}")
-    if(SUNSHINE_DOWNLOAD_LIBVIRTUALDISPLAY_RELEASE)
-        if(NOT EXISTS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_DOWNLOAD_SCRIPT}")
-            message(FATAL_ERROR "Required libvirtualdisplay release downloader is missing: ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_DOWNLOAD_SCRIPT}")
-        endif()
-        add_custom_target(download_sunshine_virtual_display_driver_release
-            COMMAND powershell -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass
-                    -File "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_DOWNLOAD_SCRIPT}"
-                    -Repository "${SUNSHINE_VDD_LIBVIRTUALDISPLAY_REPOSITORY}"
-                    -Tag "${SUNSHINE_VDD_LIBVIRTUALDISPLAY_RELEASE_TAG}"
-                    -OutDir "${SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR}"
-            DEPENDS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_DOWNLOAD_SCRIPT}"
-            COMMENT "Downloading pinned Vibeshine Display Driver release"
-            VERBATIM)
+    # Verify explicit prebuilt roots too; cache existence alone is not provenance.
+    if(NOT EXISTS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_DOWNLOAD_SCRIPT}")
+        message(FATAL_ERROR "Required libvirtualdisplay release downloader is missing: ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_DOWNLOAD_SCRIPT}")
     endif()
+    set(_sunshine_vdd_provenance_args "")
+    if(NOT SUNSHINE_DOWNLOAD_LIBVIRTUALDISPLAY_RELEASE)
+        set(_sunshine_vdd_provenance_args -ValidateOnly)
+    endif()
+    add_custom_target(download_sunshine_virtual_display_driver_release
+        COMMAND powershell -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass
+                -File "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_DOWNLOAD_SCRIPT}"
+                -Repository "${SUNSHINE_VDD_LIBVIRTUALDISPLAY_REPOSITORY}"
+                -Tag "${SUNSHINE_VDD_LIBVIRTUALDISPLAY_RELEASE_TAG}"
+                -OutDir "${SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR}"
+                -LockPath "${SUNSHINE_VDD_LIBVIRTUALDISPLAY_RELEASE_LOCK}"
+                ${_sunshine_vdd_provenance_args}
+        DEPENDS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_DOWNLOAD_SCRIPT}" "${SUNSHINE_VDD_LIBVIRTUALDISPLAY_RELEASE_LOCK}"
+        COMMENT "Verifying reviewed Vibeshine Display Driver producer bytes"
+        VERBATIM)
+    unset(_sunshine_vdd_provenance_args)
 
     add_custom_target(validate_sunshine_virtual_display_driver_assets
         COMMAND powershell -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass
@@ -219,10 +228,8 @@ if(EXISTS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}")
         COMMENT "Validating Vibeshine Display Driver package assets"
         VERBATIM)
 
-    if(SUNSHINE_DOWNLOAD_LIBVIRTUALDISPLAY_RELEASE)
-        add_dependencies(validate_sunshine_virtual_display_driver_assets
-            download_sunshine_virtual_display_driver_release)
-    endif()
+    add_dependencies(validate_sunshine_virtual_display_driver_assets
+        download_sunshine_virtual_display_driver_release)
 
     add_custom_target(refresh_sunshine_virtual_display_driver_assets
         COMMAND powershell -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass
@@ -237,10 +244,8 @@ if(EXISTS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}")
         COMMENT "Refreshing Vibeshine Display Driver package assets from the pinned release"
         VERBATIM)
 
-    if(SUNSHINE_DOWNLOAD_LIBVIRTUALDISPLAY_RELEASE)
-        add_dependencies(refresh_sunshine_virtual_display_driver_assets
-            download_sunshine_virtual_display_driver_release)
-    endif()
+    add_dependencies(refresh_sunshine_virtual_display_driver_assets
+        download_sunshine_virtual_display_driver_release)
 
     if(TARGET package_msi AND SUNSHINE_VDD_REFRESH_BEFORE_MSI)
         add_dependencies(package_msi refresh_sunshine_virtual_display_driver_assets)
@@ -338,8 +343,10 @@ if(SUNSHINE_BUNDLE_VHF_GAMEPAD_DRIVER)
         unset(_vhf_gamepad_signer)
     endif()
 
-    set(SUNSHINE_VIRTUAL_GAMEPAD_DRIVER_SOURCE_DIR
-        "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/vhf-gamepad")
+    sunshine_vhf_prepare_package_stage(SUNSHINE_VIRTUAL_GAMEPAD_DRIVER_SOURCE_DIR
+        "${SUNSHINE_ALLOW_LOCAL_VHF_GAMEPAD_TEST_PACKAGE}"
+        "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/vhf-gamepad"
+        "${CMAKE_BINARY_DIR}")
     set(SUNSHINE_VIRTUAL_GAMEPAD_DRIVER_REFRESH_SCRIPT
         "${CMAKE_SOURCE_DIR}/packaging/windows/virtual_gamepad_driver/refresh_driver_package.ps1")
     set(SUNSHINE_VIRTUAL_GAMEPAD_DRIVER_DOWNLOAD_SCRIPT
@@ -635,5 +642,6 @@ set(CPACK_COMPONENT_FIREWALL_GROUP "Scripts")
 
 # gamepad scripts are bundled under assets and not exposed as a separate component
 
-# include specific packaging (WiX only)
+# include generator-specific packaging
 include(${CMAKE_MODULE_PATH}/packaging/windows_wix.cmake)
+include(${CMAKE_MODULE_PATH}/packaging/windows_portable.cmake)

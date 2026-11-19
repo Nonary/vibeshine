@@ -6,6 +6,7 @@
 
 // standard includes
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bitset>
 #include <chrono>
@@ -25,8 +26,12 @@
 #endif
 
 // local includes
+#include "audio.h"
+#include "src/controller_speaker_pcm.h"
+#include "src/input_geometry_snapshot.h"
 #include "src/boost_process_shim.h"
 #include "src/config.h"
+#include "src/amf/amf_initialization_policy.h"
 #include "src/host_stats_types.h"
 #include "src/logging.h"
 #include "src/thread_safe.h"
@@ -36,6 +41,7 @@
 extern "C" {
 #include <moonlight-common-c/src/Limelight.h>
 }
+#include "src/steam_controller_protocol.h"
 
 using namespace std::literals;
 
@@ -92,6 +98,20 @@ namespace platf {
   constexpr std::uint32_t PADDLE4 = 0x080000;
   constexpr std::uint32_t TOUCHPAD_BUTTON = 0x100000;
   constexpr std::uint32_t MISC_BUTTON = 0x200000;
+  // Moonlight extension (LI_CCAP_GRIP_SENSE): the Steam Controller (2026)'s capacitive
+  // grip sensors, "held" rather than pressed. Only the VHF Steam Controller profile
+  // consumes them; every other backend ignores the two bits.
+  constexpr std::uint32_t LEFT_GRIP_TOUCH = LEFT_GRIP_TOUCH_FLAG;
+  constexpr std::uint32_t RIGHT_GRIP_TOUCH = RIGHT_GRIP_TOUCH_FLAG;
+  // Moonlight extension (LI_CCAP_STICK_TOUCH): capacitive touch of the Steam Controller's
+  // sticks, held rather than pressed. Same consumer as the grips.
+  constexpr std::uint32_t LEFT_STICK_TOUCH = LEFT_STICK_TOUCH_FLAG;
+  constexpr std::uint32_t RIGHT_STICK_TOUCH = RIGHT_STICK_TOUCH_FLAG;
+  // LI_CCAP_SC26_BUTTONS: independent physical pad and trigger end-stop clicks.
+  constexpr std::uint32_t LEFT_PAD_CLICK = LEFT_PAD_CLICK_FLAG;
+  constexpr std::uint32_t RIGHT_PAD_CLICK = RIGHT_PAD_CLICK_FLAG;
+  constexpr std::uint32_t LEFT_TRIGGER_CLICK = LEFT_TRIGGER_CLICK_FLAG;
+  constexpr std::uint32_t RIGHT_TRIGGER_CLICK = RIGHT_TRIGGER_CLICK_FLAG;
 
   struct supported_gamepad_t {
     std::string name;
@@ -106,6 +126,9 @@ namespace platf {
     set_rgb_led,  ///< Set RGB LED
     set_adaptive_triggers,  ///< Set adaptive triggers
     haptics_pcm,  ///< 5 ms of 48 kHz S16LE stereo actuator samples
+    steam_haptic,  ///< A Steam Controller (2026) haptic output report, verbatim (Vibeshine extension)
+    steam_settings,  ///< A Steam Controller (2026) settings write, verbatim (Vibeshine extension)
+    speaker_pcm,  ///< Independent 5 ms controller speaker samples
   };
 
   struct gamepad_feedback_msg_t {
@@ -150,10 +173,46 @@ namespace platf {
       return msg;
     }
 
+    /**
+     * @brief A Steam Controller (2026) haptic output report for a client that has the real pads.
+     * @param length Bytes of `report` that carry the controller's report, its id included.
+     * @param report The report as the host wrote it: 0x80 rumble, 0x81 pulse, 0x82 command, ...
+     */
+    static gamepad_feedback_msg_t make_steam_haptic(std::uint16_t id, std::uint8_t length, const std::array<std::uint8_t, 12> &report) {
+      gamepad_feedback_msg_t msg;
+      msg.type = gamepad_feedback_e::steam_haptic;
+      msg.id = id;
+      msg.data.steam_haptic.length = length;
+      msg.data.steam_haptic.report = report;
+      return msg;
+    }
+
+    /**
+     * @brief A Steam Controller (2026) settings write for a client that drives the real controller.
+     * @param command 0x87 SET_SETTINGS_VALUES (1..9 triples) or 0x8E LOAD_DEFAULT_SETTINGS (none).
+     * @param count Triples valid in `triples`.
+     * @param triples `(id, lo, hi)` triples as Steam wrote them.
+     */
+    static gamepad_feedback_msg_t make_steam_settings(std::uint16_t id, std::uint8_t command, std::uint8_t count, const std::array<std::uint8_t, 27> &triples) {
+      gamepad_feedback_msg_t msg;
+      msg.type = gamepad_feedback_e::steam_settings;
+      msg.id = id;
+      msg.data.steam_settings.command = command;
+      msg.data.steam_settings.count = count;
+      msg.data.steam_settings.triples = triples;
+      return msg;
+    }
+
     gamepad_feedback_e type;
     std::uint16_t id;
+    // Internal provenance for bounded host-side ViGEm send-result diagnostics.
+    bool from_vigem {false};
+    // Invalidated on detach/rebind/reset, including messages already popped.
+    std::weak_ptr<controller_speaker_pcm::producer_epoch> speaker_epoch;
 
     union {
+      controller_speaker_pcm::block speaker;
+
       struct {
         std::uint32_t sequence;
         std::array<std::uint8_t, 960> samples;
@@ -187,10 +246,132 @@ namespace platf {
         std::array<uint8_t, 10> left;
         std::array<uint8_t, 10> right;
       } adaptive_triggers;
+
+      struct {
+        std::uint8_t length;
+        std::array<std::uint8_t, 12> report;
+      } steam_haptic;
+
+      struct {
+        std::uint8_t command;
+        std::uint8_t count;
+        std::array<std::uint8_t, 27> triples;
+      } steam_settings;
     } data;
   };
 
   using feedback_queue_t = safe::mail_raw_t::queue_t<gamepad_feedback_msg_t>;
+
+  // The verbatim payloads above are sized by literal so the tests/input harnesses can slice
+  // them standalone; the protocol header is the authority they must agree with.
+  static_assert(sizeof(gamepad_feedback_msg_t::data.steam_haptic.report) == STEAM_HAPTIC_REPORT_MAX);
+  static_assert(sizeof(gamepad_feedback_msg_t::data.steam_settings.triples) == STEAM_SETTINGS_PAYLOAD_SIZE);
+
+  // Per controller: seven raw haptic states/stops plus eight conventional
+  // state keys. Keep at most 32 ordinary events and 16 settings chunks, even
+  // if state capacity is idle. Haptic bursts must not split a settings write.
+  inline constexpr std::uint32_t GAMEPAD_FEEDBACK_QUEUE_CAPACITY = 256;
+
+  // Return a stop key including both report family and actuator mask.
+  // Keep families distinct: do not assume their hardware stop effects are interchangeable.
+  inline unsigned steam_haptic_stop_key(const unsigned char *report, unsigned length) {
+    if (length >= 10 && report[0] == 0x80 &&
+            report[4] == 0 && report[5] == 0 && report[7] == 0 && report[8] == 0) {
+        return (0x80u << 2) | 3;
+    }
+    if (length < 2 || report[1] > 2) return 0;
+    if ((length >= 8 && report[0] == 0x81 &&
+            ((report[2] == 0 && report[3] == 0) || (report[6] == 0 && report[7] == 0))) ||
+            (length >= 4 && report[0] == 0x82 && report[2] == 0)) {
+        return (static_cast<unsigned>(report[0]) << 2) | (report[1] == 2 ? 3 : 1u << report[1]);
+    }
+    return 0;
+  }
+
+  inline unsigned gamepad_feedback_state_key(const gamepad_feedback_msg_t &msg) {
+    if (msg.id >= 16) return 0;
+    unsigned subkey = 0;
+    switch (msg.type) {
+      case gamepad_feedback_e::rumble:
+      case gamepad_feedback_e::rumble_triggers:
+      case gamepad_feedback_e::set_rgb_led:
+        break;
+      case gamepad_feedback_e::set_motion_event_state:
+        subkey = msg.data.motion_event_state.motion_type;
+        if (subkey != 1 && subkey != 2) return 0;
+        break;
+      case gamepad_feedback_e::set_adaptive_triggers:
+        subkey = msg.data.adaptive_triggers.event_flags & 0x0c;
+        if (subkey == 0) return 0;
+        break;
+      case gamepad_feedback_e::steam_haptic: {
+        const auto &h = msg.data.steam_haptic;
+        // Periodic 0x80 is state even when nonzero; pulse/command starts are events.
+        subkey = h.length >= 10 && h.report[0] == 0x80 ? (0x80u << 2) | 3 :
+            steam_haptic_stop_key(h.report.data(), h.length);
+        if (subkey == 0) return 0;
+        break;
+      }
+      default: return 0;
+    }
+    return ((static_cast<unsigned>(msg.type) + 1) << 16) | subkey;
+  }
+
+  inline bool raise_gamepad_feedback(safe::queue_t<gamepad_feedback_msg_t> &queue, gamepad_feedback_msg_t msg) {
+    const auto key = gamepad_feedback_state_key(msg);
+    const auto id = msg.id;
+    return queue.raise_latest_classed(std::move(msg), [key, id](const auto &pending) {
+      return key != 0 && pending.id == id && gamepad_feedback_state_key(pending) == key;
+    }, [](const auto &pending) { return gamepad_feedback_state_key(pending) != 0; }, 32,
+      [](const auto &pending) { return pending.type == gamepad_feedback_e::steam_settings; }, 16);
+  }
+
+  /**
+   * @brief Whether two feedback messages carry the same state for the same controller.
+   * @details Only the state types the legacy backends deduplicate are compared; anything else is
+   *          never a duplicate.
+   */
+  inline bool gamepad_feedback_same_value(const gamepad_feedback_msg_t &a, const gamepad_feedback_msg_t &b) {
+    if (a.type != b.type || a.id != b.id) return false;
+    switch (a.type) {
+      case gamepad_feedback_e::rumble:
+        return a.data.rumble.lowfreq == b.data.rumble.lowfreq && a.data.rumble.highfreq == b.data.rumble.highfreq;
+      case gamepad_feedback_e::rumble_triggers:
+        return a.data.rumble_triggers.left_trigger == b.data.rumble_triggers.left_trigger &&
+               a.data.rumble_triggers.right_trigger == b.data.rumble_triggers.right_trigger;
+      case gamepad_feedback_e::set_motion_event_state:
+        return a.data.motion_event_state.motion_type == b.data.motion_event_state.motion_type &&
+               a.data.motion_event_state.report_rate == b.data.motion_event_state.report_rate;
+      case gamepad_feedback_e::set_rgb_led:
+        return a.data.rgb_led.r == b.data.rgb_led.r && a.data.rgb_led.g == b.data.rgb_led.g && a.data.rgb_led.b == b.data.rgb_led.b;
+      case gamepad_feedback_e::set_adaptive_triggers:
+        return a.data.adaptive_triggers.event_flags == b.data.adaptive_triggers.event_flags &&
+               a.data.adaptive_triggers.type_left == b.data.adaptive_triggers.type_left &&
+               a.data.adaptive_triggers.type_right == b.data.adaptive_triggers.type_right &&
+               a.data.adaptive_triggers.left == b.data.adaptive_triggers.left &&
+               a.data.adaptive_triggers.right == b.data.adaptive_triggers.right;
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * @brief Hands a legacy backend's (ViGEm, inputtino) feedback to the client mailbox, deduplicated
+   *        against the last message that backend delivered.
+   * @details The message takes the coalesced state-key admission of raise_gamepad_feedback(), and
+   *          `last` is updated only once the mailbox accepted it: a rejected message leaves the
+   *          cache stale, so the next callback with the same value is not suppressed as already
+   *          delivered. With every producer coalesced, each (controller, state key) is pending at
+   *          most once, and the 240 state keys plus the 16 reserved settings chunks fit the
+   *          256-slot mailbox, so a state message is only ever rejected by a stopped mailbox.
+   * @return Whether the message is pending or was already delivered.
+   */
+  inline bool raise_gamepad_feedback_deduped(safe::queue_t<gamepad_feedback_msg_t> &queue, const gamepad_feedback_msg_t &msg, gamepad_feedback_msg_t &last) {
+    if (gamepad_feedback_same_value(last, msg)) return true;
+    if (!raise_gamepad_feedback(queue, msg)) return false;
+    last = msg;
+    return true;
+  }
 
   namespace speaker {
     enum speaker_e {
@@ -275,6 +456,7 @@ namespace platf {
     int offset_x, offset_y;
     int width, height;
     int logical_width, logical_height;
+    std::string output_name; // Compositor connector for native touch association.
   };
 
   // These values must match Limelight-internal.h's SS_FF_* constants!
@@ -311,6 +493,7 @@ namespace platf {
     std::uint16_t capabilities;
     std::uint32_t supportedButtons;
     bool persist_after_disconnect = false;
+    std::uint64_t speaker_owner = 0;
   };
 
   struct gamepad_touch_t {
@@ -320,6 +503,9 @@ namespace platf {
     float x;
     float y;
     float pressure;
+    // Which physical touchpad the event belongs to (LI_CCAP_DUAL_TOUCHPAD clients send 0 and 1;
+    // everything else sends 0). Backends with a single pad ignore it.
+    std::uint8_t touchpadIndex;
   };
 
   struct gamepad_motion_t {
@@ -337,6 +523,26 @@ namespace platf {
     gamepad_id_t id;
     std::uint8_t state;
     std::uint8_t percentage;
+  };
+
+  /**
+   * @brief The real Steam Controller's firmware attributes, relayed by the client for a virtual one.
+   * @details `valid_mask` holds the client's `LI_SCATTR_*` bits: a field means something only when
+   *          its bit is set. The strings are printable ASCII and NUL terminated.
+   */
+  struct steam_controller_attributes_t {
+    gamepad_id_t id;
+    std::uint8_t transport;  ///< LI_SCATTR_TRANSPORT_* (informational)
+    std::uint8_t valid_mask;  ///< LI_SCATTR_* bits
+    std::uint32_t firmware_build_time;  ///< unix seconds
+    std::uint32_t bootloader_build_time;  ///< unix seconds
+    std::uint32_t board_revision;
+    std::uint32_t capabilities;
+    std::uint32_t radio_firmware_build_time;  ///< unix seconds, 0 when absent
+    std::uint32_t dongle_firmware_build_time;  ///< unix seconds, 0 when absent (puck only)
+    std::array<char, 16> build_id;
+    std::array<char, 16> unit_serial;
+    std::array<char, 16> board_serial;
   };
 
   struct touch_input_t {
@@ -390,19 +596,16 @@ namespace platf {
     virtual ~img_t() = default;
   };
 
-  struct sink_t {
-    // Play on host PC
-    std::string host;
-
-    // On macOS and Windows, it is not possible to create a virtual sink
-    // Therefore, it is optional
-    struct null_t {
-      std::string stereo;
-      std::string surround51;
-      std::string surround71;
-    };
-
-    std::optional<null_t> null;
+  /**
+   * @brief The capture frame a convert() call actually read.
+   * @details A capture image that aliases a texture the capture source keeps rewriting
+   *          (direct WGC encoder input) can hold newer pixels than its own timestamps by
+   *          the time an encoder reads it, or pixels the encoder has already converted.
+   */
+  struct converted_frame_t {
+    bool repeats_previous = false;  ///< Do not encode these pixels: they were already converted from an earlier image, or the frame they belong to could not be identified.
+    std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Replaces the image's frame timestamp when set.
+    std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp;  ///< Replaces the image's host processing timestamp when set.
   };
 
   struct encode_device_t {
@@ -410,8 +613,18 @@ namespace platf {
 
     virtual int convert(platf::img_t &img) = 0;
 
+    converted_frame_t converted_frame;  ///< What the last convert() read; each call resets it.
+
     video::sunshine_colorspace_t colorspace;
     bool rtx_hdr_active = false;
+
+    virtual bool supports_rtx_hdr() const {
+#ifdef _WIN32
+      return true;
+#else
+      return false;
+#endif
+    }
 
     // Authoritative HDR metadata for the stream, resolved once at device creation so the
     // control-channel HDR mode message and the bitstream mastering-display SEI always agree,
@@ -491,6 +704,9 @@ namespace platf {
   };
 
   struct amf_encode_device_t: encode_device_t {
+    // Set only by the AMF runtime/component boundary; D3D/capture preparation
+    // failures must never authorize an implementation fallback.
+    ::amf::lifecycle::initialization_failure_e initialization_failure = ::amf::lifecycle::initialization_failure_e::device_or_capture;
     // Native backends prepare only non-driver state on the capture thread.
     // D3D/AMF construction is invoked by the bounded initialization worker.
     virtual bool initialize_hardware_device() {
@@ -516,16 +732,9 @@ namespace platf {
     amf::amf_encoder *amf = nullptr;
   };
 
-  enum class capture_e : int {
-    ok,  ///< Success
-    reinit,  ///< Need to reinitialize
-    timeout,  ///< Timeout
-    interrupted,  ///< Capture was interrupted
-    error  ///< Error
-  };
-
   class display_t {
   public:
+    std::uint64_t recovery_capture_instance {0};
     /**
      * @brief Callback for when a new image is ready.
      * When display has a new image ready or a timeout occurs, this callback will be called with the image.
@@ -543,6 +752,13 @@ namespace platf {
      * @retval false When capture has been interrupted, img_out contains nullptr
      */
     using pull_free_image_cb_t = std::function<bool(std::shared_ptr<img_t> &img_out)>;
+
+    // Capture backends that can preserve frames while absolute-input geometry
+    // changes publish their latest immutable mapping here. Other backends keep
+    // using the ordinary display fields and their existing reinit behavior.
+    virtual std::optional<input_geometry_snapshot_t> input_geometry_snapshot() const {
+      return std::nullopt;
+    }
 
     display_t() noexcept:
         offset_x {0},
@@ -638,6 +854,17 @@ namespace platf {
     }
 
     /**
+     * @brief Commit a source metadata change after all old encoders are gone.
+     * @details Called only after capture has returned reinit and all old
+     * encoder sessions/references have been released. A backend may then advance
+     * its metadata generation and retain its capture resources. False requests
+     * the usual complete display recreation. Never use this for a mode change.
+     */
+    virtual bool commit_pending_capture_metadata() {
+      return false;
+    }
+
+    /**
      * @brief Ask a sparse capture source for one fresh image.
      * @details Fixed-rate sources may ignore this because another image is
      *          already scheduled.
@@ -687,60 +914,11 @@ namespace platf {
 
     int width, height;
     int logical_width, logical_height;
+    std::string input_output_name;
 
   protected:
     // collect capture timing data (at loglevel debug)
     logging::time_delta_periodic_logger sleep_overshoot_logger = {debug, "Frame capture sleep overshoot"};
-  };
-
-  class mic_t {
-  public:
-    virtual capture_e sample(std::vector<float> &frame_buffer) = 0;
-
-    virtual ~mic_t() = default;
-  };
-
-  class audio_control_t {
-  public:
-    virtual int set_sink(const std::string &sink) = 0;
-
-    // Select a loopback endpoint without changing system routing, when supported.
-    virtual int set_capture_sink([[maybe_unused]] const std::string &sink) {
-      return -1;
-    }
-
-    virtual std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, bool continuous, bool host_audio_enabled) = 0;
-
-    /**
-     * @brief Check if the audio sink is available in the system.
-     * @param sink Sink to be checked.
-     * @returns True if available, false otherwise.
-     */
-    virtual bool is_sink_available(const std::string &sink) = 0;
-
-    virtual std::optional<sink_t> sink_info() = 0;
-
-    /**
-     * @brief Restores the host audio sink after streaming stops.
-     * @note Most platforms restore a single sink. Windows overrides this to
-     *       restore the endpoint captured for each audio role.
-     */
-    virtual int restore_sink(const std::string &sink) {
-      return set_sink(sink);
-    }
-
-    /**
-     * @brief Resets the default audio device away from virtual streaming speakers.
-     * Implementations may continue trying in the background to restore the
-     * preferred device after moving the default away from virtual speakers.
-     * @param preferred_device Device identifier (platform-specific, e.g. on Windows the
-     *        endpoint device_id) of the device that should be restored as default. If
-     *        empty, implementations fall back to letting the OS pick whatever non-virtual
-     *        device is currently present.
-     */
-    virtual void reset_default_device(const std::string &preferred_device = {}) {}
-
-    virtual ~audio_control_t() = default;
   };
 
   void freeInput(void *);
@@ -955,6 +1133,12 @@ namespace platf {
   void button_mouse(input_t &input, int button, bool release);
   void scroll(input_t &input, int distance);
   void hscroll(input_t &input, int distance);
+#ifdef _WIN32
+  // The active Windows HID backend accepts only whole wheel detents.
+  bool mouse_requires_scroll_ticks(input_t &input);
+  // HID keyboard keys use the Windows keyboard stack's own repeat handling.
+  bool keyboard_uses_native_repeat(input_t &input, std::uint16_t key);
+#endif
   void keyboard_update(input_t &input, uint16_t modcode, bool release, uint8_t flags);
   void gamepad_update(input_t &input, int nr, const gamepad_state_t &gamepad_state);
   void unicode(input_t &input, char *utf8, int size);
@@ -1004,6 +1188,16 @@ namespace platf {
    * @param battery The battery event.
    */
   void gamepad_battery(input_t &input, const gamepad_battery_t &battery);
+
+  /**
+   * @brief Hands the real Steam Controller's firmware attributes to the virtual controller.
+   * @details Only a backend that presents a Steam Controller has a use for them (Steam then sees
+   *          the real firmware build instead of the virtual device's defaults); every other
+   *          backend ignores the call.
+   * @param input The global input context.
+   * @param attributes The attributes, decoded and sanitised by the input layer.
+   */
+  void gamepad_attributes(input_t &input, const steam_controller_attributes_t &attributes);
 
   /**
    * @brief Create a new virtual gamepad.

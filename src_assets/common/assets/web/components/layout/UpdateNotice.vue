@@ -5,7 +5,13 @@ import { apiGet } from '@/api/client';
 import { AppButton, InlineAlert } from '@/components/ui';
 import { useSystemStore } from '@/stores/system';
 import type { ChangelogEntry } from '@/utils/changelog';
-import { selectAvailableUpdate } from '@/utils/updates';
+import {
+  selectAvailableUpdate,
+  fetchUpdateReleases,
+  dismissedUpdate,
+  dismissUpdate,
+  prereleasesEnabled,
+} from '@/utils/updates';
 
 const system = useSystemStore();
 const { t } = useI18n();
@@ -27,23 +33,25 @@ async function check(): Promise<void> {
     const config = await apiGet<Record<string, unknown>>('/api/config', {
       signal: controller.signal,
     });
-    const response = await fetch('https://api.github.com/repos/Nonary/vibeshine/releases', {
-      headers: { Accept: 'application/json' },
-      credentials: 'omit',
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error('releases-unavailable');
-    const releases = await response.json();
-    if (!Array.isArray(releases)) throw new Error('invalid-releases');
-    available.value = selectAvailableUpdate(
+    const releases = await fetchUpdateReleases(
+      controller.signal,
+      system.metadata.platform,
+      prereleasesEnabled(config.notify_pre_releases),
+      system.metadata.architecture ?? 'unknown',
+    );
+    const selected = selectAvailableUpdate(
       system.metadata.version,
       releases,
       config.notify_pre_releases,
+      system.metadata.platform,
+      system.metadata.architecture ?? 'unknown',
     );
+    available.value = selected && !dismissedUpdate(localStorage, selected.tag) ? selected : null;
     failed.value = false;
     const interval = Number(config.update_check_interval ?? 86400);
     nextCheck = Number.isFinite(interval) && interval >= 0 ? interval * 1000 : 86400000;
   } catch {
+    available.value = null;
     if (!stopped) failed.value = true;
   } finally {
     clearTimeout(timeout);
@@ -63,6 +71,10 @@ onBeforeUnmount(() => {
   clearTimeout(timer);
   controller?.abort();
 });
+function dismiss(): void {
+  if (available.value) dismissUpdate(localStorage, available.value.tag);
+  available.value = null;
+}
 </script>
 
 <template>
@@ -83,6 +95,7 @@ onBeforeUnmount(() => {
         rel="noopener noreferrer"
         >{{ t('ui.maintenance.releases.open') }}</a
       >
+      <AppButton label="Dismiss this update" variant="secondary" @click="dismiss" />
     </InlineAlert>
     <InlineAlert v-if="failed" tone="warning" :title="t('ui.maintenance.releases.unavailable')">
       <AppButton

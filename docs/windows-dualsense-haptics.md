@@ -17,9 +17,8 @@ that connection does not change the wired USB identity exposed to Windows games.
    selection chooses DualSense and the optional transport is available. This includes
    Automatic with a PlayStation controller and the saved `vhf_ds5` profile; desktop
    and Steam Big Picture streams do not need an application opt-in. Explicit Xbox,
-   DualShock 4, and Switch profiles keep their selected identity. The application
-   **DualSense waveform haptics** option (`dualsense-haptics` in `apps.json`) can
-   still force DualSense and delay game launch until its audio endpoint is ready.
+   DualShock 4, and Switch profiles keep their selected identity. No per-application
+   haptics setting is needed; older `dualsense-haptics` entries are ignored.
    **DualSense with waveform haptics** (`gamepad = usbip_ds5`) also forces this backend.
 3. Start a new stream so controllers are allocated on the composite backend.
    Use a Moonlight client with waveform support and a compatible DualSense renderer.
@@ -80,6 +79,29 @@ source under BSD-2-Clause; its notices are included with the bundled package.
 Windows distributions also include the HIDMaestro and libvirtualgamepad MIT
 notices in `licenses/dualsense_usbip_NOTICES.txt`.
 
+## Diagnosing missing waveform feedback
+
+Enable Debug logging, start a fresh stream, then reproduce native haptics in the
+game. For the affected controller, check these boundaries in order:
+
+- `received nonzero USB actuator PCM`: the host received nonzero actuator bytes.
+  This alone does not mean a frame was forwarded.
+- `PCM not forwarded`: gives the admission reason, such as an inactive binding,
+  an endpoint not ready, missing controller capability, or a missing queue.
+- `PCM frame accepted by feedback queue`: a complete 240-frame block reached the
+  host's feedback queue. A rejection instead means that queue was full or stopped.
+- `Dropping waveform haptics ... mlFeatureFlags=`: the connection did not negotiate
+  waveform support, even if its individual controller advertised the capability.
+- `Waveform haptics ENet queue accepted frame`: ENet accepted an outgoing frame.
+  This is not proof of delivery or playback. The same diagnostic reports a
+  rejection, negotiated flags, and the peer's channel count.
+
+These diagnostics are bounded per controller binding or stream. Resume starts
+fresh backend diagnostics so a previous connection cannot hide new failures.
+They contain controller indices and protocol state, not audio samples. If ENet
+accepts frames but the controller remains silent, client reception and rendering
+still require investigation; do not treat host queue acceptance as a hardware fix.
+
 ## Earlier process-local audio implementation
 
 The source tree retains the earlier `tools/vibeshine_dualsense_haptics.exe` and
@@ -87,7 +109,7 @@ The source tree retains the earlier `tools/vibeshine_dualsense_haptics.exe` and
 hardware-free integration probes. That implementation creates process-local WASAPI
 endpoints through injected COM hooks and pairs them with a VHF DualSense. Its launch
 and interception restrictions do not apply to the installed composite controller.
-The `dualsense-haptics` application option now selects the USB/audio route and does
+Automatic DualSense selection uses the USB/audio route when installed and does
 not fall back to these hooks when the optional driver is missing.
 
 ## Validation

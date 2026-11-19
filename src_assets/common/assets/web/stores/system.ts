@@ -19,9 +19,11 @@ export interface HostMetadata extends ReadinessMetadata {
     dedicated_video_memory?: number | string;
   }>;
   prerelease?: string;
+  rtx_hdr_supported?: boolean;
   windows_build_number?: number;
   windows_major_version?: number;
   platform?: string;
+  architecture?: string;
   status?: boolean;
   version?: string;
   commit?: string;

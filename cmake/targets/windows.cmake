@@ -10,6 +10,14 @@ endforeach()
 target_link_options(vibeshine_dualsense_haptics PRIVATE -municode)
 target_link_libraries(vibeshine_dualsense_haptics PRIVATE setupapi)
 target_link_libraries(vibeshine_dualsense_audio PRIVATE minhook::minhook ole32 propsys uuid shell32)
+if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|amd64|x86_64")
+    # Recent MinGW CRTs define FE_DFL_ENV in libmingw32's CRT_fp10 object,
+    # before libmingwex introduces its reference through fesetenv. Unlike an
+    # executable, DLL startup does not pull in _fpreset. Seed the reference so
+    # the normal archive order selects the CRT's own default environment;
+    # do not replace the environment or reset the injecting process's FPU.
+    target_link_options(vibeshine_dualsense_audio PRIVATE "LINKER:--undefined=__mingw_fe_dfl_env")
+endif()
 add_dependencies(sunshine vibeshine_dualsense_haptics vibeshine_dualsense_audio)
 if(DEFINED _MINHOOK_DLL)
     add_custom_command(TARGET vibeshine_dualsense_audio POST_BUILD
@@ -106,6 +114,8 @@ add_custom_command(
 add_custom_target(build_playnite_plugin DEPENDS ${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_FILES})
 add_dependencies(sunshine build_playnite_plugin)
 
+add_dependencies(sunshine sunshine_end_stream_hotkey)
+
 # Ensure the Windows display helper is built and placed next to the Sunshine binary
 # so the runtime launcher can find it reliably.
 if (TARGET sunshine_display_helper)
@@ -148,6 +158,7 @@ foreach(_packaged_target IN ITEMS
         sunshinesvc
         playnite-launcher
         sunshine_wgc_capture
+        sunshine_end_stream_hotkey
         sunshine_display_helper)
     if(TARGET "${_packaged_target}")
         list(APPEND SUNSHINE_WINDOWS_PACKAGED_TARGETS "${_packaged_target}")
@@ -159,6 +170,15 @@ add_custom_target(package_msi
     COMMAND "${CMAKE_CPACK_COMMAND}" -G WIX -C "$<IF:$<CONFIG:>,${CMAKE_BUILD_TYPE},$<CONFIG>>"
     DEPENDS ${SUNSHINE_WINDOWS_PACKAGED_TARGETS} build_playnite_plugin build_uninstall_ui web_ui
     COMMENT "Building MSI installer via CPack (WiX)"
+)
+
+# Build a standalone ZIP with an as-caller physical-desktop launcher.
+add_custom_target(package_portable
+    COMMAND "${CMAKE_CPACK_COMMAND}" -G ZIP --config "${CMAKE_BINARY_DIR}/CPackConfig.cmake"
+        -C "$<IF:$<CONFIG:>,${CMAKE_BUILD_TYPE},$<CONFIG>>"
+    DEPENDS ${SUNSHINE_WINDOWS_PACKAGED_TARGETS} build_playnite_plugin build_uninstall_ui web_ui
+    COMMENT "Building portable Windows ZIP via CPack"
+    VERBATIM
 )
 
 # This target never signs: it always builds an unsigned installer. Release

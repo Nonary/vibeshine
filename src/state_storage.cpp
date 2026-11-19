@@ -120,28 +120,23 @@ namespace statefile {
       return {policy::read_status_e::loaded, std::move(contents)};
     }
 
+    std::optional<std::string> primary_certificate_identity(const std::string &pem) {
+      auto parsed = crypto::x509(pem);
+      if (!parsed) return std::nullopt;
+      return crypto::pem(parsed);
+    }
+
     bool valid_primary_snapshot(const pt::ptree &tree, bool allow_bootstrap) {
-      if (!policy::valid_primary_state(tree, allow_bootstrap)) return false;
-      std::set<std::string> identities;
-      const auto certificate = [&identities](const std::string &pem) {
-        auto parsed = crypto::x509(pem);
-        return parsed && identities.insert(crypto::pem(parsed)).second;
-      };
-      if (const auto devices = tree.get_child_optional("root.named_devices")) {
-        for (const auto &[key, device] : *devices) {
-          if (!certificate(device.get<std::string>("cert"))) return false;
-        }
-      }
-      if (const auto devices = tree.get_child_optional("root.devices")) {
-        for (const auto &[key, device] : *devices) {
-          if (const auto certs = device.get_child_optional("certs")) {
-            for (const auto &[cert_key, cert] : *certs) {
-              if (!certificate(cert.get_value<std::string>())) return false;
-            }
-          }
-        }
-      }
-      return true;
+      auto normalized = tree;
+      return policy::normalize_legacy_pairing_state(normalized, primary_certificate_identity) &&
+             policy::valid_primary_state(normalized, allow_bootstrap);
+    }
+
+    std::string primary_snapshot_diagnostic(const pt::ptree &tree) {
+      auto normalized = tree;
+      std::string reason;
+      (void) policy::normalize_legacy_pairing_state(normalized, primary_certificate_identity, &reason);
+      return reason;
     }
 
     bool is_auxiliary_state(const std::string &path) {
@@ -155,17 +150,26 @@ namespace statefile {
           return file_handler::write_file(target.c_str(), contents) == 0;
         });
       if (result == policy::load_result_e::failed) {
-        BOOST_LOG(error) << "statefile: refusing to replace unavailable auxiliary state " << path;
+        BOOST_LOG(error) << "statefile: refusing to replace unavailable auxiliary state " << path
+                         << "; preserve this file and its .bak. If both are empty or zero-filled, --auxiliary-recovery can prepare an explicit reset candidate; it cannot recover lost tokens or metadata. Do not replace pairing state or credentials.";
       }
       return result;
     }
 
     policy_load_result_e load_tree_for_update(const fs::path &path, pt::ptree &out) {
       if (!path.empty() && path.string() == sunshine_state_path()) {
-        return policy::load_primary_state_for_update(path.string(), out, read_state_file,
-          [](const std::string &target, const std::string &contents) {
-            return file_handler::write_file(target.c_str(), contents) == 0;
-          }, valid_primary_snapshot);
+        std::string failure_reason;
+        const auto result = policy::load_primary_state_for_update(path.string(), out, read_state_file, [](const std::string &target, const std::string &contents) {
+          return file_handler::write_file(target.c_str(), contents) == 0;
+        },
+                                                                  valid_primary_snapshot,
+                                                                  &failure_reason,
+                                                                  primary_snapshot_diagnostic);
+        if (result == policy::load_result_e::failed) {
+          BOOST_LOG(error) << "statefile: could not select pairing state " << path.string()
+                           << " or recovery copy " << path.string() + ".bak" << ": " << failure_reason;
+        }
+        return result;
       }
       if (is_auxiliary_state(path.string())) {
         return load_auxiliary_state(path.string(), out);
@@ -1105,6 +1109,34 @@ namespace statefile {
       BOOST_LOG(warning) << "statefile: failed to parse virtual display devices: " << e.what();
     }
     return devices;
+  }
+
+  void save_display_restore_preference(const bool always_restore_from_golden) {
+    migrate_recent_state_keys();
+    const auto &path_str = vibeshine_state_path();
+    if (path_str.empty()) {
+      return;
+    }
+
+    std::lock_guard<std::mutex> guard(state_mutex());
+    const fs::path path(path_str);
+    pt::ptree root;
+    if (load_tree_for_update(path, root) == policy::load_result_e::failed) {
+      return;
+    }
+
+    auto &root_node = ensure_root(root);
+    const auto previous = root_node.get_child_optional("display_restore_prefer_golden");
+    if (previous && previous->empty() &&
+        previous->data() == (always_restore_from_golden ? "true" : "false")) {
+      return;
+    }
+    root_node.put("display_restore_prefer_golden", always_restore_from_golden);
+    try {
+      write_tree(path, root);
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "statefile: failed to write "sv << path.string() << ": "sv << e.what();
+    }
   }
 
   void save_display_helper_engine(const std::string &engine) {

@@ -10,6 +10,14 @@ import tempfile
 
 root = pathlib.Path(sys.argv[1]).resolve()
 compiler = sys.argv[2]
+# CMake evaluates the complete Boost::algorithm usage requirements, including
+# transitive modular header roots, into a configuration-specific file. Keep
+# paths as subprocess arguments so Windows paths with spaces need no escaping.
+include_arguments = []
+if len(sys.argv) > 3:
+    for include in pathlib.Path(sys.argv[3]).read_text().splitlines():
+        if include:
+            include_arguments.extend(["-I", include])
 source = (root / "src/platform/windows/display_helper_integration.cpp").read_text()
 start = source.index("class OrphanRecoveryMonitor")
 brace = source.index("{", start)
@@ -69,6 +77,7 @@ namespace fake {
   std::set<std::string> managed;
   std::deque<RecoveryStatusSnapshot> replies;
   std::function<void(unsigned)> on_capture, on_remove;
+  std::function<void()> on_query;
 }
 namespace rtsp_stream {
   unsigned session_count_no_cleanup() { return fake::owner || (fake::owner_mask & 1) ? 1 : 0; }
@@ -120,10 +129,13 @@ namespace VDISPLAY {
 namespace platf::virtual_display_cleanup { bool in_progress() { return fake::owner || (fake::owner_mask & 2048); } }
 std::atomic<bool> g_restore_expected {true};
 std::atomic<std::uint64_t> g_restore_generation {7};
+std::atomic<std::uint64_t> g_final_restore_cleanup_generation {0};
+std::atomic<std::uint64_t> g_last_apply_generation {0};
 std::mutex &pending_apply_execution_mutex() { static std::mutex mutex; return mutex; }
 bool has_pending_apply() { return fake::owner || (fake::owner_mask & 1024); }
 std::optional<RecoveryStatusSnapshot> query_recovery_status(const RecoveryTicket &, bool park, std::chrono::milliseconds, bool receive_only = false) {
   assert(park != receive_only); // Reads wait passively; only park sends a request.
+  if (fake::on_query) fake::on_query();
   if (receive_only) ++fake::passive_reads;
   if (park) ++fake::parks;
   if (fake::replies.empty()) return RecoveryStatusSnapshot {7, 3, RecoveryStatus::Restored, 1};
@@ -160,13 +172,15 @@ void reset() {
   fake::removals = fake::captures = fake::restores = fake::parks = fake::passive_reads = 0;
   fake::physical_version = 1; fake::managed = {"a", "b", "c"}; fake::replies.clear();
   fake::owner_mask = 0; fake::active_id = "physical";
-  fake::on_capture = {}; fake::on_remove = {};
+  fake::on_capture = {}; fake::on_remove = {}; fake::on_query = {};
   g_restore_expected.store(true); g_restore_generation.store(7);
+  g_final_restore_cleanup_generation.store(0); g_last_apply_generation.store(0);
 }
 void reply(RecoveryStatus status, std::uint64_t event = 1) { fake::replies.push_back({7, 3, status, event}); }
-void run(unsigned targets = 1) {
+void run(unsigned targets = 1, bool remove_after_restore = false) {
   OrphanRecoveryMonitor monitor;
   OrphanRecoveryMonitor::incident_t incident {{7, 3}, {}, {"physical"}};
+  incident.remove_after_restore = remove_after_restore;
   for (unsigned index = 0; index < targets; ++index) {
     const char id = static_cast<char>('a' + index);
     VDISPLAY::TrackedDisplayCleanupTarget target;
@@ -194,6 +208,52 @@ int main() {
   stream::session::running_sessions.store(0);
   stream::session::teardown_sessions.store(1); assert(!ownership.owners_clear_under_lifecycle());
   stream::session::teardown_sessions.store(0); assert(ownership.owners_clear_under_lifecycle());
+  // Final-restore removal is opt-in and cannot widen its pre-dispatch targets.
+  reset(); reply(RecoveryStatus::Restored); run(); assert(fake::removals == 0);
+  reset(); reply(RecoveryStatus::Restored); run(2, true);
+  assert(fake::removals == 2 && fake::managed == std::set<std::string>{"c"} && fake::parks == 0);
+  reset(); reply(RecoveryStatus::Active); reply(RecoveryStatus::Failed);
+  fake::on_query = [] { if (fake::replies.empty()) g_final_restore_cleanup_generation.store(1); };
+  run(1, true);
+  assert(fake::removals == 0 && fake::parks == 0);
+  reset(); reply(RecoveryStatus::Failed); reply(RecoveryStatus::Restored); run(1, true);
+  assert(fake::removals == 1 && fake::parks == 0); // A later verified retry may finish the same ticket.
+  reset(); reply(RecoveryStatus::Restored); g_final_restore_cleanup_generation.store(1); run(1, true);
+  assert(fake::removals == 0); // A reactivated and drained session invalidated the incident.
+  reset(); reply(RecoveryStatus::Restored);
+  fake::on_capture = [](unsigned) { g_final_restore_cleanup_generation.store(1); };
+  run(1, true); assert(fake::removals == 0);
+  reset(); reply(RecoveryStatus::Restored);
+  fake::on_capture = [](unsigned) { g_last_apply_generation.store(1); };
+  run(1, true); assert(fake::removals == 0);
+  reset(); reply(RecoveryStatus::Restored);
+  fake::on_capture = [](unsigned) { g_restore_generation.store(8); };
+  run(1, true); assert(fake::removals == 0);
+  reset(); reply(RecoveryStatus::Restored);
+  fake::on_remove = [](unsigned) { fake::owner = true; };
+  run(2, true); assert(fake::removals == 1 && fake::managed.contains("b"));
+  reset(); fake::managed.erase("a"); reply(RecoveryStatus::Restored); run(1, true);
+  assert(fake::removals == 0); // Captured target no longer has its owned identity.
+  reset(); fake::replies.push_back({8, 3, RecoveryStatus::Restored, 1});
+  reply(RecoveryStatus::Failed);
+  fake::on_query = [] { if (fake::replies.empty()) g_final_restore_cleanup_generation.store(1); };
+  run(1, true); assert(fake::removals == 0);
+  reset(); fake::replies.push_back({7, 4, RecoveryStatus::Restored, 1});
+  reply(RecoveryStatus::Failed);
+  fake::on_query = [] { if (fake::replies.empty()) g_final_restore_cleanup_generation.store(1); };
+  run(1, true); assert(fake::removals == 0);
+  reset(); fake::removal_succeeds = false; reply(RecoveryStatus::Restored); run(2, true);
+  assert(fake::removals == 1 && fake::managed.contains("b"));
+  reset(); fake::removal_succeeds = false; reply(RecoveryStatus::Restored);
+  fake::on_remove = [](unsigned) { ++fake::physical_version; };
+  run(2, true); assert(fake::removals == 1 && fake::restores == 1 && fake::physical_version == 1);
+  reset(); reply(RecoveryStatus::Restored); stream::session::teardown_sessions.store(1);
+  std::jthread drain([] { std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                         stream::session::teardown_sessions.store(0); });
+  run(1, true); assert(fake::removals == 1 && fake::passive_reads == 1);
+  reset(); reply(RecoveryStatus::Restored);
+  fake::on_remove = [](unsigned) { ++fake::physical_version; };
+  run(1, true); assert(fake::removals == 1 && fake::restores == 1 && fake::physical_version == 1);
   reset(); reply(RecoveryStatus::Failed, 0); run(); assert(fake::removals == 0 && fake::parks == 0);
   reset(); reply(RecoveryStatus::Failed); reply(RecoveryStatus::Failed); run();
   assert(fake::removals == 1 && !fake::managed.contains("a") && fake::managed.contains("c"));
@@ -226,10 +286,10 @@ with tempfile.TemporaryDirectory(prefix="wake-recovery-observer-") as directory:
     binary = pathlib.Path(directory) / "test"
     generated.write_text(program)
     subprocess.run([compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread",
-                    "-I", str(root), str(generated), "-o", str(binary)], check=True)
+                    "-I", str(root), *include_arguments, str(generated), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True, timeout=40)
 
 # The incident's target admission relies on the real backend-independent
 # facade; exercise its routing and fail-closed classification in this case.
 subprocess.run([sys.executable, str(root / "tests/unit/test_wake_recovery_backend.py"),
-                str(root), compiler], check=True)
+                str(root), compiler, *sys.argv[3:]], check=True)

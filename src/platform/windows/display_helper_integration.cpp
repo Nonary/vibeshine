@@ -1,3 +1,4 @@
+#include "src/platform/windows/display_helper_borrow_native.h"
 /**
  * @file src/platform/windows/display_helper_integration.cpp
  */
@@ -7,6 +8,7 @@
 
   // standard
   #include <algorithm>
+  #include <array>
   #include <atomic>
   #include <boost/algorithm/string/predicate.hpp>
   #include <chrono>
@@ -33,9 +35,11 @@
   #include <display_device/windows/win_api_utils.h>
   #include <display_device/windows/win_display_device.h>
   #include <nlohmann/json.hpp>
+  #include "src/platform/windows/display_restore_policy.h"
 
   // sunshine
   #include "display_helper_integration.h"
+  #include "src/platform/windows/display_helper_reactivation.h"
   #include "src/globals.h"
   #include "src/logging.h"
   #include "src/platform/windows/display_helper_coordinator.h"
@@ -44,6 +48,7 @@
   #include "src/platform/windows/impersonating_display_device.h"
   #include "src/platform/windows/ipc/display_settings_client.h"
   #include "src/platform/windows/ipc/misc_utils.h"
+  #include "src/platform/windows/ipc/pipes.h"
   #include "src/platform/windows/ipc/process_handler.h"
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/virtual_display.h"
@@ -75,6 +80,12 @@ namespace {
   ProcessHandler &helper_proc() {
     static ProcessHandler h(/*use_job=*/false);
     return h;
+  }
+
+  void terminate_helper_process() {
+    platf::display_helper_client::set_expected_helper_process_id(0);
+    platf::display_helper_client::set_private_control_pipe_name({});
+    helper_proc().terminate();
   }
 
   // The legacy and v2 engines intentionally share one executable and one IPC
@@ -265,6 +276,7 @@ namespace {
   // that in-flight restore from a later stream-start probe; the helper will either
   // finish restoring or an explicit APPLY will supersede it.
   constexpr std::chrono::milliseconds kDisarmRestoreBudget {150};
+  constexpr std::chrono::milliseconds kStreamStartDisarmReconnectBudget {750};
   constexpr std::chrono::milliseconds kDisarmRetryThrottle {150};
   constexpr std::chrono::milliseconds kDeferredApplyInitialDelay {2000};
   constexpr std::chrono::milliseconds kDeferredApplyRetryBase {500};
@@ -525,6 +537,8 @@ namespace {
     const display_helper_integration::DisplayTopologyDefinition &topology,
     const char *label
   ) {
+    auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(false);
+    if (!borrowed_output_mutation) return false;
     if (topology.topology.empty() && topology.monitor_positions.empty()) {
       return true;
     }
@@ -583,6 +597,8 @@ namespace {
   display_device::SettingsManagerInterface::ApplyResult apply_in_process(
     const display_helper_integration::DisplayApplyRequest &request
   ) {
+    auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(false);
+    if (!borrowed_output_mutation) return display_device::SettingsManagerInterface::ApplyResult::DevicePrepFailed;
     if (!request.configuration) {
       BOOST_LOG(error) << "Display helper (in-process): no configuration provided for APPLY request.";
       return display_device::SettingsManagerInterface::ApplyResult::DevicePrepFailed;
@@ -774,7 +790,7 @@ namespace {
         operation_deadline_expired(operation_deadline)) {
       return false;
     }
-    helper_proc().terminate();
+    terminate_helper_process();
 
     if (cancellation_requested(cancellation_predicate)) {
       return false;
@@ -899,6 +915,7 @@ namespace {
 #endif
   }
   static std::atomic<std::uint64_t> g_restore_generation {0};
+  static std::atomic<std::uint64_t> g_final_restore_cleanup_generation {0};
   static std::atomic<std::uint64_t> g_disarm_generation_sent {0};
   static std::atomic<std::int64_t> g_last_revert_us {0};
   static std::atomic<std::int64_t> g_last_disarm_attempt_us {0};
@@ -1006,6 +1023,8 @@ namespace {
   }
 
   static bool restore_physical_settings_snapshot(const physical_settings_snapshot_t &snapshot) {
+    auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(false);
+    if (!borrowed_output_mutation) return false;
     try {
       auto api = std::make_shared<display_device::WinApiLayer>();
       auto win_dd = std::make_shared<display_device::WinDisplayDevice>(api);
@@ -1039,6 +1058,7 @@ namespace {
 
   using display_helper_integration::RecoveryTicket;
   using display_helper_integration::RecoveryStatus;
+  using display_helper_integration::RecoveryStatusSnapshot;
   using display_helper_integration::has_pending_apply;
 
   class OrphanRecoveryMonitor {
@@ -1047,6 +1067,9 @@ namespace {
       RecoveryTicket ticket;
       std::vector<VDISPLAY::TrackedDisplayCleanupTarget> targets;
       std::set<std::string> known_physical_output_ids;
+      bool remove_after_restore {false};
+      std::uint64_t cleanup_generation {0};
+      std::uint64_t control_generation {0};
     };
 
     void start() {
@@ -1114,13 +1137,25 @@ namespace {
       if (!policy.begin(incident.ticket.id, std::move(target_ids))) return;
       if (!policy.set_event_baseline(incident.ticket.id, 0)) return;
 
+      std::optional<RecoveryStatusSnapshot> restored_acknowledgement;
+      const auto completion_current = [&] {
+        return !incident.remove_after_restore ||
+               (g_final_restore_cleanup_generation.load(std::memory_order_acquire) == incident.cleanup_generation &&
+                g_last_apply_generation.load(std::memory_order_acquire) == incident.control_generation);
+      };
       while (!stop.stop_requested() && current_incident(revision, stop)) {
+        if (!completion_current()) return;
         if (!g_restore_expected.load(std::memory_order_acquire) ||
             g_restore_generation.load(std::memory_order_acquire) != incident.ticket.id) return;
         // The existing helper event handler publishes changes. Wait for those
         // messages instead of polling its recovery state or expiring failures.
-        const auto status = query_recovery_status(incident.ticket, false, kStatusTimeout, true);
-        if (!status || status->status == RecoveryStatus::Unknown) {
+        // Keep an exact terminal acknowledgement while stream teardown drains.
+        // Successful helpers may exit immediately after sending this result.
+        const auto status = restored_acknowledgement ? restored_acknowledgement :
+          query_recovery_status(incident.ticket, false, kStatusTimeout, true);
+        if (!status || status->ticket != incident.ticket.id ||
+            status->connection_generation != incident.ticket.connection_generation ||
+            status->status == RecoveryStatus::Unknown) {
           std::unique_lock lock(mutex_);
           cv_.wait_for(lock, kRetryPause, [&] {
             return stop.stop_requested() || stopping_ || incident_revision_ != revision;
@@ -1136,7 +1171,9 @@ namespace {
 
         switch (status->status) {
           case RecoveryStatus::Restored:
-            return;
+            if (!incident.remove_after_restore) return;
+            restored_acknowledgement = *status;
+            break;
           case RecoveryStatus::Active:
             (void) policy.update_status(incident.ticket.id, platf::wake_recovery_cleanup_policy::helper_status_t::active);
             break;
@@ -1146,7 +1183,10 @@ namespace {
           case RecoveryStatus::Unknown:
             return;
         }
-        if (!event_hint_pending || status->status != RecoveryStatus::Failed) {
+        // The optional final-restore path never tears down a failed/pending
+        // restore. Existing wake recovery cleanup remains an independent policy.
+        if (!restored_acknowledgement &&
+            (incident.remove_after_restore || !event_hint_pending || status->status != RecoveryStatus::Failed)) {
           std::unique_lock lock(mutex_);
           cv_.wait_for(lock, kRetryPause, [&] {
             return stop.stop_requested() || stopping_ || incident_revision_ != revision;
@@ -1161,7 +1201,7 @@ namespace {
           std::this_thread::sleep_for(kRetryPause);
           continue;
         }
-        if (!current_incident(revision, stop) ||
+        if (!current_incident(revision, stop) || !completion_current() ||
             !g_restore_expected.load(std::memory_order_acquire) ||
             g_restore_generation.load(std::memory_order_acquire) != incident.ticket.id ||
             !owners_clear_under_lifecycle()) {
@@ -1182,19 +1222,21 @@ namespace {
         // Parking is only requested after the helper already reports a known
         // failed result. A Failed reply confirms all helper mutation workers
         // and queued retries for this ticket are quiescent.
-        const auto parked = query_recovery_status(incident.ticket, true, kStatusTimeout);
-        if (!parked || parked->status != RecoveryStatus::Failed || !parked->parked) {
-          if (parked && parked->status == RecoveryStatus::Restored) return;
-          execution_lock.unlock();
-          lifecycle_lock.unlock();
-          std::this_thread::sleep_for(kRetryPause);
-          continue;
+        if (!restored_acknowledgement) {
+          const auto parked = query_recovery_status(incident.ticket, true, kStatusTimeout);
+          if (!parked || parked->status != RecoveryStatus::Failed || !parked->parked) {
+            if (parked && parked->status == RecoveryStatus::Restored) return;
+            execution_lock.unlock();
+            lifecycle_lock.unlock();
+            std::this_thread::sleep_for(kRetryPause);
+            continue;
+          }
+          (void) policy.update_status(incident.ticket.id, platf::wake_recovery_cleanup_policy::helper_status_t::failed);
         }
-        (void) policy.update_status(incident.ticket.id, platf::wake_recovery_cleanup_policy::helper_status_t::failed);
 
         bool retry_physical_verification = false;
         for (const auto &target : incident.targets) {
-          if (!current_incident(revision, stop) ||
+          if (!current_incident(revision, stop) || !completion_current() ||
               !g_restore_expected.load(std::memory_order_acquire) ||
               g_restore_generation.load(std::memory_order_acquire) != incident.ticket.id) {
             return;
@@ -1223,7 +1265,7 @@ namespace {
             retry_physical_verification = true;
             break;
           }
-          if (!policy.authorize_target(
+          if (!restored_acknowledgement && !policy.authorize_target(
                 incident.ticket.id,
                 status->event_revision,
                 id,
@@ -1232,15 +1274,16 @@ namespace {
                 tracked)) {
             continue;
           }
-          if (!current_incident(revision, stop) ||
+          if (!current_incident(revision, stop) || !completion_current() ||
               !g_restore_expected.load(std::memory_order_acquire) ||
               g_restore_generation.load(std::memory_order_acquire) != incident.ticket.id ||
               !owners_clear_under_lifecycle() ||
               !VDISPLAY::tracked_display_cleanup_target_matches(target)) {
             return;
           }
-          policy.record_attempt(incident.ticket.id, id);
-          BOOST_LOG(info) << "Wake recovery cleanup: removing one captured managed virtual display after verified physical recovery.";
+          if (!restored_acknowledgement) policy.record_attempt(incident.ticket.id, id);
+          BOOST_LOG(info) << (restored_acknowledgement ? "Final restore cleanup" : "Wake recovery cleanup")
+                          << ": removing one captured managed virtual display after verified physical recovery.";
           const bool removed = VDISPLAY::remove_tracked_display_cleanup_target(target);
           const bool identity_gone = removed && !VDISPLAY::tracked_display_cleanup_target_matches(target);
           if (!identity_gone) {
@@ -1250,7 +1293,7 @@ namespace {
           const auto physical_after = capture_physical_settings_snapshot();
           if (!physical_after || !physical_settings_match(*physical_before, *physical_after)) {
             BOOST_LOG(warning) << "Wake recovery cleanup: physical display state changed during targeted removal; restoring the just-verified pre-removal physical layout.";
-            if (!current_incident(revision, stop) ||
+            if (!current_incident(revision, stop) || !completion_current() ||
                 !g_restore_expected.load(std::memory_order_acquire) ||
                 g_restore_generation.load(std::memory_order_acquire) != incident.ticket.id) {
               BOOST_LOG(warning) << "Wake recovery cleanup: restore ticket changed; not applying the prior physical snapshot.";
@@ -1261,6 +1304,7 @@ namespace {
               return;
             }
           }
+          if (!identity_gone && restored_acknowledgement) return;
         }
         if (retry_physical_verification) {
           continue;
@@ -1365,12 +1409,15 @@ namespace {
     if (!g_restore_expected.load(std::memory_order_relaxed)) {
       return false;
     }
-    if (helper_process_running(cancellation_predicate, operation_deadline)) {
+    const bool helper_running = helper_process_running(cancellation_predicate, operation_deadline);
+    if (shutdown_requested() ||
+        cancellation_requested(cancellation_predicate) ||
+        operation_deadline_expired(operation_deadline)) {
+      // An interrupted liveness probe cannot prove restoration has stopped.
       return true;
     }
-    if (cancellation_requested(cancellation_predicate) ||
-        operation_deadline_expired(operation_deadline)) {
-      return false;
+    if (helper_running) {
+      return true;
     }
     g_restore_expected.store(false, std::memory_order_relaxed);
     return false;
@@ -1413,7 +1460,9 @@ namespace {
   bool disarm_helper_restore_if_running(
     const std::function<bool()> &cancellation_predicate = {},
     const std::chrono::steady_clock::time_point operation_deadline =
-      std::chrono::steady_clock::time_point::max()) {
+      std::chrono::steady_clock::time_point::max(),
+    const bool reconnect_for_stream_start = false
+  ) {
     if (shutdown_requested() ||
         cancellation_requested(cancellation_predicate) ||
         operation_deadline_expired(operation_deadline)) {
@@ -1424,7 +1473,8 @@ namespace {
       cancellation_predicate,
       operation_deadline
     );
-    if (cancellation_requested(cancellation_predicate) ||
+    if (shutdown_requested() ||
+        cancellation_requested(cancellation_predicate) ||
         operation_deadline_expired(operation_deadline)) {
       return false;
     }
@@ -1440,7 +1490,7 @@ namespace {
     const auto last_attempt_us = g_last_disarm_attempt_us.load(std::memory_order_relaxed);
 
     // Don't spam DISARM frames (they share the helper's job/message queues with APPLY/REVERT).
-    if ((now_us - last_attempt_us) < (kDisarmRetryThrottle.count() * 1000)) {
+    if (!reconnect_for_stream_start && (now_us - last_attempt_us) < (kDisarmRetryThrottle.count() * 1000)) {
       const auto last_success_us = g_last_disarm_success_us.load(std::memory_order_relaxed);
       return (now_us - last_success_us) < (kDisarmRetryThrottle.count() * 1000);
     }
@@ -1457,15 +1507,35 @@ namespace {
     }
 
     g_last_disarm_attempt_us.store(now_us, std::memory_order_relaxed);
-    // The short recovery path intentionally makes one cache-only attempt. A
-    // reconnect or a synchronous reset can take seconds and would defeat the
-    // deadline that protects stream startup from a concurrent restore.
-    const bool ok = platf::display_helper_client::send_disarm_restore_fast(
+    // Adapted from AR / whoisarpit, Vibepollo PR #572 (5ad0ae88).
+    // Background recovery stays cache-only. Admission may reconnect once when
+    // a live helper owns an unconfirmed restore and its cached pipe is stale.
+    const auto operation_cancelled = [&] {
+      return shutdown_requested() ||
+             cancellation_requested(cancellation_predicate) ||
+             operation_deadline_expired(operation_deadline);
+    };
+    auto disarm_deadline = operation_deadline;
+    bool ok = platf::display_helper_client::send_disarm_restore_fast(
       static_cast<int>(kDisarmRestoreBudget.count()),
-      operation_deadline);
+      operation_deadline
+    );
+    if (!ok && reconnect_for_stream_start && restore_expected && !operation_cancelled()) {
+      BOOST_LOG(info) << "Display helper: reconnecting restore IPC before virtual display startup.";
+      const auto reconnect_deadline = std::min(
+        operation_deadline,
+        std::chrono::steady_clock::now() + kStreamStartDisarmReconnectBudget
+      );
+      disarm_deadline = reconnect_deadline;
+      if (platf::display_helper_client::reset_connection_cancellable(operation_cancelled, reconnect_deadline) && platf::display_helper_client::send_ping_cancellable(static_cast<int>(kStreamStartDisarmReconnectBudget.count()), operation_cancelled, reconnect_deadline) && !operation_cancelled() && !operation_deadline_expired(reconnect_deadline)) {
+        ok = platf::display_helper_client::send_disarm_restore_fast(
+          static_cast<int>(kDisarmRestoreBudget.count()),
+          reconnect_deadline
+        );
+      }
+    }
 
-    if (cancellation_requested(cancellation_predicate) ||
-        operation_deadline_expired(operation_deadline)) {
+    if (operation_cancelled() || operation_deadline_expired(disarm_deadline)) {
       return false;
     }
 
@@ -1475,6 +1545,12 @@ namespace {
       g_restore_expected.store(false, std::memory_order_relaxed);
       BOOST_LOG(info) << "Display helper: DISARM dispatched (fast).";
       return true;
+    }
+
+    // Admission failure is not evidence that restoration stopped. Leave the
+    // guard intact rather than treating a failed dispatch as restored state.
+    if (reconnect_for_stream_start) {
+      return false;
     }
 
     // Fail-safe: if we recently initiated a helper restore, and DISARM couldn't be delivered quickly,
@@ -1497,7 +1573,7 @@ namespace {
             operation_deadline_expired(operation_deadline)) {
           return false;
         }
-        helper_proc().terminate();
+        terminate_helper_process();
       }
       g_restore_expected.store(false, std::memory_order_relaxed);
     }
@@ -1535,6 +1611,7 @@ namespace {
       DWORD wait = WaitForSingleObject(h, 0);
       if (wait == WAIT_TIMEOUT) {
         DWORD pid = GetProcessId(h);
+        platf::display_helper_client::set_expected_helper_process_id(pid);
         BOOST_LOG(debug) << "Display helper already running (pid=" << pid << ")";
         const bool engine_matches = g_running_helper_legacy.has_value() &&
                                      *g_running_helper_legacy == legacy_engine;
@@ -1549,7 +1626,7 @@ namespace {
                 operation_deadline)) {
             return false;
           }
-          helper_proc().terminate();
+          terminate_helper_process();
 
           DWORD wait_result = WAIT_TIMEOUT;
           if (!wait_for_process_with_cancellation(
@@ -1636,7 +1713,7 @@ namespace {
               operation_deadline)) {
           return false;
         }
-        helper_proc().terminate();
+        terminate_helper_process();
 
         DWORD wait_result = WAIT_TIMEOUT;
         if (!wait_for_process_with_cancellation(
@@ -1669,6 +1746,8 @@ namespace {
         }
       } else {
         // Process exited; fall through to restart
+        platf::display_helper_client::set_expected_helper_process_id(0);
+        platf::display_helper_client::set_private_control_pipe_name({});
         DWORD exit_code = 0;
         GetExitCodeProcess(h, &exit_code);
         BOOST_LOG(debug) << "Display helper process detected as exited (code=" << exit_code << "); preparing restart.";
@@ -1707,19 +1786,45 @@ namespace {
       return false;
     }
 
+    const std::string endpoint_guid = platf::dxgi::generate_guid();
+    if (endpoint_guid.empty()) {
+      BOOST_LOG(error) << "Failed to generate a private display-helper IPC endpoint name.";
+      note_helper_start_failure("private IPC endpoint name generation failure");
+      return false;
+    }
+    const std::string private_pipe_name = "sunshine_display_helper_" + endpoint_guid.substr(1, 36);
+    platf::dxgi::NamedPipeFactory endpoint_factory;
+    endpoint_factory.set_first_pipe_instance_only();
+    if (platf::is_running_as_system()) {
+      endpoint_factory.set_system_only_server();
+    }
+    auto endpoint_master = endpoint_factory.create_server_handle(private_pipe_name, false);
+    if (!endpoint_master) {
+      platf::display_helper_client::set_private_control_pipe_name({});
+      BOOST_LOG(error) << "Failed to preclaim a private display-helper IPC endpoint.";
+      note_helper_start_failure("private IPC endpoint creation failure");
+      return false;
+    }
+    platf::display_helper_client::set_private_control_pipe_name(private_pipe_name, endpoint_master.get());
+
     const bool allow_system_fallback = platf::is_running_as_system() && !user_session_ready();
     // Select the helper engine (legacy fallback vs v2) and propagate the log level.
     std::wstring helper_args = legacy_engine ? L"--engine=legacy" : L"--engine=v2";
     helper_args += L" --log-level=";
     helper_args += std::to_wstring(std::clamp(config::sunshine.min_log_level, 0, 6));
+    helper_args += L" " + display_helper::restore_state_file_argument(
+      std::filesystem::path(platf::from_utf8(config::nvhttp.vibeshine_file_state)));
+    helper_args += L" --ipc-pipe=" + platf::from_utf8(private_pipe_name);
+    helper_args += L" --ipc-parent=" + std::to_wstring(GetCurrentProcessId());
     statefile::save_display_helper_engine(legacy_engine ? "legacy" : "v2");
     BOOST_LOG(debug) << "Starting display helper: " << platf::to_utf8(helper.wstring())
                      << " " << platf::to_utf8(helper_args);
     if (cancellation_requested(cancellation_predicate) ||
         operation_deadline_expired(operation_deadline)) {
+      platf::display_helper_client::set_private_control_pipe_name({});
       return false;
     }
-    bool started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback);
+    bool started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, true);
     if (!started && force_restart) {
       // If we were asked to hard-restart, tolerate a brief overlap window where the old
       // instance is still tearing down and retry quickly.
@@ -1728,18 +1833,23 @@ namespace {
               std::chrono::milliseconds(150),
               cancellation_predicate,
               operation_deadline)) {
+          platf::display_helper_client::set_private_control_pipe_name({});
           return false;
         }
-        started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback);
+        started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, true);
       }
     }
     if (!started) {
+      platf::display_helper_client::set_private_control_pipe_name({});
       BOOST_LOG(error) << "Failed to start display helper: " << platf::to_utf8(helper.wstring());
       note_helper_start_failure("process launch failure");
       return false;
     }
     HANDLE h = helper_proc().get_process_handle();
     if (!h) {
+      platf::display_helper_client::set_expected_helper_process_id(0);
+      platf::display_helper_client::set_private_control_pipe_name({});
+      helper_proc().terminate();
       BOOST_LOG(error) << "Display helper started but no process handle available";
       note_helper_start_failure("missing process handle");
       return false;
@@ -1747,10 +1857,17 @@ namespace {
     g_running_helper_legacy = legacy_engine;
 
     DWORD pid = GetProcessId(h);
+    if (!platf::dxgi::authorize_server_pipe_client(endpoint_master.get(), h)) {
+      terminate_helper_process();
+      platf::display_helper_client::set_private_control_pipe_name({});
+      note_helper_start_failure("private IPC account authorization failure");
+      return false;
+    }
+    platf::display_helper_client::set_expected_helper_process_id(pid);
     BOOST_LOG(info) << "Display helper successfully started (pid=" << pid << ")";
 
-    // Give the helper process time to initialize and create its named pipe server
-    // Check if it exits early (e.g., singleton mutex conflict from incomplete cleanup)
+    // Give the helper process time to connect to its authenticated host endpoint
+    // and check whether it exits before accepting IPC.
     for (int check = 0; check < 6; ++check) {
       if (cancellation_requested(cancellation_predicate) ||
           operation_deadline_expired(operation_deadline)) {
@@ -1777,28 +1894,45 @@ namespace {
                 std::chrono::milliseconds(1000),
                 cancellation_predicate,
                 operation_deadline)) {
+            platf::display_helper_client::set_expected_helper_process_id(0);
+            platf::display_helper_client::set_private_control_pipe_name({});
             return false;
           }
 
-          const bool retry_started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback);
+          const bool retry_started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, true);
           if (!retry_started) {
+            platf::display_helper_client::set_expected_helper_process_id(0);
+            platf::display_helper_client::set_private_control_pipe_name({});
             BOOST_LOG(error) << "Display helper retry start failed";
             note_helper_start_failure("singleton retry launch failure");
             return false;
           }
           h = helper_proc().get_process_handle();
-          if (h) {
-            pid = GetProcessId(h);
-            BOOST_LOG(info) << "Display helper retry succeeded (pid=" << pid << ")";
-            if (!sleep_with_cancellation(
-                  std::chrono::milliseconds(300),
-                  cancellation_predicate,
-                  operation_deadline)) {
-              return false;
-            }
+          if (!h) {
+            platf::display_helper_client::set_expected_helper_process_id(0);
+            platf::display_helper_client::set_private_control_pipe_name({});
+            helper_proc().terminate();
+            note_helper_start_failure("singleton retry missing process handle");
+            return false;
+          }
+          pid = GetProcessId(h);
+          if (!platf::dxgi::authorize_server_pipe_client(endpoint_master.get(), helper_proc().get_process_handle())) {
+            terminate_helper_process();
+            platf::display_helper_client::set_private_control_pipe_name({});
+            return false;
+          }
+          platf::display_helper_client::set_expected_helper_process_id(pid);
+          BOOST_LOG(info) << "Display helper retry succeeded (pid=" << pid << ")";
+          if (!sleep_with_cancellation(
+                std::chrono::milliseconds(300),
+                cancellation_predicate,
+                operation_deadline)) {
+            return false;
           }
           break;
         } else {
+          platf::display_helper_client::set_expected_helper_process_id(0);
+          platf::display_helper_client::set_private_control_pipe_name({});
           BOOST_LOG(error) << "Display helper exited unexpectedly with code " << exit_code;
           note_helper_start_failure("unexpected process exit");
           return false;
@@ -2064,6 +2198,9 @@ namespace {
         topo.push_back(std::move(group));
       }
       j["sunshine_topology"] = std::move(topo);
+      if (request.topology.refresh_settings_baseline) {
+        j["sunshine_refresh_settings_baseline"] = true;
+      }
     }
 
     if (!request.topology.monitor_positions.empty()) {
@@ -2505,6 +2642,33 @@ namespace display_helper_integration {
     return *result ? ApplyVerificationStatus::Unknown : ApplyVerificationStatus::Failed;
   }
 
+  bool reactivate_owned_virtual_display(
+    const std::string &device_id,
+    const std::function<bool()> &validate_owner,
+    std::function<bool()> cancelled
+  ) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2500);
+    std::unique_lock<std::mutex> execution_lock(pending_apply_execution_mutex(), std::defer_lock);
+    if (!lock_pending_apply_execution(execution_lock, cancelled, deadline) || cancellation_requested(cancelled) ||
+        has_pending_apply() || !validate_owner() || cancellation_requested(cancelled)) {
+      return false;
+    }
+    // A speculative repair must not supersede a startup wait. Holding the
+    // normal admission gate through the correlated reply preserves APPLY and
+    // REVERT ordering for this owned target.
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+      deadline - std::chrono::steady_clock::now()
+    );
+    if (remaining <= std::chrono::milliseconds::zero()) {
+      return false;
+    }
+    return platf::display_helper_client::send_owned_reactivation(
+      device_id,
+      std::move(cancelled),
+      static_cast<int>(remaining.count())
+    );
+  }
+
   bool apply(
     const DisplayApplyRequest &request,
     ApplyVerificationTicket *verification_ticket,
@@ -2512,6 +2676,8 @@ namespace display_helper_integration {
     ApplyRetryPolicy retry_policy,
     std::chrono::steady_clock::time_point startup_deadline,
     const bool shutdown_class_caller) {
+    auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(false);
+    if (!borrowed_output_mutation) return false;
     const auto verification_timeout =
       retry_policy == ApplyRetryPolicy::StreamStart ?
         kStreamStartApplyVerificationTimeout :
@@ -2577,15 +2743,22 @@ namespace display_helper_integration {
     const bool prefer_golden_if_current_missing,
     const bool override_managed_ownership,
     const bool allow_disabled_recovery,
-    RecoveryTicket *recovery_ticket) {
+    RecoveryTicket *recovery_ticket,
+    const RevertOwnershipPolicy ownership_policy,
+    const FinalRestoreDisplayPolicy display_policy) {
+    auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(false);
+    if (!borrowed_output_mutation) return false;
     if (recovery_ticket) *recovery_ticket = {};
     const bool managed_cleanup_allowed = remote_display_topology::instance().generic_virtual_display_cleanup_allowed();
-    if (!managed_cleanup_allowed && !override_managed_ownership) {
+    const bool retained_normal_restore_allowed =
+      ownership_policy == RevertOwnershipPolicy::RetainPausedNormalGame &&
+      remote_display_topology::instance().physical_display_restore_allowed();
+    if (!managed_cleanup_allowed && !override_managed_ownership && !retained_normal_restore_allowed) {
       proc::defer_display_revert();
       BOOST_LOG(info) << "Display helper: deferring REVERT until all managed client display sessions release ownership.";
       return false;
     }
-    if (!managed_cleanup_allowed) {
+    if (!managed_cleanup_allowed && override_managed_ownership) {
       BOOST_LOG(warning) << "Display helper: overriding managed display ownership for terminal user-requested REVERT.";
     }
 
@@ -2633,6 +2806,10 @@ namespace display_helper_integration {
           RecoveryTicket {ticket_id, connection_generation},
           std::move(cleanup_targets),
           std::move(known_physical_output_ids),
+          display_policy == FinalRestoreDisplayPolicy::RemoveAfterRestore &&
+            ownership_policy == RevertOwnershipPolicy::AllOwnersMustRelease,
+          g_final_restore_cleanup_generation.load(std::memory_order_acquire),
+          g_last_apply_generation.load(std::memory_order_acquire),
         });
       }
     }
@@ -2672,6 +2849,10 @@ namespace display_helper_integration {
     return RecoveryStatusSnapshot {result->ticket, result->connection_generation, status, result->event_revision, result->parked};
   }
 
+  void cancel_final_restore_display_removal() {
+    g_final_restore_cleanup_generation.fetch_add(1, std::memory_order_acq_rel);
+  }
+
   void start_orphan_recovery_monitor() {
     orphan_recovery_monitor().start();
   }
@@ -2681,6 +2862,8 @@ namespace display_helper_integration {
   }
 
   bool run_terminal_physical_recovery(const std::function<bool()> &recover) {
+    auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(false);
+    if (!borrowed_output_mutation) return false;
     std::unique_lock execution_lock(pending_apply_execution_mutex());
     invalidate_apply_verification();
     clear_pending_apply_queue_locked();
@@ -2692,9 +2875,12 @@ namespace display_helper_integration {
         // A wedged helper must be gone before native fallback can change topology.
         const auto wait = WaitForSingleObject(handle, 3000);
         if (wait == WAIT_TIMEOUT) {
-          helper_proc().terminate();
+          terminate_helper_process();
           DWORD exit_code {};
           if (!helper_proc().wait_for(exit_code, 5000)) return false;
+        } else if (wait == WAIT_OBJECT_0) {
+          platf::display_helper_client::set_expected_helper_process_id(0);
+          platf::display_helper_client::set_private_control_pipe_name({});
         } else if (wait != WAIT_OBJECT_0) {
           return false;
         }
@@ -2710,7 +2896,9 @@ namespace display_helper_integration {
 
   bool disarm_pending_restore(
     std::function<bool()> cancellation_predicate,
-    const std::chrono::steady_clock::time_point operation_deadline) {
+    const std::chrono::steady_clock::time_point operation_deadline,
+    const bool reconnect_for_stream_start
+  ) {
     if ((cancellation_predicate && cancellation_predicate()) ||
         operation_deadline_expired(operation_deadline)) {
       return false;
@@ -2725,21 +2913,28 @@ namespace display_helper_integration {
     invalidate_apply_verification();
     return disarm_helper_restore_if_running(
       cancellation_predicate,
-      operation_deadline
+      operation_deadline,
+      reconnect_for_stream_start
     );
   }
 
   bool restore_in_progress(
     std::function<bool()> cancellation_predicate,
     const std::chrono::steady_clock::time_point operation_deadline) {
+    if (shutdown_requested()) {
+      return true;
+    }
     if ((cancellation_predicate && cancellation_predicate()) ||
         operation_deadline_expired(operation_deadline)) {
-      return false;
+      return g_restore_expected.load(std::memory_order_relaxed);
     }
-    return restore_expected_with_live_helper(
+    const bool restoring = restore_expected_with_live_helper(
       cancellation_predicate,
       operation_deadline
     );
+    // The query may block on helper liveness, or find no outstanding restore.
+    // Either result still needs the shutdown fence before mutation admission.
+    return shutdown_requested() || restoring;
   }
 
   bool maintenance_available() {
@@ -2829,6 +3024,8 @@ namespace display_helper_integration {
   }
 
   bool apply_pending_if_ready(std::function<bool()> cancellation_predicate) {
+    auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(false);
+    if (!borrowed_output_mutation) return false;
     const auto cancelled = [&] {
       return cancellation_predicate && cancellation_predicate();
     };
@@ -3297,7 +3494,98 @@ namespace display_helper_integration {
   }
 
   bool apply_remote_composed_topology(const DisplayTopologyDefinition &topology) {
+    auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(false);
+    if (!borrowed_output_mutation) return false;
     return apply_topology_definition(topology, "remote-monitor coordinator");
+  }
+
+  // The display library's null HDR state conflates unsupported and failed
+  // queries. Accept an SDR-only target only after an explicit successful
+  // capability query for this exact active path.
+  std::optional<bool> remote_monitor_hdr_unsupported_inner(const std::string &device_id) {
+    struct AdvancedColorInfo2 {
+      DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+      union {
+        struct {
+          UINT32 advanced_color_supported : 1;
+          UINT32 advanced_color_active : 1;
+          UINT32 reserved1 : 1;
+          UINT32 limited_by_policy : 1;
+          UINT32 hdr_supported : 1;
+          UINT32 hdr_user_enabled : 1;
+          UINT32 wide_color_supported : 1;
+          UINT32 wide_color_user_enabled : 1;
+          UINT32 reserved : 24;
+        };
+        UINT32 value;
+      };
+      DISPLAYCONFIG_COLOR_ENCODING color_encoding;
+      UINT32 bits_per_color_channel;
+      UINT32 active_color_mode;
+    };
+    display_device::DisplayRecoveryBehaviorGuard guard(display_device::DisplayRecoveryBehavior::Skip);
+    display_device::WinApiLayer api;
+    const auto data = api.queryDisplayConfig(display_device::QueryType::Active);
+    if (!data) return std::nullopt;
+    const auto *path = display_device::win_utils::getActivePath(api, device_id, data->m_paths);
+    if (!path) return std::nullopt;
+    AdvancedColorInfo2 info {};
+    info.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2;
+    info.header.size = sizeof(info);
+    info.header.adapterId = path->targetInfo.adapterId;
+    info.header.id = path->targetInfo.id;
+    const LONG result = DisplayConfigGetDeviceInfo(&info.header);
+    if (result == ERROR_SUCCESS) return info.hdr_supported == 0;
+    if (result != ERROR_INVALID_FUNCTION && result != ERROR_INVALID_PARAMETER && result != ERROR_NOT_SUPPORTED) return std::nullopt;
+    DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO legacy {};
+    legacy.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO;
+    legacy.header.size = sizeof(legacy);
+    legacy.header.adapterId = path->targetInfo.adapterId;
+    legacy.header.id = path->targetInfo.id;
+    if (DisplayConfigGetDeviceInfo(&legacy.header) != ERROR_SUCCESS) return std::nullopt;
+    return legacy.advancedColorSupported == 0;
+  }
+
+  std::optional<bool> remote_monitor_hdr_unsupported(const std::string &device_id) {
+    if (auto result = remote_monitor_hdr_unsupported_inner(device_id)) return result;
+    HANDLE token = platf::retrieve_users_token(false);
+    if (!token) return std::nullopt;
+    std::optional<bool> result;
+    const auto error = platf::impersonate_current_user(token, [&] {
+      result = remote_monitor_hdr_unsupported_inner(device_id);
+    });
+    CloseHandle(token);
+    return error ? std::nullopt : result;
+  }
+
+  bool apply_remote_monitor_hdr_state(const std::string &device_id, bool enabled, bool allow_mutation) {
+    if (device_id.empty()) return false;
+    auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(false);
+    if (!borrowed_output_mutation) return false;
+    auto ctx = make_settings_manager();
+    if (!ctx) return false;
+    const auto desired = enabled ? display_device::HdrState::Enabled : display_device::HdrState::Disabled;
+    try {
+      auto states = ctx->display->getCurrentHdrStates({device_id});
+      auto current = states.find(device_id);
+      if (current == states.end()) return false;
+      if (!current->second) return !enabled && remote_monitor_hdr_unsupported(device_id).value_or(false);
+      if (current == states.end() || current->second != desired) {
+        if (!allow_mutation) return false;
+        if (!ctx->display->setHdrStates({{device_id, desired}})) return false;
+        // Windows may acknowledge the request before advanced color settles.
+        for (int attempt = 0; attempt < 30; ++attempt) {
+          states = ctx->display->getCurrentHdrStates({device_id});
+          current = states.find(device_id);
+          if (current != states.end() && current->second == desired) return true;
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+      }
+      return current != states.end() && current->second == desired;
+    } catch (...) {
+      BOOST_LOG(warning) << "Remote Monitor: unable to apply or verify the target HDR state.";
+      return false;
+    }
   }
 
   std::string enumerate_devices_json(display_device::DeviceEnumerationDetail detail) {

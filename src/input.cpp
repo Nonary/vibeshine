@@ -24,17 +24,14 @@ extern "C" {
 #include "config.h"
 #include "globals.h"
 #include "input.h"
+#include "input_geometry_policy.h"
+#include "input_scroll_policy.h"
 #include "input_validation_policy.h"
 #include "logging.h"
 #include "mouse_input.h"
 #include "platform/common.h"
 #include "thread_pool.h"
 #include "utility.h"
-
-// Win32 WHEEL_DELTA constant
-#ifndef WHEEL_DELTA
-constexpr int WHEEL_DELTA = 120;
-#endif
 
 using namespace std::literals;
 
@@ -168,10 +165,21 @@ namespace input {
     }
 
     platf::gamepad_state_t gamepad_state;
+    bool guide_key_down = false;
 
     thread_pool_util::ThreadPool::task_id_t back_timeout_id;
 
     int id;
+    bool alloc_failed {};
+
+    // What the client's arrival event said this controller is (both 0 for a controller that
+    // arrived through a legacy state packet). They gate the Steam Controller attribute packet.
+    std::uint8_t arrival_type {};
+    std::uint16_t arrival_capabilities {};
+    // A Steam Controller attribute packet that arrived before the slot existed. The client sends
+    // it after the arrival event on the same reliable channel, so this should stay empty; holding
+    // one packet until the arrival says whether it is wanted costs nothing.
+    std::optional<platf::steam_controller_attributes_t> pending_steam_attributes;
 
     // When emulating the HOME button, we may need to artificially release the back button.
     // Afterwards, the gamepad state on sunshine won't match the state on Moonlight.
@@ -180,6 +188,16 @@ namespace input {
     // Moonlight once more.
     button_state_e back_button_state;
   };
+
+  // Keep the keyboard binding separate from native Guide and the Back timer.
+  // Controller packets and timer releases must not release a held bound key.
+  void send_gamepad_state(const gamepad_t &gamepad) {
+    auto state = gamepad.gamepad_state;
+    if (gamepad.guide_key_down) {
+      state.buttonFlags |= platf::HOME;
+    }
+    platf::gamepad_update(platf_input, gamepad.id, state);
+  }
 
   void reset_gamepad(gamepad_t &gamepad) {
     if (gamepad.back_timeout_id) {
@@ -190,7 +208,12 @@ namespace input {
       free_gamepad(platf_input, gamepad.id);
       gamepad.id = -1;
     }
+    gamepad.alloc_failed = false;
+    gamepad.arrival_type = 0;
+    gamepad.arrival_capabilities = 0;
+    gamepad.pending_steam_attributes.reset();
     gamepad.gamepad_state = {};
+    gamepad.guide_key_down = false;
     gamepad.back_button_state = button_state_e::NONE;
   }
 
@@ -204,9 +227,12 @@ namespace input {
 
     input_t(
       safe::mail_raw_t::event_t<input::touch_port_t> touch_port_event,
-      platf::feedback_queue_t feedback_queue
+      platf::feedback_queue_t feedback_queue,
+      input::guide_button_config_t guide_button
     ):
         shortcutFlags {},
+        guide_button_key {guide_button.key},
+        guide_button_controller {guide_button.controller},
         gamepads(MAX_GAMEPADS),
         client_context {platf::allocate_client_input_context(platf_input)},
         touch_port_event {std::move(touch_port_event)},
@@ -224,7 +250,16 @@ namespace input {
     task_pool_util::TaskPool::task_id_t key_press_repeat_id {};
     uint16_t repeating_key = 0;
 
+    // Captured from this session's effective app/client configuration at launch.
+    // A later reload cannot retarget a held press or change its release key.
+    const int guide_button_key;
+    const int guide_button_controller;
+    bool guide_key_pressed = false;
+
     std::vector<gamepad_t> gamepads;
+    // Only the input worker owns gamepads; the control thread reads this summary.
+    std::atomic_uint32_t allocated_gamepads {0};
+    controller_speaker_pcm::owner_bindings speaker_bindings;
     std::unique_ptr<platf::client_input_t> client_context;
 
     safe::mail_raw_t::event_t<input::touch_port_t> touch_port_event;
@@ -236,6 +271,11 @@ namespace input {
     std::atomic_bool input_queue_task_scheduled;
     // Protected by input_queue_lock; reset permanently closes this context.
     bool input_closed = false;
+
+    geometry::transport_t geometry_transport;
+    // The worker tracks the touch-port event version so refreshes block only
+    // when a new publication is pending, never skipping a read on lock contention.
+    std::uint64_t observed_touch_port_event_generation {};
 
     thread_pool_util::ThreadPool::task_id_t mouse_left_button_timeout;
     bool mouse_left_button_delay = true;
@@ -441,6 +481,25 @@ namespace input {
       << "--end controller battery packet--"sv;
   }
 
+  /**
+   * @brief Prints a Steam Controller attributes packet.
+   * @param packet The attributes packet.
+   */
+  void print(PSS_STEAM_CONTROLLER_ATTRIBUTES_PACKET packet) {
+    BOOST_LOG(verbose)
+      << "--begin steam controller attributes packet--"sv << std::endl
+      << "controllerNumber ["sv << util::hex(packet->controllerNumber).to_string_view() << ']' << std::endl
+      << "transport ["sv << util::hex(packet->transport).to_string_view() << ']' << std::endl
+      << "validMask ["sv << util::hex(packet->validMask).to_string_view() << ']' << std::endl
+      << "firmwareBuildTime ["sv << util::hex(util::endian::little(packet->firmwareBuildTime)).to_string_view() << ']' << std::endl
+      << "bootloaderBuildTime ["sv << util::hex(util::endian::little(packet->bootloaderBuildTime)).to_string_view() << ']' << std::endl
+      << "boardRevision ["sv << util::hex(util::endian::little(packet->boardRevision)).to_string_view() << ']' << std::endl
+      << "capabilities ["sv << util::hex(util::endian::little(packet->capabilities)).to_string_view() << ']' << std::endl
+      << "radioFirmwareBuildTime ["sv << util::hex(util::endian::little(packet->radioFirmwareBuildTime)).to_string_view() << ']' << std::endl
+      << "dongleFirmwareBuildTime ["sv << util::hex(util::endian::little(packet->dongleFirmwareBuildTime)).to_string_view() << ']' << std::endl
+      << "--end steam controller attributes packet--"sv;
+  }
+
   void print(void *payload) {
     auto header = (PNV_INPUT_HEADER) payload;
 
@@ -489,6 +548,9 @@ namespace input {
       case SS_CONTROLLER_BATTERY_MAGIC:
         print((PSS_CONTROLLER_BATTERY_PACKET) payload);
         break;
+      case SS_STEAM_CONTROLLER_ATTRIBUTES_MAGIC:
+        print((PSS_STEAM_CONTROLLER_ATTRIBUTES_PACKET) payload);
+        break;
     }
   }
 
@@ -501,6 +563,60 @@ namespace input {
     mouse_controller->move_relative({util::endian::big(packet->deltaX), util::endian::big(packet->deltaY)});
   }
 
+  geometry::contact_event_e geometry_contact_event(const std::uint8_t event_type) {
+    switch (event_type) {
+      case LI_TOUCH_EVENT_HOVER:
+        return geometry::contact_event_e::hover;
+      case LI_TOUCH_EVENT_DOWN:
+        return geometry::contact_event_e::down;
+      case LI_TOUCH_EVENT_MOVE:
+        return geometry::contact_event_e::move;
+      case LI_TOUCH_EVENT_UP:
+        return geometry::contact_event_e::up;
+      case LI_TOUCH_EVENT_CANCEL:
+        return geometry::contact_event_e::cancel;
+      case LI_TOUCH_EVENT_CANCEL_ALL:
+        return geometry::contact_event_e::cancel_all;
+      default:
+        return geometry::contact_event_e::other;
+    }
+  }
+
+  void cancel_geometry_contacts(input_t &input) {
+    if (!input.client_context) return;
+    platf::touch_input_t touch {};
+    touch.eventType = LI_TOUCH_EVENT_CANCEL_ALL;
+    platf::touch_update(input.client_context.get(), {}, touch);
+    platf::pen_input_t pen {};
+    pen.eventType = LI_TOUCH_EVENT_CANCEL_ALL;
+    platf::pen_update(input.client_context.get(), {}, pen);
+  }
+
+  void refresh_input_geometry(const std::shared_ptr<input_t> &input) {
+    if (!input) return;
+    {
+      std::lock_guard<std::mutex> lock(input->input_queue_lock);
+      if (input->input_closed) return;
+    }
+    const auto latest = input->touch_port_event->view_if_newer(input->observed_touch_port_event_generation);
+    if (!latest) return;
+    const platf::input_geometry_snapshot_t snapshot {
+      latest->capture_generation,
+      latest->geometry_sequence,
+      latest->geometry_valid,
+      latest->geometry_target,
+      latest->offset_x,
+      latest->offset_y,
+      latest->env_width,
+      latest->env_height,
+    };
+    input->geometry_transport.refresh_from_event(snapshot, input->touch_port, *latest, [&] {
+      // The callback runs before refresh() changes touch_port, on the same
+      // serialized input worker that handles packets and synthetic repeats.
+      cancel_geometry_contacts(*input);
+    });
+  }
+
   /**
    * @brief Converts client coordinates on the specified surface into screen coordinates.
    * @param input The input context.
@@ -509,15 +625,9 @@ namespace input {
    * @return The host-relative coordinate pair if a touchport is available.
    */
   std::optional<std::pair<float, float>> client_to_touchport(std::shared_ptr<input_t> &input, const std::pair<float, float> &val, const std::pair<float, float> &size) {
-    auto &touch_port_event = input->touch_port_event;
     auto &touch_port = input->touch_port;
-    // Browser viewers have separate input ownership but share capture metadata.
-    // Read the latest port without consuming it or blocking the input worker.
-    if (auto latest_port = touch_port_event->view(0ms)) {
-      touch_port = *latest_port;
-    }
     if (!touch_port) {
-      BOOST_LOG(verbose) << "Ignoring early absolute input without a touch port"sv;
+      BOOST_LOG(verbose) << "Ignoring absolute input while capture geometry is unavailable"sv;
       return std::nullopt;
     }
 
@@ -847,13 +957,52 @@ namespace input {
     const auto &host = host_keys.at(host_keycode(held.host_key));
     held.host_key = host.key;
     held.flags = host.flags;
-    send_key_and_modifiers(held, input->shortcutFlags);
+    // A HID keyboard repeats held keys in Windows. Sending repeated identical
+    // HID downs has no effect, and re-sending temporary modifier transitions
+    // around them would instead pulse those modifiers on every timer tick.
+    bool native_repeat = false;
+#ifdef _WIN32
+    native_repeat = platf::keyboard_uses_native_repeat(platf_input, host.key);
+#endif
+    if (!native_repeat) send_key_and_modifiers(held, input->shortcutFlags);
     input->key_press_repeat_id = task_pool.pushDelayed(repeat_key, config::input.key_repeat_period, input, key_code).task_id;
+  }
+
+  bool passthrough_guide_key(input_t &input, uint16_t key_code, bool release) {
+    if (input.guide_button_key == 0 || key_code != input.guide_button_key) {
+      return false;
+    }
+    if (input.guide_key_pressed == !release) {
+      return true;
+    }
+    // Latch even an ignored press. Repeats must not activate a controller that
+    // connects later, or one whose input was disabled at the initial press.
+    input.guide_key_pressed = !release;
+    if (input.guide_button_controller < 0 || input.guide_button_controller >= input.gamepads.size()) {
+      return true;
+    }
+    auto &gamepad = input.gamepads[input.guide_button_controller];
+    if (release) {
+      if (gamepad.guide_key_down) {
+        gamepad.guide_key_down = false;
+        send_gamepad_state(gamepad);
+      }
+    } else if (config::input.keyboard && config::input.controller && gamepad.id >= 0) {
+      gamepad.guide_key_down = true;
+      send_gamepad_state(gamepad);
+    }
+    // The bound key is consumed before remapping, shortcuts and host injection.
+    // Only network packets enter here; synthesized controller output is never
+    // fed back into the input queue or translated into host keyboard events.
+    return true;
   }
 
   void passthrough(std::shared_ptr<input_t> &input, PNV_KEYBOARD_PACKET packet) {
     const bool release = util::endian::little(packet->header.magic) == KEY_UP_EVENT_MAGIC;
     const uint16_t key_code = packet->keyCode & 0x00FF;
+    if (passthrough_guide_key(*input, key_code, release)) {
+      return;
+    }
     auto it = input->keys.find(key_code);
     if (release) {
       if (it == input->keys.end()) {
@@ -876,14 +1025,18 @@ namespace input {
     }
 
     uint8_t synthetic_modifiers = 0;
+    auto consumed_modifiers = input->shortcutFlags;
+    if (input->guide_key_pressed) {
+      update_shortcutFlags(&consumed_modifiers, input->guide_button_key, false);
+    }
     if (!is_modifier(key_code)) {
-      if ((packet->modifiers & MODIFIER_SHIFT) && !(input->shortcutFlags & input_t::SHIFT)) {
+      if ((packet->modifiers & MODIFIER_SHIFT) && !(consumed_modifiers & input_t::SHIFT)) {
         synthetic_modifiers |= MODIFIER_SHIFT;
       }
-      if ((packet->modifiers & MODIFIER_CTRL) && !(input->shortcutFlags & input_t::CTRL)) {
+      if ((packet->modifiers & MODIFIER_CTRL) && !(consumed_modifiers & input_t::CTRL)) {
         synthetic_modifiers |= MODIFIER_CTRL;
       }
-      if ((packet->modifiers & MODIFIER_ALT) && !(input->shortcutFlags & input_t::ALT)) {
+      if ((packet->modifiers & MODIFIER_ALT) && !(consumed_modifiers & input_t::ALT)) {
         synthetic_modifiers |= MODIFIER_ALT;
       }
     }
@@ -906,7 +1059,14 @@ namespace input {
     task_pool.cancel(input->key_press_repeat_id);
     input->key_press_repeat_id = nullptr;
     input->repeating_key = key_code;
-    if (config::input.key_repeat_delay.count() > 0) {
+    bool native_repeat = false;
+#ifdef _WIN32
+    // The platform pins each held key to its initial route until release,
+    // including when a failed VHF child is removed. Windows already repeats
+    // VHF keys, so do not create a periodic no-op timer for those keys.
+    native_repeat = platf::keyboard_uses_native_repeat(platf_input, host.key);
+#endif
+    if (!native_repeat && config::input.key_repeat_delay.count() > 0) {
       input->key_press_repeat_id = task_pool.pushDelayed(repeat_key, config::input.key_repeat_delay, input, key_code).task_id;
     }
   }
@@ -921,16 +1081,16 @@ namespace input {
       return;
     }
 
-    if (config::input.high_resolution_scrolling) {
-      platf::scroll(platf_input, util::endian::big(packet->scrollAmt1));
+    bool full_ticks_only = !config::input.high_resolution_scrolling;
+#ifdef _WIN32
+    full_ticks_only = full_ticks_only || platf::mouse_requires_scroll_ticks(platf_input);
+#endif
+    if (!full_ticks_only) {
+      const auto delta = scroll_policy::pass_through(input->accumulated_vscroll_delta, util::endian::big(packet->scrollAmt1));
+      platf::scroll(platf_input, delta);
     } else {
-      input->accumulated_vscroll_delta += util::endian::big(packet->scrollAmt1);
-      auto full_ticks = input->accumulated_vscroll_delta / WHEEL_DELTA;
-      if (full_ticks) {
-        // Send any full ticks that have accumulated and store the rest
-        platf::scroll(platf_input, full_ticks * WHEEL_DELTA);
-        input->accumulated_vscroll_delta -= full_ticks * WHEEL_DELTA;
-      }
+      const auto full_ticks = scroll_policy::accumulate(input->accumulated_vscroll_delta, util::endian::big(packet->scrollAmt1));
+      if (full_ticks) platf::scroll(platf_input, full_ticks);
     }
   }
 
@@ -944,16 +1104,16 @@ namespace input {
       return;
     }
 
-    if (config::input.high_resolution_scrolling) {
-      platf::hscroll(platf_input, util::endian::big(packet->scrollAmount));
+    bool full_ticks_only = !config::input.high_resolution_scrolling;
+#ifdef _WIN32
+    full_ticks_only = full_ticks_only || platf::mouse_requires_scroll_ticks(platf_input);
+#endif
+    if (!full_ticks_only) {
+      const auto delta = scroll_policy::pass_through(input->accumulated_hscroll_delta, util::endian::big(packet->scrollAmount));
+      platf::hscroll(platf_input, delta);
     } else {
-      input->accumulated_hscroll_delta += util::endian::big(packet->scrollAmount);
-      auto full_ticks = input->accumulated_hscroll_delta / WHEEL_DELTA;
-      if (full_ticks) {
-        // Send any full ticks that have accumulated and store the rest
-        platf::hscroll(platf_input, full_ticks * WHEEL_DELTA);
-        input->accumulated_hscroll_delta -= full_ticks * WHEEL_DELTA;
-      }
+      const auto full_ticks = scroll_policy::accumulate(input->accumulated_hscroll_delta, util::endian::big(packet->scrollAmount));
+      if (full_ticks) platf::hscroll(platf_input, full_ticks);
     }
   }
 
@@ -964,6 +1124,21 @@ namespace input {
 
     int size = util::endian::big(packet->header.size) - sizeof(packet->header.magic);
     platf::unicode(platf_input, packet->text, size);
+  }
+
+  /**
+   * @brief Hands decoded Steam Controller attributes to the platform when the arrival allows it.
+   * @param gamepad The allocated slot the packet named.
+   * @param attributes The decoded packet; its global index is filled in here.
+   */
+  void forward_steam_attributes(const gamepad_t &gamepad, platf::steam_controller_attributes_t attributes) {
+    if (gamepad.arrival_type != LI_CTYPE_STEAM || !(gamepad.arrival_capabilities & LI_CCAP_STEAM_ATTRIBUTES)) {
+      BOOST_LOG(debug) << "Ignoring Steam Controller attributes for controller ["sv << (std::uint32_t) attributes.id.clientRelativeIndex
+                       << "]: not announced as a Steam Controller with LI_CCAP_STEAM_ATTRIBUTES"sv;
+      return;
+    }
+    attributes.id.globalIndex = gamepad.id;
+    platf::gamepad_attributes(platf_input, attributes);
   }
 
   /**
@@ -981,30 +1156,113 @@ namespace input {
       return;
     }
 
-    if (input->gamepads[packet->controllerNumber].id >= 0) {
+    // Binding is single-use, scoped to this input session and controller arrival.
+    const auto speaker_owner = input->speaker_bindings.take(packet->controllerNumber);
+
+    auto &gamepad = input->gamepads[packet->controllerNumber];
+    if (gamepad.id >= 0) {
       BOOST_LOG(warning) << "ControllerNumber already allocated ["sv << packet->controllerNumber << ']';
       return;
     }
+    // A new arrival is a new attempt, whatever an earlier one did.
+    gamepad.alloc_failed = false;
+    gamepad.arrival_type = packet->type;
+    gamepad.arrival_capabilities = util::endian::little(packet->capabilities);
 
     platf::gamepad_arrival_t arrival {
       packet->type,
       util::endian::little(packet->capabilities),
       util::endian::little(packet->supportedButtonFlags),
       input->persist_gamepads,
+      speaker_owner,
     };
 
     auto id = alloc_id(gamepadMask);
     if (id < 0) {
+      // This arrival failed too: later packets are not pre-arrival attributes,
+      // and any held reading must not carry over to the next allocation attempt.
+      gamepad.alloc_failed = true;
+      gamepad.pending_steam_attributes.reset();
       return;
     }
 
     // Allocate a new gamepad
     if (platf::alloc_gamepad(platf_input, {id, packet->controllerNumber}, arrival, input->feedback_queue)) {
       free_id(gamepadMask, id);
+      gamepad.alloc_failed = true;
+      gamepad.pending_steam_attributes.reset();
       return;
     }
 
-    input->gamepads[packet->controllerNumber].id = id;
+    gamepad.id = id;
+    input->allocated_gamepads.fetch_or(1u << packet->controllerNumber, std::memory_order_relaxed);
+
+    if (gamepad.pending_steam_attributes) {
+      auto attributes = *gamepad.pending_steam_attributes;
+      gamepad.pending_steam_attributes.reset();
+      forward_steam_attributes(gamepad, attributes);
+    }
+  }
+
+  /**
+   * @brief Copies a NUL-padded attribute string out of a packet, keeping only printable ASCII.
+   * @details At most 15 characters are kept and the result is always NUL terminated; anything
+   *          outside 0x20..0x7E becomes '?'. The driver applies the same rule, so what reaches
+   *          the virtual device is exactly what is logged here.
+   */
+  void copy_steam_attribute_string(std::array<char, 16> &dst, const char (&src)[16]) {
+    dst.fill('\0');
+    for (std::size_t i = 0; i < dst.size() - 1 && src[i] != '\0'; ++i) {
+      const auto c = static_cast<unsigned char>(src[i]);
+      dst[i] = (c >= 0x20 && c <= 0x7E) ? static_cast<char>(c) : '?';
+    }
+  }
+
+  /**
+   * @brief Called to pass a Steam Controller attributes packet to the platform backend.
+   * @details The packet carries what the client read from the real controller at link setup
+   *          (firmware/bootloader build times, board revision, build id, serials). It is only
+   *          honoured for a controller the arrival event announced as LI_CTYPE_STEAM with
+   *          LI_CCAP_STEAM_ATTRIBUTES; a packet for anything else is dropped.
+   * @param input The input context pointer.
+   * @param packet The attributes packet.
+   */
+  void passthrough(std::shared_ptr<input_t> &input, PSS_STEAM_CONTROLLER_ATTRIBUTES_PACKET packet) {
+    if (!config::input.controller) {
+      return;
+    }
+
+    if (packet->controllerNumber >= input->gamepads.size()) {
+      BOOST_LOG(warning) << "ControllerNumber out of range ["sv << (std::uint32_t) packet->controllerNumber << ']';
+      return;
+    }
+
+    auto &gamepad = input->gamepads[packet->controllerNumber];
+
+    platf::steam_controller_attributes_t attributes {};
+    attributes.id = {gamepad.id, packet->controllerNumber};
+    attributes.transport = packet->transport;
+    attributes.valid_mask = packet->validMask;
+    attributes.firmware_build_time = util::endian::little(packet->firmwareBuildTime);
+    attributes.bootloader_build_time = util::endian::little(packet->bootloaderBuildTime);
+    attributes.board_revision = util::endian::little(packet->boardRevision);
+    attributes.capabilities = util::endian::little(packet->capabilities);
+    attributes.radio_firmware_build_time = util::endian::little(packet->radioFirmwareBuildTime);
+    attributes.dongle_firmware_build_time = util::endian::little(packet->dongleFirmwareBuildTime);
+    copy_steam_attribute_string(attributes.build_id, packet->buildId);
+    copy_steam_attribute_string(attributes.unit_serial, packet->unitSerial);
+    copy_steam_attribute_string(attributes.board_serial, packet->boardSerial);
+
+    if (gamepad.id < 0) {
+      // Before the arrival event nothing says what this controller is; after a failed
+      // allocation there is nothing to apply them to.
+      if (!gamepad.alloc_failed) {
+        gamepad.pending_steam_attributes = attributes;
+      }
+      return;
+    }
+
+    forward_steam_attributes(gamepad, attributes);
   }
 
   /**
@@ -1035,6 +1293,9 @@ namespace input {
       normalized->offset_y,
       normalized->width,
       normalized->height,
+      0,
+      0,
+      touch_port.output_name,
     };
   }
 
@@ -1045,6 +1306,19 @@ namespace input {
    */
   void passthrough(std::shared_ptr<input_t> &input, PSS_TOUCH_PACKET packet) {
     if (!config::input.mouse) {
+      return;
+    }
+
+    const auto event = geometry_contact_event(packet->eventType);
+    const auto pointer_id = util::endian::little(packet->pointerId);
+    if (event == geometry::contact_event_e::cancel_all) {
+      input->geometry_transport.touch(event, pointer_id, static_cast<bool>(input->touch_port));
+      platf::touch_input_t cancel {};
+      cancel.eventType = LI_TOUCH_EVENT_CANCEL_ALL;
+      platf::touch_update(input->client_context.get(), {}, cancel);
+      return;
+    }
+    if (input->geometry_transport.touch(event, pointer_id, static_cast<bool>(input->touch_port)) == geometry::contact_result_e::suppress) {
       return;
     }
 
@@ -1078,7 +1352,7 @@ namespace input {
     platf::touch_input_t touch {
       packet->eventType,
       rotation,
-      util::endian::little(packet->pointerId),
+      pointer_id,
       coords->first,
       coords->second,
       from_clamped_netfloat(packet->pressureOrDistance, 0.0f, 1.0f),
@@ -1096,6 +1370,18 @@ namespace input {
    */
   void passthrough(std::shared_ptr<input_t> &input, PSS_PEN_PACKET packet) {
     if (!config::input.mouse) {
+      return;
+    }
+
+    const auto event = geometry_contact_event(packet->eventType);
+    if (event == geometry::contact_event_e::cancel_all) {
+      input->geometry_transport.pen(event, static_cast<bool>(input->touch_port));
+      platf::pen_input_t cancel {};
+      cancel.eventType = LI_TOUCH_EVENT_CANCEL_ALL;
+      platf::pen_update(input->client_context.get(), {}, cancel);
+      return;
+    }
+    if (input->geometry_transport.pen(event, static_cast<bool>(input->touch_port)) == geometry::contact_result_e::suppress) {
       return;
     }
 
@@ -1170,6 +1456,7 @@ namespace input {
       from_clamped_netfloat(packet->x, 0.0f, 1.0f),
       from_clamped_netfloat(packet->y, 0.0f, 1.0f),
       from_clamped_netfloat(packet->pressure, 0.0f, 1.0f),
+      packet->touchpadIndex,
     };
 
     platf::gamepad_touch(platf_input, touch);
@@ -1238,10 +1525,6 @@ namespace input {
   }
 
   void passthrough(std::shared_ptr<input_t> &input, PNV_MULTI_CONTROLLER_PACKET packet) {
-    if (!config::input.controller) {
-      return;
-    }
-
     if (packet->controllerNumber < 0 || packet->controllerNumber >= input->gamepads.size()) {
       BOOST_LOG(warning) << "ControllerNumber out of range ["sv << packet->controllerNumber << ']';
 
@@ -1252,38 +1535,59 @@ namespace input {
     // may never send another packet under its own controller number.
     for (std::size_t i = 0; i < input->gamepads.size(); ++i) {
       if (!(packet->activeGamepadMask & (1 << i)) &&
-          (input->gamepads[i].id >= 0 || input->gamepads[i].back_timeout_id)) {
+          (input->gamepads[i].id >= 0 || input->gamepads[i].back_timeout_id || input->gamepads[i].alloc_failed ||
+           input->gamepads[i].pending_steam_attributes)) {
         reset_gamepad(input->gamepads[i]);
+        input->allocated_gamepads.fetch_and(~(1u << i), std::memory_order_relaxed);
       }
+    }
+
+    // Inventory removal retires ownership even if a config reload disabled
+    // controller forwarding while a bound Guide key or Back timer was held.
+    // Do not allocate or forward any new controller state while disabled.
+    if (!config::input.controller) {
+      return;
     }
 
     auto &gamepad = input->gamepads[packet->controllerNumber];
 
     // If this is an event for a new gamepad, create the gamepad now. Ideally, the client would
     // send a controller arrival instead of this but it's still supported for legacy clients.
-    if ((packet->activeGamepadMask & (1 << packet->controllerNumber)) && gamepad.id < 0) {
+    if ((packet->activeGamepadMask & (1 << packet->controllerNumber)) && gamepad.id < 0 && !gamepad.alloc_failed) {
       auto id = alloc_id(gamepadMask);
       if (id < 0) {
+        gamepad.alloc_failed = true;
+        gamepad.pending_steam_attributes.reset();
         return;
       }
 
       if (platf::alloc_gamepad(platf_input, {id, (uint8_t) packet->controllerNumber}, {0, 0, 0, input->persist_gamepads}, input->feedback_queue)) {
         free_id(gamepadMask, id);
+        gamepad.alloc_failed = true;
+        gamepad.pending_steam_attributes.reset();
+        BOOST_LOG(warning) << "ControllerNumber ["sv << packet->controllerNumber
+                           << "] could not be allocated; ignoring its input until the client removes and re-adds it"sv;
         return;
       }
 
       gamepad.id = id;
+      input->allocated_gamepads.fetch_or(1u << packet->controllerNumber, std::memory_order_relaxed);
     }
 
     // If this gamepad has not been initialized, ignore it.
     // This could happen when platf::alloc_gamepad fails
     if (gamepad.id < 0) {
-      BOOST_LOG(warning) << "ControllerNumber ["sv << packet->controllerNumber << "] not allocated"sv;
+      if (!gamepad.alloc_failed && (packet->activeGamepadMask & (1 << packet->controllerNumber))) {
+        BOOST_LOG(warning) << "ControllerNumber ["sv << packet->controllerNumber << "] not allocated"sv;
+      }
       return;
     }
 
     std::uint16_t bf = packet->buttonFlags;
-    std::uint32_t bf2 = packet->buttonFlags2;
+    // buttonFlags2 is a `short` on the wire; the client masks the upper flags to 16 bits
+    // (LE16((short)(buttonFlags >> 16))), so a flag at bit 15 of it (0x80000000 overall)
+    // must not sign-extend into the lower half here.
+    std::uint32_t bf2 = static_cast<std::uint16_t>(packet->buttonFlags2);
     platf::gamepad_state_t gamepad_state {
       bf | (bf2 << 16),
       packet->leftTrigger,
@@ -1327,18 +1631,18 @@ namespace input {
             // Force the back button up
             gamepad.back_button_state = button_state_e::UP;
             state.buttonFlags &= ~platf::BACK;
-            platf::gamepad_update(platf_input, gamepad.id, state);
+            send_gamepad_state(gamepad);
 
             // Press Home button
             state.buttonFlags |= platf::HOME;
-            platf::gamepad_update(platf_input, gamepad.id, state);
+            send_gamepad_state(gamepad);
 
             // Sleep for a short time to allow the input to be detected
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
             // Release Home button
             state.buttonFlags &= ~platf::HOME;
-            platf::gamepad_update(platf_input, gamepad.id, state);
+            send_gamepad_state(gamepad);
 
             gamepad.back_timeout_id = nullptr;
           };
@@ -1351,9 +1655,8 @@ namespace input {
       }
     }
 
-    platf::gamepad_update(platf_input, gamepad.id, gamepad_state);
-
     gamepad.gamepad_state = gamepad_state;
+    send_gamepad_state(gamepad);
   }
 
   enum class batch_result_e {
@@ -1460,8 +1763,14 @@ namespace input {
       return batch_result_e::not_batchable;
     }
 
-    // Do not allow batching if the button state changes on this controller
-    if (dest->buttonFlags != src->buttonFlags || dest->buttonFlags2 != src->buttonFlags2) {
+    // Preserve trigger press/release edges as well as buttons. The virtual Steam
+    // Controller synthesizes an additional full-pull click at 0xF0. Coalescing
+    // across either boundary can erase a complete tap before the driver sees it.
+    if (dest->buttonFlags != src->buttonFlags || dest->buttonFlags2 != src->buttonFlags2 ||
+        (dest->leftTrigger == 0) != (src->leftTrigger == 0) ||
+        (dest->rightTrigger == 0) != (src->rightTrigger == 0) ||
+        (dest->leftTrigger >= 0xF0) != (src->leftTrigger >= 0xF0) ||
+        (dest->rightTrigger >= 0xF0) != (src->rightTrigger >= 0xF0)) {
       return batch_result_e::terminate_batch;
     }
 
@@ -1562,6 +1871,13 @@ namespace input {
       return batch_result_e::terminate_batch;
     }
 
+    // Each physical pad is its own pointer space: a dual-touchpad Steam Controller
+    // client sends pointer id 0 on both pads, so a move on pad 1 must not replace
+    // the queued move on pad 0 (that froze the left pad under backlog).
+    if (dest->touchpadIndex != src->touchpadIndex) {
+      return batch_result_e::not_batchable;
+    }
+
     // Batched events must be the same pointer ID
     if (dest->pointerId != src->pointerId) {
       return batch_result_e::not_batchable;
@@ -1643,6 +1959,11 @@ namespace input {
    * @param input The input context pointer.
    */
   void passthrough_next_message(std::shared_ptr<input_t> input) {
+    // Geometry notifications do not come with client packets. Consume them on
+    // this same serialized worker so old Windows touch/pen repeat tasks are
+    // cancelled before any queued packet can use the new mapping.
+    refresh_input_geometry(input);
+
     // 'entry' backs the 'payload' pointer, so they must remain in scope together
     std::vector<uint8_t> entry;
     PNV_INPUT_HEADER payload;
@@ -1721,6 +2042,13 @@ namespace input {
       case SS_PEN_MAGIC:
         passthrough(input, (PSS_PEN_PACKET) payload);
         break;
+      case controller_speaker_pcm::binding_magic:
+        if (config::input.controller) {
+          input->speaker_bindings.bind(entry, [&](std::uint16_t slot) {
+            return slot < input->gamepads.size() && input->gamepads[slot].id < 0;
+          });
+        }
+        break;
       case SS_CONTROLLER_ARRIVAL_MAGIC:
         passthrough(input, (PSS_CONTROLLER_ARRIVAL_PACKET) payload);
         break;
@@ -1732,6 +2060,9 @@ namespace input {
         break;
       case SS_CONTROLLER_BATTERY_MAGIC:
         passthrough(input, (PSS_CONTROLLER_BATTERY_PACKET) payload);
+        break;
+      case SS_STEAM_CONTROLLER_ATTRIBUTES_MAGIC:
+        passthrough(input, (PSS_STEAM_CONTROLLER_ATTRIBUTES_PACKET) payload);
         break;
     }
 
@@ -1747,6 +2078,27 @@ namespace input {
     if (schedule_next) {
       task_pool.push(passthrough_next_message, std::move(input));
     }
+  }
+
+  void input_geometry_refresh_tick(std::weak_ptr<input_t> weak_input) {
+    auto input = weak_input.lock();
+    if (!input) return;
+
+    bool schedule_worker = false;
+    {
+      std::lock_guard<std::mutex> lock(input->input_queue_lock);
+      if (input->input_closed) return;
+      schedule_worker = geometry::request_serialized_worker_wake(input->input_queue_task_scheduled);
+    }
+    if (schedule_worker) task_pool.push(passthrough_next_message, input);
+
+    // A weak timer avoids extending the session lifetime. It stops once reset
+    // closes the queue or the last owner releases this input context.
+    task_pool.pushDelayed(input_geometry_refresh_tick, 50ms, weak_input);
+  }
+
+  void start_input_geometry_refresh(const std::shared_ptr<input_t> &input) {
+    task_pool.pushDelayed(input_geometry_refresh_tick, 50ms, std::weak_ptr<input_t> {input});
   }
 
   /**
@@ -1790,7 +2142,7 @@ namespace input {
         return;
       }
       input->input_queue.push_back(std::move(input_data));
-      schedule_input_task = !input->input_queue_task_scheduled.exchange(true, std::memory_order_acq_rel);
+      schedule_input_task = geometry::request_serialized_worker_wake(input->input_queue_task_scheduled);
     }
     if (schedule_input_task) {
       task_pool.push(passthrough_next_message, input);
@@ -1829,9 +2181,11 @@ namespace input {
       }
       input->keys.clear();
       input->shortcutFlags = 0;
+      input->guide_key_pressed = false;
       for (auto &gamepad : input->gamepads) {
         reset_gamepad(gamepad);
       }
+      input->allocated_gamepads.store(0, std::memory_order_relaxed);
       if (input->client_context) {
         platf::touch_input_t touch {};
         touch.eventType = LI_TOUCH_EVENT_CANCEL_ALL;
@@ -1877,12 +2231,18 @@ namespace input {
     return true;
   }
 
-  std::shared_ptr<input_t> alloc(safe::mail_t mail, bool persist_gamepads) {
+  bool has_gamepad(const std::shared_ptr<input_t> &input) {
+    return input && input->allocated_gamepads.load(std::memory_order_relaxed) != 0;
+  }
+
+  std::shared_ptr<input_t> alloc(safe::mail_t mail, guide_button_config_t guide_button, bool persist_gamepads) {
     auto input = std::make_shared<input_t>(
       mail->event<input::touch_port_t>(mail::touch_port),
-      mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback)
+      mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback, platf::GAMEPAD_FEEDBACK_QUEUE_CAPACITY, false),
+      guide_button
     );
     input->persist_gamepads = persist_gamepads;
+    start_input_geometry_refresh(input);
 
     // Workaround to ensure new frames will be captured when a client connects
     task_pool.pushDelayed([]() {

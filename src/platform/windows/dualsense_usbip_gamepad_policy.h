@@ -9,21 +9,53 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <span>
 
 namespace platf::dualsense_usbip_gamepad {
   // A DualSense needs its matching USB audio function for native haptics.
-  // Application opt-in only forces that profile and delays launch until ready;
-  // it is not required when normal controller selection already chose DualSense.
+  // Controller selection alone determines whether to use the composite device.
   [[nodiscard]] inline bool select_composite_dualsense(
     std::string_view configured_gamepad,
     vhf_profile_e selected_profile,
-    bool application_requested,
     bool transport_available) {
-    return configured_gamepad == "usbip_ds5" || application_requested ||
+    return configured_gamepad == "usbip_ds5" ||
            (transport_available && selected_profile == vhf_profile_e::dualsense &&
             configured_gamepad != "x360" && configured_gamepad != "ds4");
   }
+
+  // A callback may run every millisecond. Record each boundary once per
+  // controller binding, not once per packet or on every state transition.
+  enum class pcm_event : unsigned {
+    inactive,
+    not_ready,
+    incapable,
+    missing_queue,
+    malformed,
+    queued,
+    queue_rejected,
+  };
+
+  inline std::optional<pcm_event> pcm_block_reason(bool active, bool ready, bool waveform_capable, bool has_queue) {
+    if (!active) return pcm_event::inactive;
+    if (!ready) return pcm_event::not_ready;
+    if (!waveform_capable) return pcm_event::incapable;
+    if (!has_queue) return pcm_event::missing_queue;
+    return std::nullopt;
+  }
+
+  class pcm_diagnostics {
+  public:
+    bool first(pcm_event event) {
+      const auto bit = 1u << static_cast<unsigned>(event);
+      const bool first = !(seen_ & bit);
+      seen_ |= bit;
+      return first;
+    }
+
+  private:
+    unsigned seen_ = 0;
+  };
 
   struct output_update {
     lvg::playstation_output_feedback state {};
@@ -52,9 +84,20 @@ namespace platf::dualsense_usbip_gamepad {
       const bool rumble_valid =
         (report.valid_flag0 & lvg::driver::k_ds5_flag0_compatible_vibration) ||
         (report.valid_flag2 & lvg::driver::k_ds5_flag2_compatible_vibration);
+      // SDL disables emulated rumble with an unflagged zero-motor report.
+      // Reports carrying other validity flags can be partial updates, so their
+      // unused motor bytes cannot safely be interpreted as a stop.
+      const bool rumble_disabled = !report.valid_flag0 && !report.valid_flag1 &&
+                                   !report.valid_flag2 && !report.motor_left && !report.motor_right &&
+                                   (previous.low_frequency || previous.high_frequency);
+      if (rumble_disabled) {
+        state_.low_frequency = 0;
+        state_.high_frequency = 0;
+      }
       result.rumble = rumble_valid &&
                       (!have_rumble_ || previous.low_frequency != state_.low_frequency ||
                        previous.high_frequency != state_.high_frequency);
+      result.rumble = result.rumble || rumble_disabled;
       have_rumble_ = have_rumble_ || rumble_valid;
       result.rgb = (report.valid_flag1 & lvg::driver::k_ds5_flag1_lightbar) &&
                    (!(previous.valid & lvg::ps_output_lightbar_valid) ||

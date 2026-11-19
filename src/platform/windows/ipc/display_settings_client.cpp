@@ -21,9 +21,11 @@
   #include <vector>
 
   #include <nlohmann/json.hpp>
+  #include <display_device/json.h>
 
   // local
   #include "display_settings_client.h"
+  #include "src/platform/windows/display_helper_borrow_native.h"
   #include "src/globals.h"
   #include "src/logging.h"
   #include "src/platform/windows/display_helper_v2/timing.h"
@@ -45,8 +47,8 @@ namespace platf::display_helper_client {
     // retired a connection it was about to answer.
     constexpr int kRefreshRateResultTimeoutMs = 12000;
     // Best-effort adaptive refresh has its own retry, so it must never pay the full
-    // connect budget (anonymous transport, then named fallback) when the helper is
-    // down: that stalls the poll loop for seconds per attempt.
+    // connect budget when the helper is down: even the private endpoint retry
+    // would otherwise stall the poll loop for seconds per attempt.
     constexpr int kRefreshRateConnectTimeoutMs = 600;
     // Per-stage cap for SNAPSHOT_CURRENT. A bounded snapshot shares the caller's
     // stream-start budget, so without its own cap a slow snapshot can consume the
@@ -55,6 +57,46 @@ namespace platf::display_helper_client {
     // Retiring a stale connection is a lock acquisition, not helper work, so it
     // gets its own short budget: the deadlines that lead here are already spent.
     constexpr int kStaleConnectionRetireTimeoutMs = 250;
+
+    std::atomic<std::uint32_t> &expected_helper_process_id() {
+      static std::atomic<std::uint32_t> pid {0};
+      return pid;
+    }
+
+    std::mutex &private_control_pipe_mutex() {
+      static std::mutex mutex;
+      return mutex;
+    }
+
+    std::string &private_control_pipe_name() {
+      static std::string name;
+      return name;
+    }
+
+    std::atomic<std::uint64_t> &private_control_pipe_generation() {
+      static std::atomic<std::uint64_t> generation {0};
+      return generation;
+    }
+
+    std::shared_ptr<winrt::file_handle> &private_control_server() {
+      static std::shared_ptr<winrt::file_handle> server;
+      return server;
+    }
+
+    struct PrivateControlEndpoint {
+      std::string pipe_name;
+      std::shared_ptr<winrt::file_handle> server;
+      std::uint64_t generation;
+    };
+
+    PrivateControlEndpoint current_private_control_endpoint() {
+      std::lock_guard lock(private_control_pipe_mutex());
+      return {
+        private_control_pipe_name(),
+        private_control_server(),
+        private_control_pipe_generation().load(std::memory_order_relaxed),
+      };
+    }
 
     bool shutdown_requested() {
       if (!mail::man) {
@@ -78,6 +120,10 @@ namespace platf::display_helper_client {
 
   }  // namespace
 
+  void set_expected_helper_process_id(const std::uint32_t process_id) {
+    expected_helper_process_id().store(process_id, std::memory_order_release);
+  }
+
   /**
    * @brief IPC message types used by the display settings helper protocol.
    */
@@ -95,6 +141,10 @@ namespace platf::display_helper_client {
     RefreshRateResult = 11,  ///< Helper acknowledgement for RefreshRate (payload: [u8 success]).
     RecoveryStatus = 15,
     RecoveryStatusResult = 16,
+    BorrowAcquire = display_helper::borrow::acquire_message,
+    BorrowAcquireResult = display_helper::borrow::acquire_result_message,
+    BorrowRelease = display_helper::borrow::release_message,
+    BorrowReleaseResult = display_helper::borrow::release_result_message,
     SnapshotResult = 12,  ///< Helper acknowledgement for SnapshotCurrent (payload: [u8 success]).
     Ping = 0xFE,  ///< Health check message; expects a response.
     Stop = 0xFF  ///< Request helper process to terminate gracefully.
@@ -119,11 +169,13 @@ namespace platf::display_helper_client {
     // finishing a short receive slice, but it can never clear or reclassify
     // the reply state of the connection that replaced it.
     struct ConnectionSession {
-      ConnectionSession(PipePtr pipe_in, std::uint64_t generation_in)
-        : pipe(std::move(pipe_in)), generation(generation_in) {}
+      ConnectionSession(PipePtr pipe_in, std::uint64_t generation_in, std::uint64_t endpoint_generation_in)
+        : pipe(std::move(pipe_in)), generation(generation_in), endpoint_generation(endpoint_generation_in) {}
 
       PipePtr pipe;
       const std::uint64_t generation;
+      const std::uint64_t endpoint_generation;
+      std::atomic<std::uint64_t> configured_apply_id {0};
       std::atomic<ApplyResponseProtocol> protocol {ApplyResponseProtocol::Unknown};
       // An untagged response on an unknown or legacy helper cannot safely
       // cross a superseding command. The control path retires this session
@@ -170,7 +222,9 @@ namespace platf::display_helper_client {
              type == static_cast<uint8_t>(MsgType::VerificationResult) ||
              type == static_cast<uint8_t>(MsgType::RefreshRateResult) ||
              type == static_cast<uint8_t>(MsgType::SnapshotResult) ||
-             type == static_cast<uint8_t>(MsgType::RecoveryStatusResult);
+             type == static_cast<uint8_t>(MsgType::RecoveryStatusResult) ||
+             type == static_cast<uint8_t>(MsgType::BorrowAcquireResult) ||
+             type == static_cast<uint8_t>(MsgType::BorrowReleaseResult);
     }
 
     void buffer_response(const SessionPtr &session, std::span<const uint8_t> bytes) {
@@ -670,6 +724,13 @@ namespace platf::display_helper_client {
     const std::vector<uint8_t> &payload,
     std::optional<int> send_timeout_override_ms = std::nullopt
   ) {
+    display_helper::borrow::gate_t::scope_t borrow_mutation;
+    const bool borrow_observer = type == MsgType::BorrowAcquire || type == MsgType::BorrowRelease ||
+      type == MsgType::Ping || type == MsgType::LogLevel || type == MsgType::RecoveryStatus;
+    if (!borrow_observer) {
+      borrow_mutation = display_helper::borrow::process_gate().try_enter();
+      if (!borrow_mutation) return false;
+    }
     const bool is_ping = (type == MsgType::Ping || type == MsgType::LogLevel);
     if (!is_ping) {
       BOOST_LOG(info) << "Display helper IPC: sending frame type=" << static_cast<int>(type)
@@ -715,6 +776,8 @@ namespace platf::display_helper_client {
 
   static bool session_is_current(const SessionPtr &session) {
     return session &&
+           expected_helper_process_id().load(std::memory_order_acquire) != 0 &&
+           private_control_pipe_generation().load(std::memory_order_acquire) == session->endpoint_generation &&
            connection_generation().load(std::memory_order_acquire) == session->generation;
   }
 
@@ -787,6 +850,27 @@ namespace platf::display_helper_client {
     return m;
   }
 
+  void set_private_control_pipe_name(std::string pipe_name, void *server_handle) {
+    HANDLE duplicate = nullptr;
+    if (server_handle && !DuplicateHandle(GetCurrentProcess(), server_handle, GetCurrentProcess(), &duplicate,
+                                         0, FALSE, DUPLICATE_SAME_ACCESS)) pipe_name.clear();
+    auto server = duplicate ? std::make_shared<winrt::file_handle>(duplicate) : nullptr;
+    // Endpoint rotation follows the command path's write -> connection lock
+    // order, so a frame cannot be written after the old endpoint is retired.
+    std::lock_guard<std::timed_mutex> write_lock(write_mutex());
+    std::lock_guard<std::timed_mutex> connection_lock(connection_mutex());
+    {
+      std::lock_guard endpoint_lock(private_control_pipe_mutex());
+      private_control_pipe_name() = std::move(pipe_name);
+      private_control_server() = std::move(server);
+      private_control_pipe_generation().fetch_add(1, std::memory_order_release);
+    }
+    expected_helper_process_id().store(0, std::memory_order_release);
+    if (retire_session_locked()) {
+      reset_log_level_cache();
+    }
+  }
+
   static int remaining_timeout_ms(const std::chrono::steady_clock::time_point &deadline);
 
   // A cancellation/control generation is ordered with the short command
@@ -840,8 +924,12 @@ namespace platf::display_helper_client {
     if (shutdown_requested() || (cancelled && cancelled())) {
       return false;
     }
+    const auto expected_pid = expected_helper_process_id().load(std::memory_order_acquire);
+    const auto endpoint = current_private_control_endpoint();
+    const auto endpoint_generation = endpoint.generation;
     auto &session = session_singleton();
-    if (session && session->pipe && session->pipe->is_connected()) {
+    if (expected_pid != 0 && session && session->pipe && session->pipe->is_connected() &&
+        session->endpoint_generation == endpoint_generation) {
       return true;
     }
     if (session) {
@@ -849,7 +937,17 @@ namespace platf::display_helper_client {
       reset_log_level_cache();
     }
 
-    BOOST_LOG(debug) << "Display helper IPC: connecting to server pipe 'sunshine_display_helper'";
+    if (expected_pid == 0) {
+      BOOST_LOG(error) << "Display helper IPC: refusing an unbound helper connection.";
+      return false;
+    }
+
+    const std::string &pipe_name = endpoint.pipe_name;
+    if (pipe_name.empty() || !endpoint.server) {
+      BOOST_LOG(error) << "Display helper IPC: refusing a connection without a preclaimed private endpoint.";
+      return false;
+    }
+    BOOST_LOG(debug) << "Display helper IPC: connecting to preclaimed private endpoint.";
     const int connect_timeout_ms = connect_timeout_override_ms.value_or(effective_connect_timeout());
     const auto connect_deadline = std::min(
       std::chrono::steady_clock::now() + std::chrono::milliseconds(connect_timeout_ms),
@@ -873,30 +971,25 @@ namespace platf::display_helper_client {
           !pipe->is_connected()) {
         return false;
       }
+      if (expected_helper_process_id().load(std::memory_order_acquire) != expected_pid ||
+          private_control_pipe_generation().load(std::memory_order_acquire) != endpoint_generation) {
+        return false;
+      }
       const auto generation = allocate_connection_generation();
-      session = std::make_shared<ConnectionSession>(std::move(pipe), generation);
+      session = std::make_shared<ConnectionSession>(std::move(pipe), generation, endpoint_generation);
       connection_generation().store(generation, std::memory_order_release);
       return true;
     };
 
-    // Create fresh pipe - try anonymous first, then named fallback. The
-    // normal connection path is allowed to negotiate the anonymous transport;
-    // fast paths below intentionally never call this function.
-    if (remaining_ms() > 0 && create_session([]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
-          platf::dxgi::FramedPipeFactory ff(std::make_unique<platf::dxgi::AnonymousPipeFactory>());
-          return ff.create_client("sunshine_display_helper");
-        })) {
-      return true;
-    }
-    if (remaining_ms() > 0) {
-      BOOST_LOG(debug) << "Display helper IPC: anonymous connect failed; trying named fallback";
-      if (create_session([]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
-            platf::dxgi::FramedPipeFactory ff(std::make_unique<platf::dxgi::NamedPipeFactory>());
-            return ff.create_client("sunshine_display_helper");
-          })) {
-        return true;
-      }
-    }
+    // The privileged host retains the preclaimed server. Authenticate the exact
+    // launched child before constructing a framed pipe or exchanging any bytes.
+    if (remaining_ms() > 0 && create_session([cancelled, connect_deadline, server = endpoint.server, expected_pid]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
+          auto current = [&] {
+            return (cancelled && cancelled()) || expected_helper_process_id().load(std::memory_order_acquire) != expected_pid;
+          };
+          auto pipe = platf::dxgi::accept_server_pipe_client(server->get(), expected_pid, current, connect_deadline);
+          return pipe ? std::make_unique<platf::dxgi::FramedPipe>(std::move(pipe)) : nullptr;
+        })) return true;
     BOOST_LOG(warning) << "Display helper IPC: connection failed";
     return false;
   }
@@ -1119,8 +1212,10 @@ namespace platf::display_helper_client {
     std::optional<int> send_timeout_cap_ms = std::nullopt,
     std::uint64_t *connection_generation_out = nullptr,
     bool begins_untagged_response = false,
-    const std::function<bool()> &cancelled = {}
+    const std::function<bool()> &cancelled = {},
+    bool *write_attempted_out = nullptr
   ) {
+    if (write_attempted_out) *write_attempted_out = false;
     if (!session || !session->pipe) {
       return false;
     }
@@ -1171,6 +1266,7 @@ namespace platf::display_helper_client {
     if (send_timeout_cap_ms) {
       send_timeout_ms = std::min(send_timeout_ms, *send_timeout_cap_ms);
     }
+    if (write_attempted_out && send_timeout_ms > 0) *write_attempted_out = true;
     const bool sent =
       send_timeout_ms > 0 &&
       send_message(*session->pipe, type, payload, send_timeout_ms);
@@ -1373,6 +1469,54 @@ namespace platf::display_helper_client {
     return current_apply_response_protocol(current_session()) == ApplyResponseProtocol::V2;
   }
 
+  bool send_owned_reactivation(const std::string &device_id, std::function<bool()> cancelled, int timeout_ms) {
+    if (device_id.empty() || !uses_v2_response_protocol()) {
+      return false;
+    }
+    const auto owner = current_session();
+    if (!owner) {
+      return false;
+    }
+    const auto owner_id = owner->configured_apply_id.load(std::memory_order_acquire);
+    const auto owner_connection = owner->generation;
+    if (owner_id == 0 || owner_connection == 0) {
+      return false;
+    }
+
+    // The helper retains its latest verified config, including adaptive
+    // refresh. The payload carries only target identity and the owner token.
+    display_device::SingleDisplayConfiguration config;
+    config.m_device_id = device_id;
+    bool serialized = false;
+    auto payload = nlohmann::json::parse(display_device::toJson(config, 0u, &serialized), nullptr, false);
+    if (!serialized || !payload.is_object()) {
+      return false;
+    }
+    payload["sunshine_reactivate_of"] = owner_id;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(timeout_ms, 0));
+    const auto remaining_timeout = [&] {
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now()
+      );
+      return remaining > std::chrono::milliseconds::zero() ? static_cast<int>(remaining.count()) : 0;
+    };
+    std::uint64_t request_id = 0;
+    std::uint64_t wait_generation = 0;
+    std::uint64_t connection_generation = 0;
+    const auto apply_timeout = remaining_timeout();
+    if (apply_timeout <= 0) {
+      return false;
+    }
+    if (!send_apply_json(payload.dump(), &request_id, &wait_generation, &connection_generation, cancelled,
+                         apply_timeout, true) || connection_generation != owner_connection) {
+      return false;
+    }
+    const auto verification_timeout = remaining_timeout();
+    return verification_timeout > 0 &&
+           wait_for_verification_result(verification_timeout, std::move(cancelled), request_id, wait_generation,
+                                        connection_generation).value_or(false);
+  }
+
   bool send_apply_json(
     const std::string &json,
     std::uint64_t *request_id_out,
@@ -1464,6 +1608,15 @@ namespace platf::display_helper_client {
       return false;
     }
     const auto protocol = current_apply_response_protocol(session);
+    const auto parsed_request = nlohmann::json::parse(json, nullptr, false);
+    const bool reactivation = parsed_request.is_object() && parsed_request.contains("sunshine_reactivate_of");
+    if (reactivation) {
+      const auto owner = parsed_request.find("sunshine_reactivate_of");
+      if (protocol != ApplyResponseProtocol::V2 || owner == parsed_request.end() || !owner->is_number_unsigned() ||
+          session->configured_apply_id.load(std::memory_order_acquire) != owner->get<std::uint64_t>()) {
+        return false;
+      }
+    }
     const int protocol_timeout_ms = protocol == ApplyResponseProtocol::Legacy ?
                                       kLegacyApplyResultTimeoutMs :
                                       kV2ApplyResultTimeoutMs;
@@ -1529,6 +1682,9 @@ namespace platf::display_helper_client {
           )) {
         if (result->success && request_id_out && result->protocol == ApplyResponseProtocol::V2) {
           *request_id_out = request_id;
+        }
+        if (result->success && result->protocol == ApplyResponseProtocol::V2 && !reactivation) {
+          session->configured_apply_id.store(request_id, std::memory_order_release);
         }
         return result->success;
       }
@@ -2113,6 +2269,75 @@ namespace platf::display_helper_client {
     std::vector<uint8_t> payload;
     return send_serialized_within(session, MsgType::Ping, payload, deadline);
   }
+  namespace {
+    std::optional<display_helper::borrow::result_t> exchange_borrow_control(
+      MsgType command, MsgType result_type, const std::vector<std::uint8_t> &payload,
+      const display_helper::borrow::request_t &request,
+      std::chrono::steady_clock::time_point deadline,
+      const std::function<bool()> &cancelled = {}, bool *write_attempted_out = nullptr) {
+      if (write_attempted_out) *write_attempted_out = false;
+      const auto session = connected_session_within(deadline, kConnectTimeoutMs, cancelled);
+      if (!session) return std::nullopt;
+      const auto stopped = [&] { return !session_is_current(session) || (cancelled && cancelled()); };
+      std::unique_lock<std::timed_mutex> reader;
+      if (!lock_response_reader_until(session, reader, deadline, stopped)) return std::nullopt;
+      if (!send_serialized_within(session, command, payload, deadline, std::nullopt,
+            remaining_timeout_ms(deadline), nullptr, false, stopped, write_attempted_out)) return std::nullopt;
+      const auto decode = [&](std::span<const std::uint8_t> bytes)
+          -> std::optional<display_helper::borrow::result_t> {
+        if (bytes.empty() || bytes.front() != static_cast<std::uint8_t>(result_type)) return std::nullopt;
+        auto result = display_helper::borrow::decode_result(bytes.subspan(1));
+        const auto peer = session->pipe->peer_process_id();
+        if (!result || result->token.request != request || !peer || *peer != result->token.helper.pid) return std::nullopt;
+        return result;
+      };
+      std::array<std::uint8_t, 65536> buffer {};
+      while (std::chrono::steady_clock::now() < deadline && !stopped()) {
+        if (auto buffered = take_buffered_response(session, result_type,
+              [&](auto bytes) { return decode(bytes).has_value(); })) return decode(*buffered);
+        std::size_t received = 0;
+        const auto status = session->pipe->receive(buffer, received,
+          std::clamp(remaining_timeout_ms(deadline), 1, 100));
+        if (status == platf::dxgi::PipeResult::Timeout) continue;
+        if (status != platf::dxgi::PipeResult::Success || received == 0 || stopped()) return std::nullopt;
+        const std::span<const std::uint8_t> bytes(buffer.data(), received);
+        if (auto result = decode(bytes)) return result;
+        buffer_response(session, bytes);
+      }
+      return std::nullopt;
+    }
+  }
+
+  bool release_borrow_quiescence(const display_helper::borrow::token_t &token,
+      std::chrono::steady_clock::time_point deadline) {
+    const auto result = exchange_borrow_control(MsgType::BorrowRelease, MsgType::BorrowReleaseResult,
+      display_helper::borrow::encode_release(token), token.request, deadline);
+    if (!result || !result->success) return false;
+    const bool cancellation = !token.helper.valid() && token.connection_epoch == 0;
+    return cancellation || result->token == token;
+  }
+
+  std::optional<display_helper::borrow::result_t> acquire_borrow_quiescence(
+      const display_helper::borrow::request_t &request,
+      std::chrono::steady_clock::time_point deadline,
+      const std::function<bool()> &cancelled, bool &completion_unknown) {
+    completion_unknown = false;
+    if (!request.valid() || (cancelled && cancelled()) || std::chrono::steady_clock::now() >= deadline)
+      return std::nullopt;
+    bool write_attempted = false;
+    const auto result = exchange_borrow_control(MsgType::BorrowAcquire, MsgType::BorrowAcquireResult,
+      display_helper::borrow::encode_acquire(request), request, deadline, cancelled, &write_attempted);
+    if (result && result->success && !(cancelled && cancelled())) return result;
+    if (!write_attempted || (result && !result->success)) return std::nullopt;
+    // A cancelled/late acquire cannot linger and unexpectedly park a later
+    // transaction. Only an exact cancellation ACK proves its queue retirement.
+    const display_helper::borrow::token_t cancel = result ? result->token :
+      display_helper::borrow::token_t {request, {}, 0};
+    completion_unknown = !release_borrow_quiescence(cancel,
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(500));
+    return std::nullopt;
+  }
+
 }  // namespace platf::display_helper_client
 
 #endif

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <Psapi.h>
 #include <thread>
 #include <TlHelp32.h>
@@ -75,6 +76,20 @@ namespace playnite_launcher::focus {
       if (is_candidate_window(hwnd, pid)) {
         *result = hwnd;
         return FALSE;
+      }
+      return TRUE;
+    }
+
+    struct window_search {
+      DWORD pid;
+      std::vector<HWND> *windows;
+    };
+
+    BOOL CALLBACK collect_window_proc(HWND window, LPARAM param) {
+      auto &search = *reinterpret_cast<window_search *>(param);
+      if (is_candidate_window(window, search.pid) &&
+          std::find(search.windows->begin(), search.windows->end(), window) == search.windows->end()) {
+        search.windows->push_back(window);
       }
       return TRUE;
     }
@@ -171,20 +186,10 @@ namespace playnite_launcher::focus {
     return ok != FALSE;
   }
 
-  bool confirm_foreground_pid(DWORD pid) {
-    if (!pid) {
-      return false;
-    }
-    HWND fg = GetForegroundWindow();
-    if (!fg) {
-      return false;
-    }
-    if (!IsWindowVisible(fg) || IsIconic(fg) || GetWindow(fg, GW_OWNER) != nullptr) {
-      return false;
-    }
-    DWORD fpid = 0;
-    GetWindowThreadProcessId(fg, &fpid);
-    if (fpid != pid) {
+  // Validate before any restore/topmost/foreground effect. A window can be
+  // visible to EnumWindows while minimized, cloaked, or outside all monitors.
+  static bool is_eligible_game_window(HWND hwnd) {
+    if (!hwnd || !IsWindowVisible(hwnd) || IsIconic(hwnd) || GetWindow(hwnd, GW_OWNER) != nullptr) {
       return false;
     }
     auto is_cloaked = [&](HWND hwnd) -> bool {
@@ -201,11 +206,11 @@ namespace playnite_launcher::focus {
       }
       return false;
     };
-    if (is_cloaked(fg)) {
+    if (is_cloaked(hwnd)) {
       return false;
     }
     RECT rect {};
-    if (!GetWindowRect(fg, &rect)) {
+    if (!GetWindowRect(hwnd, &rect)) {
       return false;
     }
     if (rect.right <= rect.left || rect.bottom <= rect.top) {
@@ -215,6 +220,25 @@ namespace playnite_launcher::focus {
       return false;
     }
     return true;
+  }
+
+  bool confirm_foreground_pid(DWORD pid) {
+    HWND foreground = GetForegroundWindow();
+    DWORD foreground_pid = 0;
+    if (!pid || !is_eligible_game_window(foreground)) {
+      return false;
+    }
+    GetWindowThreadProcessId(foreground, &foreground_pid);
+    return foreground_pid == pid;
+  }
+
+  HWND find_foreground_game_window(const std::vector<HWND> &windows) {
+    HWND foreground = GetForegroundWindow();
+    if (std::find(windows.begin(), windows.end(), foreground) != windows.end() &&
+        is_eligible_game_window(foreground)) {
+      return foreground;
+    }
+    return nullptr;
   }
 
   bool focus_process_by_name_extended(const wchar_t *exe_name_w, int max_successes, int timeout_secs, bool exit_on_first, std::function<bool()> cancel, DWORD *confirmed_pid_out) {
@@ -359,6 +383,67 @@ namespace playnite_launcher::focus {
       std::this_thread::sleep_for(1s);
     }
     return any;
+  }
+
+  std::vector<HWND> discover_game_windows(const std::wstring &install_dir, const std::wstring &game_exe, bool prefer_exe) {
+    std::vector<HWND> windows;
+    const auto add = [&](DWORD pid) {
+      window_search search {pid, &windows};
+      EnumWindows(collect_window_proc, reinterpret_cast<LPARAM>(&search));
+    };
+    const auto directory = [&] {
+      if (!install_dir.empty()) {
+        for (auto pid : find_pids_under_install_dir_sorted(install_dir)) {
+          add(pid);
+        }
+      }
+    };
+    const auto executable = [&] {
+      const std::filesystem::path path(game_exe);
+      const auto name = path.filename().wstring();
+      if (name.empty()) {
+        return;
+      }
+      for (auto pid : platf::dxgi::find_process_ids_by_name(name.c_str())) {
+        std::wstring image;
+        // A full executable path must not arm focus for another installation
+        // that happens to use the same executable basename.
+        if (!path.has_parent_path() ||
+            (get_process_image_path(pid, image) && normalize_path(image) == normalize_path(game_exe))) {
+          add(pid);
+        }
+      }
+    };
+    if (prefer_exe) {
+      executable();
+      directory();
+    } else {
+      directory();
+      executable();
+    }
+    return windows;
+  }
+
+  std::string window_identity(HWND window) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
+    return std::to_string(pid) + ':' + std::to_string(reinterpret_cast<uintptr_t>(window));
+  }
+
+  bool focus_game_window(HWND window, std::function<bool()> cancel) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
+    const auto stopped = [&] { return cancel && cancel(); };
+    if (stopped() || !is_candidate_window(window, pid) || !is_eligible_game_window(window)) {
+      return false;
+    }
+    if (GetForegroundWindow() != window) {
+      if (!try_focus_hwnd(window)) {
+        return false;
+      }
+      std::this_thread::sleep_for(100ms);
+    }
+    return !stopped() && GetForegroundWindow() == window && confirm_foreground_pid(pid);
   }
 
   bool get_process_image_path(DWORD pid, std::wstring &out) {

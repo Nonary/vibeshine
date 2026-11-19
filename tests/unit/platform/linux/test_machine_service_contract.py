@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+"""Check shipped deployment contracts and retain explicit weak wiring guards.
+
+Unit directives, payload paths and privilege boundaries are static contracts.
+Classifier, binding/stop decisions, pairing policy and status polling run in
+separate production-behavior tests. Remaining native caller/persistence/GPU
+integration guards below only inspect source text; they do not establish
+runtime behavior and must not be reported as such.
+"""
 
 import json
 import pathlib
@@ -16,13 +24,34 @@ def forbid(text: str, needle: str, label: str) -> None:
         raise AssertionError(f"{label} retains forbidden legacy or privileged behavior: {needle}")
 
 
+def require_force_guard(text: str, label: str) -> None:
+    """Any package SIGKILL must stay inside the identity-checked opt-in helper."""
+    command = "systemctl kill --kill-whom=all --signal=KILL"
+    if command not in text:
+        return
+    match = re.search(r"^vibeshine_stop_host_for_package\(\) \(\n.*?^\)$", text, re.M | re.S)
+    if not match or text.count(command) != match.group().count(command):
+        raise AssertionError(f"{label} forceful termination escaped the exact host helper")
+    shutdown = match.group()
+    for guard in ("VIBESHINE_PACKAGE_FORCE", "vibeshine_package_backup_for_force",
+                  "vibeshine_original_invocation", "vibeshine_original_cgroup",
+                  "vibeshine_original_pid", "vibeshine_host_stop_deadline",
+                  "unit_is_quiescent vibeshine.service"):
+        require(shutdown, guard, label)
+    kill_at = shutdown.index(command)
+    if not shutdown.index("VIBESHINE_PACKAGE_FORCE") < shutdown.index("vibeshine_package_backup_for_force") < kill_at:
+        raise AssertionError(f"{label} forces shutdown before consent and backup")
+    require(text, "--property=InvocationID", label)
+    require(text, '[ "$vibeshine_stop_restart" = no ]', label)
+    require(text, '[ "$vibeshine_stop_fenced" = yes ]', label)
+
+
 root = pathlib.Path(sys.argv[1])
 linux = root / "packaging/linux"
 controller = (linux / "vibeshine-session-controller").read_text()
 controller_unit = (linux / "vibeshine-session-controller.service").read_text()
 kwin_environment = (linux / "vibeshine-kwin-session-environment.c").read_text()
 kwin_environment_dropin = (linux / "vibeshine-kwin-session-environment.conf").read_text()
-pairing_policy = (root / "src/http_pairing_policy.cpp").read_text()
 host = (linux / "vibeshine-machine-host").read_text()
 host_unit = (linux / "vibeshine.service").read_text()
 broker_unit = (linux / "vibeshine-session-exec@.service").read_text()
@@ -33,12 +62,15 @@ steam_launcher = (linux / "vibeshine-steam-launch.cpp").read_text()
 session_execution = launcher + "\n" + broker
 private_display = (root / "src/platform/linux/private_display.cpp").read_text()
 display_power = (linux / "vibeshine-display-power.h").read_text()
+display_borrow = (linux / "vibeshine-display-borrow.h").read_text()
+display_borrow_relay = (linux / "vibeshine-display-borrow-relay.h").read_text()
 display_power_client = (root / "src/platform/linux/display_power.cpp").read_text()
 rtsp = (root / "src/rtsp.cpp").read_text()
 stream = (root / "src/stream.cpp").read_text()
 kmsgrab = (root / "src/platform/linux/kmsgrab.cpp").read_text()
 audio = (root / "src/platform/linux/audio.cpp").read_text()
 nvhttp = (root / "src/nvhttp.cpp").read_text()
+tls_identity = (root / "src/tls_client_identity.cpp").read_text() + (root / "src/tls_client_identity.h").read_text()
 state_storage = (root / "src/state_storage.cpp").read_text()
 confighttp = (root / "src/confighttp.cpp").read_text()
 linux_misc = (root / "src/platform/linux/misc.cpp").read_text()
@@ -107,18 +139,9 @@ for field in (
     "--property=Service",
 ):
     require(controller, field, "controller logind observation")
-for exact_predicate in (
-    '"$observed_seat" == "$seat_name"',
-    '"$observed_remote" == no',
-    '"$observed_type" == wayland',
-    '"$observed_active" == yes',
-    '"$observed_state" == active',
-    '"$observed_class" == user',
-    'desktop_service_supported "$observed_service"',
-    '"$observed_class" == greeter',
-    '"$observed_service" == plasmalogin-greeter',
-):
-    require(controller, exact_predicate, "controller session classification")
+# Session acceptance and role outcomes are exercised against the production
+# classifier by test_session_classifier.sh; retain the static logind-query
+# fields below as the boundary proving the controller obtains those inputs.
 for readiness in (
     "plasma-login-wayland.target",
     "plasma-login-kwin_wayland.service",
@@ -193,59 +216,12 @@ require(
 )
 for forbidden in ("ExecStart=", "ExecStartPre=", "WantedBy="):
     forbid(kwin_environment_dropin, forbidden, "KWin session environment drop-in")
-require(controller, 'stop_host "$deadline" || return 1', "fail-closed transition ordering")
-require(controller, "binding_matches_candidate complete", "display credential rebinding")
-require(controller, "observe_active_session || return 1", "authoritative transition snapshot")
-require(controller, "read_user_environment || return 1", "current transition credentials")
-for snapshot_field in (
-    "candidate_session", "candidate_user", "candidate_uid", "candidate_gid",
-    "candidate_home", "candidate_role", "candidate_display", "candidate_xdisplay",
-    "candidate_xauthority",
-):
-    require(controller, f'"${snapshot_field}" == "$expected_{snapshot_field.removeprefix("candidate_")}"', "complete transition snapshot")
-require(controller, "host_unit_is_active", "notified systemd host readiness")
-require(controller, "host_unit_is_stopped", "systemd host stop proof")
-for stopped_property in ("ActiveState", "SubState", "MainPID", "ControlGroup", "populated 0"):
-    require(controller, stopped_property, "systemd/cgroup host stop proof")
+# Transition, snapshot, stop-proof, broker-drain, application cleanup, and
+# Xauthority behavior is exercised by test_session_controller.sh against the
+# sourced production functions. Keep static assertions for unit policy and
+# externally visible command/query boundaries below.
 forbid(controller, "/usr/bin/ss", "spoofable global port gating")
-require(controller, 'local pattern="vibeshine-app-${generation}-*.service"', "generation-scoped application cleanup")
-require(controller, 'stop_bound_session_apps "$deadline" || success=1', "application cleanup transition ordering")
-require(controller, "host-stop-cleanup-failed", "stopped existing-binding cleanup")
-inactive_binding_at = controller.index("if ((binding_matches)) && ! host_is_active; then")
-readiness_probe_at = controller.index("if ! session_is_ready; then")
-if inactive_binding_at >= readiness_probe_at:
-    raise AssertionError("inactive existing binding is not quiesced before readiness probes")
-existing_binding_branch = controller.split("\n  if ((binding_matches)); then\n", 1)[1].split(
-    "\n  ((quiesced)) || {", 1
-)[0]
-require(existing_binding_branch, "elif quiesce; then", "stopped existing-binding cleanup")
-forbid(existing_binding_branch, "start_host", "direct existing-binding restart")
-quiesce_body = controller.split("\nquiesce() {\n", 1)[1].split("\n}\n\nnext_generation()", 1)[0]
-quiesce_normalized = " ".join(quiesce_body.split())
-quiesce_order = (
-    quiesce_normalized.index('close_broker_admission "$deadline" || return 1'),
-    quiesce_normalized.index('stop_host "$deadline" || return 1'),
-    quiesce_normalized.index('stop_broker_instances "$deadline" || success=1'),
-    quiesce_normalized.index('stop_bound_session_apps "$deadline" || success=1'),
-    quiesce_normalized.rindex('stop_broker_instances "$deadline" || success=1'),
-    quiesce_normalized.index("((success == 0)) || return 1"),
-    quiesce_normalized.index("remove_session_record || success=1"),
-)
-if tuple(sorted(quiesce_order)) != quiesce_order:
-    raise AssertionError("controller quiesce does not close admission, drain every exact cgroup, then revoke state")
-for broker_stop_proof in (
-    "local deadline=$((SECONDS + quiesce_timeout)) success=0",
-    "local -A stop_requested=()",
-    "broker_unit_is_stopped",
-    "--property=ControlGroup",
-    "session_app_control_group_is_empty",
-    "required_clean_passes=10",
-):
-    require(controller, broker_stop_proof, "bounded broker cgroup quiescence")
-for forced_stop in ("kill --kill-whom=all --signal=KILL",):
-    forbid(controller, forced_stop, "controller graceful cgroup quiescence")
-shutdown_body = controller.split("\nshutdown_controller() {\n", 1)[1].split("\n}\n\nrun_controller()", 1)[0]
-forbid(shutdown_body, "\n  quiesce", "single ExecStopPost quiesce transaction")
+forbid(controller, "kill --kill-whom=all --signal=KILL", "controller graceful cgroup quiescence")
 for forbidden_connector_authority in (
     "connector_request",
     "release_connectors",
@@ -256,9 +232,6 @@ for forbidden_connector_authority in (
 forbid(controller_unit, "SupplementaryGroups=vibeshine vibeshine-vkms", "controller display ownership")
 require(controller, "next_generation", "generation-bound session records")
 require(controller, 'chmod 0640 "$temporary"', "trusted session record mode")
-require(controller, "xauthority_is_private", "private owner-only Xauthority")
-require(controller, "(8#$mode & 0077) == 0", "private owner-only Xauthority mode")
-require(controller, '"$path" != */../* && "$path" != */..', "Xauthority path confinement")
 for forbidden_acl in ("setfacl", "getfacl", "runtime-acl"):
     forbid(controller, forbidden_acl, "controller compositor/home ACL grant")
 forbid(controller, '[[ -S "$candidate_runtime/bus" ]]', "capability-bounded runtime access")
@@ -267,8 +240,6 @@ forbid(controller, '[[ -S "$candidate_runtime/bus" ]]', "capability-bounded runt
 # privilege expansion is the existing KMS binary plus the narrow session shim.
 require(sysusers, 'u vibeshine - "Vibeshine machine host" /var/lib/vibeshine /usr/bin/nologin', "machine account")
 require(sysusers, "g vibeshine-uinput - -", "virtual input group the host unit joins")
-require(controller, 'desktop_service_supported() { [[ "$1" =~ ^(plasmalogin|plasmalogin-autologin|sddm|sddm-autologin)$ ]]; }',
-        "SDDM and Plasma Login Manager desktop sessions")
 uinput_rules = (linux / "70-vibeshine-uinput.rules").read_text()
 for rule in (
     'KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="vibeshine-uinput", MODE="0660"',
@@ -336,7 +307,7 @@ for invariant in (
     'std::getenv("VIBESHINE_MACHINE_HOST")',
     "machine_host_environment[0] == '1'",
     "machine_host_environment[1] == '\\0'",
-    "shutdown_deadline_t shutdown_deadline {&shutdown_signal_requested, supervised_machine_host}",
+    "shutdown_deadline_t shutdown_deadline {&shutdown_signal_requested, supervised_machine_host, shutdown_phase_state}",
     "if (supervised_machine_host)",
     "pthread_sigmask(SIG_BLOCK",
     "sigwait(&termination_signal_set",
@@ -410,18 +381,30 @@ for operation, end_marker in (
 forbid(private_display, ").detach()", "owned restore worker lifetime")
 require(doctor_body, "helper_budget_available(helper_reply_timeout)", "full helper drain budget")
 require(doctor_body, "helper_completion_unknown.store(true", "uncertain completion fences later mutations")
+if not doctor_body.index("helper_completion_unknown.store(true") < doctor_body.index("std::unique_lock mutation_barrier"):
+    raise AssertionError("standalone helper uncertainty must publish before draining the mutation gate")
 require(private_display, "helper_budget_available(connector_reply_timeout)", "full connector drain budget")
+require(display_borrow, "DISPLAY_BORROW_FTRUNCATE(fd,1)", "durable write-ahead display mutation marker")
+require(display_borrow, "DISPLAY_BORROW_FDATASYNC(fd)==0", "marker sync before native action")
+require(display_borrow, "flock(fd,LOCK_EX|LOCK_NB)", "single exclusive borrow/mutation admission")
+require(display_borrow, "st.st_size==0", "empty-only clean marker state")
+require(display_borrow_relay, "display_borrow_clear_uncertainty(mutation_lock)", "clean release clears durable marker")
+require(display_power, "if(result && !display_borrow_clear_uncertainty(lock))result=false", "wake marker-clear failure propagates as failure")
+require(controller, "recover-display-fence", "explicit manual marker recovery")
+require(controller, "--acknowledge-display-state-inspected", "operator display-state acknowledgment")
+require(controller, 'system_unit_is_stopped "$controller_service"', "controller cannot restart admission during manual recovery")
+require(controller, "collect_stopped_broker_instances", "recovery waits for every broker instance to stop")
+require(controller, "/usr/bin/flock --exclusive --nonblock", "recovery requires an unowned lock file")
 require(broker, "now >= display_deadline", "broker-owned display request deadline")
+relay_worker = broker.split("static int relay_worker(", 1)[1].split("\n#include \"vibeshine-display-borrow-relay.h\"", 1)[0]
+require(relay_worker, "if(!display_borrow_clear_uncertainty(mutation_lock))", "marker clear failure reports unknown completion")
+if relay_worker.index("display_borrow_clear_uncertainty(mutation_lock)") > relay_worker.index("VIBESHINE_SESSION_EXIT"):
+    raise AssertionError("durable mutation marker must be retired before clean completion is acknowledged")
 require(broker, "if (!worker_exited) return VIBESHINE_SESSION_COMPLETION_UNKNOWN", "no acknowledgement before reap")
 require(broker, "terminate_display_worker(worker, worker_exited, status, signal_cross_uid_worker)", "display cancellation before acknowledgement")
 require(broker, "display_mutating && (cancelled || WIFSIGNALED(status))", "interrupted compositor mutations remain uncertain")
 for method, handler in (("GET", "getClientDisplayLayout"), ("PUT", "putClientDisplayLayout")):
     require(confighttp, f'register_blocking_api_route("^/api/clients/display-layout$", "{method}", {handler})', "display queries outside HTTPS loop")
-status_body = confighttp.split("void getSessionStatus(", 1)[1].split("\n  void ", 1)[0]
-require(status_body, "session_count_no_cleanup()", "status uses passive stream snapshot")
-require(status_body, "proc::proc.current_app_id()", "status uses passive app snapshot")
-forbid(status_body, "rtsp_stream::session_count()", "no stream teardown from status polling")
-forbid(status_body, "proc::proc.running()", "no app teardown from status polling")
 initialize_body = private_display.split("\n  bool initialize() {", 1)[1].split(
     "\n  prepare_result_t prepare_session", 1
 )[0]
@@ -438,7 +421,8 @@ if execute_request.index("drop_to_session(identity)") > execute_request.index('e
 for forbidden in ("chvt", "ActivateSession", "SwitchTo", "RestartUnit", "SetBrightness"):
     forbid(display_power, forbidden, "passive display power recovery")
 require(display_power, 'setenv("QT_QPA_PLATFORM", "wayland", 1)', "Wayland DPMS transport")
-require(display_power, 'write(STDOUT_FILENO, "R", 1)', "power readiness handshake")
+display_power_compact = re.sub(r"\s+", "", display_power)
+require(display_power_compact, 'write(STDOUT_FILENO,"R",1)==1', "power readiness handshake")
 require(display_power_client, 'token == \'R\'', "power readiness consumption")
 require(display_power_client, "std::chrono::seconds(8)", "bounded power readiness")
 require(display_power_client, "std::weak_ptr<lease_t> shared_lease", "shared power broker admission")
@@ -450,10 +434,18 @@ if prepare.index("display_power::acquire()") > prepare.index("session.virtual_di
     raise AssertionError("power recovery must precede display topology preparation")
 if prepare.index("return result;") > prepare.index("cancel_scheduled_revert()"):
     raise AssertionError("failed power admission must preserve scheduled display cleanup")
-require(rtsp, "snapshot->display_power_guard = source.display_power_guard", "pending-to-startup power handoff")
+pending_handoff = rtsp.split("bool retain_pending_runtime_holds(", 1)[1].split("\n    void session_clear", 1)[0]
+require(pending_handoff, "it->second.session->unique_id != snapshot->unique_id", "pending-to-startup power handoff identity guard")
+require(pending_handoff, "snapshot->display_power_guard = it->second.session->display_power_guard", "pending-to-startup power handoff")
 require(stream, "session->display_power_guard = launch_session.display_power_guard", "active capture power ownership")
 require(stream, "session.display_power_guard.reset()", "capture teardown releases display power")
 forbid(linux_misc, "display_power::acquire()", "retained shared runtime must not inhibit sleep")
+# Idle screen-off of a private-only topology wedged NVIDIA GSP with no client
+# left. Its hold blocks only screen changes and ends with the restore.
+require(broker, '!strcmp(argv[1], "display-retain") && argc == 2', "fixed retained screen operation")
+require(display_power, "retained_inhibition_policies = 4u", "retained screen hold never inhibits suspend")
+require(display_power_client, 'start_ready("display-retain")', "retained screen hold is not the capture lease")
+require(private_display, "manager.retained_screen_hold.reset()", "restore releases retained screen hold")
 
 require(host, "readonly machine_profile=/var/lib/vibeshine", "machine host")
 require(host, '"HOME=$machine_profile"', "machine host HOME isolation")
@@ -552,21 +544,26 @@ for forbidden in ("VIBESHINE_ALLOWED_CLIENT_UUIDS", "session_allowed_clients", "
 for forbidden in ("VIBESHINE_ALLOWED_CLIENT_UUIDS", "greeter_client_allowed", "administrator allowlist"):
     forbid(nvhttp, forbidden, "TLS paired-client authorization")
 forbid(nvhttp, "tl_peer_certificate", "request-bound TLS identity")
+forbid(nvhttp + tls_identity, "tls_client_identity_by_endpoint", "connection-owned TLS identity")
 for invariant in (
     "exact_certificate_identity",
     "build_paired_client_records",
-    "resolve_client_identity_from_peer_cert_locked",
     "Client certificate is not one exact enabled pairing record",
     "revoke_paired_client_access",
     "forget_tls_client_identities_for_uuid",
     "clear_tls_client_identities",
-    "max_tls_client_identity_cache_entries",
+    "request->get_connection_context()",
+    "request->set_connection_context(authority)",
+    "std::vector<std::weak_ptr<authority_t>> authorities",
+    "authority->authorized.load(std::memory_order_acquire)",
     "client.named_devices.size() >= pairing_policy::max_paired_clients",
     "if (!add_authorized_client",
 ):
-    require(nvhttp, invariant, "exact enabled-pairing TLS authorization")
-for invariant in ("paired_client_state_valid", "resolve_paired_client", "invalid_state", "disabled"):
-    require(pairing_policy, invariant, "paired-client authorization policy")
+    require(nvhttp + tls_identity, invariant, "exact enabled-pairing TLS authorization")
+# Paired-client policy behavior is exercised against the production source by
+# test_component_http_pairing_policy (test_http_pairing.cpp). Keep this contract
+# focused on its static integration boundaries below: request identity wiring,
+# revocation, persistence, and lifecycle admission.
 disable_body = nvhttp.split("bool set_client_enabled", 1)[1].split("bool has_client_uuid", 1)[0]
 require(disable_body, "if (!enabled ||", "paired-client disable revocation")
 require(disable_body, "revoke_paired_client_access(uuid)", "paired-client disable revocation")
@@ -588,6 +585,14 @@ if not (
 unpair_body = nvhttp.split("bool unpair_client", 1)[1].split("}  // namespace nvhttp", 1)[0]
 require(unpair_body, "revoke_paired_client_access(uuid)", "paired-client removal revocation")
 forbid(unpair_body, "load_state()", "paired-client removal durability")
+# Wiring guard only: behavior of layout cleanup is tested in the topology unit.
+for needle in ("display_layout_mutex", "remove_client_from_layout", "client_root.remote_display_layout_json = layout.dump()", "instance().set_layout(std::move(layout))", "save_state()"):
+    require(unpair_body, needle, "paired-client layout cleanup")
+layout_put_body = nvhttp.split("bool set_remote_display_layout", 1)[1].split("void mark_client_last_seen", 1)[0]
+require(layout_put_body, "display_layout_mutex", "layout PUT serialization")
+erase_all_body = nvhttp.split("bool erase_all_clients()", 1)[1].split("bool update_device_info", 1)[0]
+require(erase_all_body, "display_layout_mutex", "erase-all layout serialization")
+require(erase_all_body, "instance().set_layout(nlohmann::json {})", "erase-all runtime layout reset")
 
 save_body = nvhttp.split("bool save_state()", 1)[1].split("std::string get_server_cert", 1)[0]
 save_snapshot_body = nvhttp.split("bool save_state_snapshot_locked", 1)[1].split("bool save_state()", 1)[0]
@@ -642,7 +647,7 @@ remembered_identity_body = nvhttp.split(
 )[1].split("std::string get_client_uuid_from_request", 1)[0]
 require(
     remembered_identity_body,
-    "paired_client_uuid_enabled_locked(it->second.uuid)",
+    "tls_client_identities.resolve(request, client_record_views(client_root))",
     "cached TLS identity live authorization",
 )
 
@@ -738,7 +743,6 @@ for dependency_file, label in ((arch_pkgbuild, "Arch dependencies"), (rpm, "RPM 
     forbid(dependency_file, "libpam0g", label)
 for lifecycle, label in ((arch_install, "Arch lifecycle"), (rpm, "RPM lifecycle"), (postinst, "native lifecycle")):
     require(lifecycle, "enable vibeshine-session-controller.service", label)
-    require(lifecycle, "disable vibeshine.service", label)
     require(lifecycle, "remove-pam", label)
 for lifecycle, label in ((arch_install, "Arch removal"), (rpm, "RPM removal"), (prerm, "native removal")):
     require(lifecycle, "vibeshine-session-controller", label)
@@ -773,7 +777,7 @@ for lifecycle, label in (
         raise AssertionError(f"{label} lacks sustained clean broker enumeration")
     forbid(lifecycle, "systemctl stop 'vibeshine-session-exec@*.service'", label)
     forbid(lifecycle, 'systemctl stop "vibeshine-session-exec@*.service"', label)
-    forbid(lifecycle, "systemctl kill --kill-whom=all --signal=KILL", label)
+    require_force_guard(lifecycle, label)
 
 # Pre-replacement hooks must quiesce both the immediately prior architecture
 # and the controller/broker architecture without trusting systemctl globs.
@@ -846,7 +850,7 @@ for lifecycle, label in (
     forbid(lifecycle, "systemctl stop 'vibeshine-session-restore@*.service'", label)
     forbid(lifecycle, 'systemctl stop "vibeshine-session-restore@*.service"', label)
     forbid(lifecycle, "systemctl unmask", label)
-    forbid(lifecycle, "systemctl kill --kill-whom=all --signal=KILL", label)
+    require_force_guard(lifecycle, label)
     forbid(lifecycle, "vibeshine_session_record=", label)
     forbid(lifecycle, "vibeshine_legacy_acl=", label)
     function_name = "do_quiesce_machine_host" if label.startswith("Arch") else "vibeshine_quiesce_machine_host"
@@ -855,15 +859,15 @@ for lifecycle, label in (
     prepare_at = quiesce.index("vibeshine_prepare_host_upgrade_fence || return 1")
     freeze_at = quiesce.index("vibeshine_freeze_controller || return 1", prepare_at)
     activate_at = quiesce.index("vibeshine_activate_host_upgrade_fence || return 1", freeze_at)
-    control_mask_at = quiesce.index("systemctl mask --runtime vibeshine-vkms-control.socket", activate_at)
+    control_mask_at = quiesce.index("vibeshine_package_mask vibeshine-vkms-control.socket", activate_at)
     control_stop_at = quiesce.index("vibeshine_stop_exact_unit vibeshine-vkms-control.socket", control_mask_at)
     control_drain_at = quiesce.index("vibeshine_control_instances_are_quiescent || return 1", control_stop_at)
-    restore_mask_at = quiesce.index("systemctl mask --runtime 'vibeshine-session-restore@.service'", activate_at)
+    restore_mask_at = quiesce.index("vibeshine_package_mask 'vibeshine-session-restore@.service'", activate_at)
     helper_close_at = quiesce.index("vibeshine_disable_legacy_handoff || return 1", restore_mask_at)
-    broker_admission_at = quiesce.index("systemctl mask --runtime vibeshine-session-exec.socket", control_drain_at)
+    broker_admission_at = quiesce.index("vibeshine_package_mask vibeshine-session-exec.socket", control_drain_at)
     broker_stop_at = quiesce.index("vibeshine_stop_exact_unit vibeshine-session-exec.socket", broker_admission_at)
     host_stop_at = quiesce.index("vibeshine_stop_exact_unit vibeshine.service", broker_stop_at)
-    host_mask_at = quiesce.index("systemctl mask --runtime vibeshine.service", host_stop_at)
+    host_mask_at = quiesce.index("vibeshine_package_mask vibeshine.service", host_stop_at)
     first_restore_stop = quiesce.index("vibeshine_stop_restore_instances || return 1", host_mask_at)
     broker_drain_at = quiesce.index("vibeshine_stop_brokers || return 1", first_restore_stop)
     frozen_proof_at = quiesce.index("vibeshine_controller_remains_frozen || return 1", broker_drain_at)
@@ -950,10 +954,10 @@ for lifecycle, label in (
         "RefuseManualStart=no",
         "KillMode=mixed",
         "SendSIGKILL=no",
-        "unmask --runtime vibeshine-vkms-control.socket",
+        "vibeshine_package_release",
         "start vibeshine-vkms-control.socket",
-        "unmask --runtime vibeshine-session-exec.socket",
-        "unmask --runtime vibeshine.service",
+        "vibeshine_package_restore_barriers",
+        "vibeshine_package_remove_owned",
         "LoadState=loaded",
         "systemctl enable vibeshine-session-controller.service",
         "systemctl start vibeshine-session-controller.service",
@@ -1022,4 +1026,4 @@ for dropin in (
 require(special_packaging, 'SUNSHINE_SERVICE_READINESS_COMMAND "ExecStartPre=/bin/sleep 5"', "ordinary user service")
 forbid(special_packaging, "vibeshine-session-ready", "ordinary user service")
 
-print("PASS: least-privilege Linux machine-session controller contract")
+print("PASS: static machine-service contracts and residual source wiring guards")

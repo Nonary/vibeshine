@@ -49,6 +49,11 @@ namespace display_helper::v2::codec {
   // (and endlessly re-applied) just because the OS enumerates paths in a new order.
   bool equal_snapshots_strict(const Snapshot &a, const Snapshot &b);
 
+  // Recovery confirms only requested fields: unknown HDR, an omitted primary,
+  // and legacy missing origins are not settings to restore. Modes and topology
+  // remain exact; an empty saved mode map cannot confirm a recovery.
+  bool recovery_snapshot_matches(const Snapshot &current, const Snapshot &requested);
+
   // Stable textual representation for change detection/logging (canonical topology order).
   std::string signature(const Snapshot &snap);
 
@@ -64,9 +69,9 @@ namespace display_helper::v2::codec {
   // --- filtering rules ---
 
   /**
-   * @brief Save-side filtering: omit virtual displays, drop devices without a
-   *        display_name (not safe restore targets), apply the exclusion list, and
-   *        reject when nothing restorable remains.
+   * @brief Save-side filtering: omit virtual displays and explicit exclusions.
+   *        Reject if a remaining captured physical path is no longer enumerable
+   *        with a display_name, or if nothing restorable remains.
    * @param exclusions Normalized (normalize_device_id) exclusion list.
    * @returns Filtered snapshot, or nullopt with reject_reason set.
    */

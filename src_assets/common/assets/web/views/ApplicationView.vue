@@ -5,6 +5,10 @@ import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 
 import { groupLibraryGames, providerLabels } from '@/utils/libraryGames';
+import {
+  isRemoteMonitorApplication,
+  preserveRemoteMonitorRouting,
+} from '../../web-legacy/utils/remoteMonitorPolicy';
 import { ApiError, apiGet, apiPost } from '@/api/client';
 import AppEditCoverModal from '@/components/app-edit/AppEditCoverModal.vue';
 import type { CoverCandidate } from '@/components/app-edit/AppEditCoverModal.types';
@@ -108,7 +112,6 @@ interface EditorForm {
   lutrisService: string;
   lutrisServiceId: string;
   elevated: boolean;
-  dualsenseHaptics: boolean;
   autoDetach: boolean;
   waitAll: boolean;
   excludeGlobalPrepCmd: boolean;
@@ -230,6 +233,7 @@ interface FrameGenMetadata {
     vendor_id?: number | string;
   }>;
   has_nvidia_gpu?: boolean;
+  rtx_hdr_supported?: boolean;
   platform?: unknown;
   windows_build_number?: unknown;
 }
@@ -380,6 +384,7 @@ let liveRtxHdrTimer: ReturnType<typeof setTimeout> | null = null;
 let liveRtxHdrSuppress = false;
 let liveRtxHdrLastSentKey = '';
 let liveRtxHdrQueue: Promise<void> = Promise.resolve();
+const hostDisplayConfig = ref<FrameGenConfig | null>(null);
 const displayDevices = ref<DisplayDevice[]>([]);
 const displayDevicesLoading = ref(false);
 const displayDevicesLoaded = ref(false);
@@ -618,7 +623,10 @@ const hasNvidiaGpu = computed(() => {
   // final capability decision and will reject unsupported runtime updates.
   return true;
 });
-const showRtxHdrSection = computed(() => isWindowsHost.value && hasNvidiaGpu.value);
+const showRtxHdrSection = computed(
+  () => (isWindowsHost.value || isLinuxHost.value) && hasNvidiaGpu.value &&
+    (!isLinuxHost.value || overrideMetadata.value.rtx_hdr_supported === true),
+);
 const rtxHdrModeLabel = computed(() => {
   const option = rtxHdrModeOptions.value.find((candidate) => candidate.value === form.rtxHdrMode);
   return option?.label ?? t('ui.application.rtxHdr.modes.inherit.label');
@@ -701,7 +709,13 @@ const virtualDisplayOnlyOverrideKeys = new Set([
   'vulkan_hdr_layer',
 ]);
 function overrideVisibleForDisplay(key: string): boolean {
-  return displaySelection.value !== 'physical' || !virtualDisplayOnlyOverrideKeys.has(key);
+  // Remote Monitor owns a virtual output independently of these hidden app
+  // routing fields. They must not hide its functional runtime overrides.
+  return (
+    isRemoteMonitor.value ||
+    displaySelection.value !== 'physical' ||
+    !virtualDisplayOnlyOverrideKeys.has(key)
+  );
 }
 const overrideSearch = ref('');
 const overrideAnnouncement = ref('');
@@ -1314,7 +1328,6 @@ function emptyForm(): EditorForm {
     lutrisService: '',
     lutrisServiceId: '',
     elevated: false,
-    dualsenseHaptics: false,
     autoDetach: true,
     waitAll: true,
     excludeGlobalPrepCmd: false,
@@ -1354,6 +1367,7 @@ function emptyForm(): EditorForm {
 
 const routeId = computed(() => (typeof route.params.id === 'string' ? route.params.id : ''));
 const isNew = computed(() => route.name === 'application-new' || !routeId.value);
+const isRemoteMonitor = computed(() => isRemoteMonitorApplication(sourceApp.value));
 const isRemoteSession = computed(() => {
   const marker = sourceApp.value?.['remote-session'];
   return marker === 'input' || marker === 'monitor';
@@ -1760,7 +1774,6 @@ function hydrate(app: AppRecord): void {
     lutrisService: asString(app['lutris-service']),
     lutrisServiceId: asString(app['lutris-service-id']),
     elevated: asBoolean(app.elevated),
-    dualsenseHaptics: asBoolean(app['dualsense-haptics']),
     autoDetach: hasExplicitAutoDetach ? asBoolean(app['auto-detach']) : true,
     waitAll: hasExplicitWaitAll ? asBoolean(app['wait-all']) : true,
     excludeGlobalPrepCmd: asBoolean(app['exclude-global-prep-cmd']),
@@ -1849,19 +1862,28 @@ async function load(): Promise<void> {
   loading.value = true;
   loadError.value = '';
   saveError.value = '';
+  const displayConfigPromise = apiGet<FrameGenConfig>('/api/config').catch(() => null);
   const metadataPromise = apiGet<FrameGenMetadata>('/api/metadata').catch(
     (): FrameGenMetadata => ({}),
   );
   if (isNew.value) {
-    overrideMetadata.value = await metadataPromise;
+    [overrideMetadata.value, hostDisplayConfig.value] = await Promise.all([
+      metadataPromise,
+      displayConfigPromise,
+    ]);
     hydrateNew();
     loading.value = false;
     return;
   }
 
   try {
-    const [appList, metadata] = await Promise.all([fetchApps(), metadataPromise]);
+    const [appList, metadata, displayConfig] = await Promise.all([
+      fetchApps(),
+      metadataPromise,
+      displayConfigPromise,
+    ]);
     overrideMetadata.value = metadata;
+    hostDisplayConfig.value = displayConfig;
     const app = appList.find(
       (candidate) => appUuid(candidate).toLocaleLowerCase() === routeId.value.toLocaleLowerCase(),
     );
@@ -1942,7 +1964,6 @@ function buildPayload(): AppRecord {
       ? form.cmd.split(/\r?\n/).filter((line) => line.length > 0)
       : form.cmd,
     elevated: form.elevated,
-    'dualsense-haptics': form.dualsenseHaptics,
     'auto-detach': form.autoDetach,
     'wait-all': form.waitAll,
     'exclude-global-prep-cmd': form.excludeGlobalPrepCmd,
@@ -2027,6 +2048,7 @@ function buildPayload(): AppRecord {
   } else {
     delete payload['lossless-scaling-launch-delay'];
   }
+  preserveRemoteMonitorRouting(sourceApp.value, payload);
   return payload;
 }
 
@@ -2891,6 +2913,31 @@ async function loadDisplayDevices(force = false): Promise<void> {
   }
 }
 
+const effectiveAppDisplayAction = computed(() =>
+  form.ddConfigurationOption || String(readConfigOverrides().dd_configuration_option || hostDisplayConfig.value?.dd_configuration_option || 'verify_only'),
+);
+
+const virtualDisplayLayoutBlocked = computed(() => {
+  const layout =
+    form.virtualDisplayLayout || hostDisplayConfig.value?.virtual_display_layout || 'exclusive';
+  const action = effectiveAppDisplayAction.value;
+  return (
+    displaySelection.value === 'virtual' &&
+    layout !== 'exclusive' &&
+    action === 'disabled'
+  );
+});
+
+function selectVirtualDisplayLayout(): void {
+  if (!form.virtualDisplayLayout) return;
+  if (
+    !form.ddConfigurationOption ||
+    ['verify_only', 'disabled'].includes(form.ddConfigurationOption)
+  ) {
+    form.ddConfigurationOption = 'ensure_active';
+  }
+}
+
 function applyDisplaySelection(selection: AppDisplaySelection): void {
   if (selection === 'physical') {
     const output = effectiveAppOutput();
@@ -2908,7 +2955,6 @@ function applyDisplaySelection(selection: AppDisplaySelection): void {
   if (!['per_client', 'shared'].includes(form.virtualDisplayMode)) {
     form.virtualDisplayMode = 'per_client';
   }
-  form.ddConfigurationOption = '';
 }
 
 function enableVirtualDisplayForFrameGen(): void {
@@ -2933,7 +2979,11 @@ async function submit(): Promise<void> {
     leavingAfterSave.value = true;
     await router.push({ name: 'library' });
   } catch (cause) {
-    saveError.value = localizedError(cause, 'ui.application.errors.save');
+    const payload = cause instanceof ApiError ? cause.payload : null;
+    saveError.value =
+      payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
+        ? payload.error
+        : localizedError(cause, 'ui.application.errors.save');
   } finally {
     saving.value = false;
   }
@@ -3007,12 +3057,7 @@ watch(
 );
 
 watch(
-  () => [
-    form.virtualScreen,
-    form.virtualDisplayMode,
-    form.displayOutput,
-    form.configOverridesJson,
-  ],
+  () => [form.virtualScreen, form.virtualDisplayMode, form.displayOutput, form.configOverridesJson],
   () => {
     if (!frameGenHealth.value && !frameGenHealthLoading.value) return;
     clearFrameGenHealth();
@@ -3570,17 +3615,6 @@ onBeforeUnmount(() => {
             </select>
           </label>
 
-          <SettingRow
-            v-if="isWindowsHost"
-            :label="t('apps.dualsense_haptics')"
-            :description="t('apps.dualsense_haptics_desc')"
-            control-id="app-dualsense-haptics"
-          >
-            <label class="vs-checkbox">
-              <input id="app-dualsense-haptics" v-model="form.dualsenseHaptics" type="checkbox" />
-              <span>{{ t('apps.dualsense_haptics') }}</span>
-            </label>
-          </SettingRow>
           <div v-if="isWindowsHost" class="lossless-editor editor-field--full">
             <div class="lossless-editor__heading">
               <div>
@@ -4157,7 +4191,18 @@ onBeforeUnmount(() => {
               <option :value="false">{{ t('_common.disabled') }}</option>
             </select>
           </SettingRow>
-          <fieldset class="app-display-routing">
+          <InlineAlert
+            v-if="isRemoteMonitor"
+            tone="info"
+            :title="t('config.remote_monitor_display_title')"
+          >
+            <p>{{ t('config.remote_monitor_display_description') }}</p>
+            <p>{{ t('config.remote_monitor_display_limits') }}</p>
+            <RouterLink :to="{ name: 'devices' }">
+              {{ t('config.remote_monitor_display_layout_action') }}
+            </RouterLink>
+          </InlineAlert>
+          <fieldset v-if="!isRemoteMonitor" class="app-display-routing">
             <legend>{{ t('config.app_display_override_label') }}</legend>
             <p>{{ t('config.app_display_override_hint') }}</p>
             <div class="app-display-routing__choices">
@@ -4188,7 +4233,7 @@ onBeforeUnmount(() => {
             </div>
           </fieldset>
 
-          <template v-if="displaySelection === 'physical'">
+          <template v-if="!isRemoteMonitor && displaySelection === 'physical'">
             <SettingRow
               :label="t('config.app_display_physical_label')"
               :description="t('config.app_display_physical_hint')"
@@ -4234,36 +4279,9 @@ onBeforeUnmount(() => {
                 </span>
               </div>
             </SettingRow>
-            <SettingRow
-              :label="t('ui.application.fields.displayAction.label')"
-              :description="t('ui.application.fields.displayAction.description')"
-              control-id="app-display-configuration"
-            >
-              <select
-                id="app-display-configuration"
-                v-model="form.ddConfigurationOption"
-                class="vs-select"
-              >
-                <option
-                  v-if="optionIsCustom(displayConfigurationOptions, form.ddConfigurationOption)"
-                  :value="form.ddConfigurationOption"
-                >
-                  {{
-                    t('ui.application.options.currentValue', { value: form.ddConfigurationOption })
-                  }}
-                </option>
-                <option
-                  v-for="option in displayConfigurationOptions"
-                  :key="option.value"
-                  :value="option.value"
-                >
-                  {{ option.label }}
-                </option>
-              </select>
-            </SettingRow>
           </template>
 
-          <template v-else>
+          <template v-else-if="!isRemoteMonitor">
             <SettingRow
               :label="t('ui.application.fields.displayMode.label')"
               :description="t('ui.application.fields.displayMode.description')"
@@ -4290,7 +4308,12 @@ onBeforeUnmount(() => {
               :description="t('ui.application.fields.displayLayout.description')"
               control-id="app-display-layout"
             >
-              <select id="app-display-layout" v-model="form.virtualDisplayLayout" class="vs-select">
+              <select
+                id="app-display-layout"
+                v-model="form.virtualDisplayLayout"
+                class="vs-select"
+                @change="selectVirtualDisplayLayout"
+              >
                 <option
                   v-if="optionIsCustom(virtualDisplayLayouts, form.virtualDisplayLayout)"
                   :value="form.virtualDisplayLayout"
@@ -4309,6 +4332,50 @@ onBeforeUnmount(() => {
               </select>
             </SettingRow>
           </template>
+          <SettingRow
+            :label="t('ui.application.fields.displayAction.label')"
+            :description="t('ui.application.fields.displayAction.description')"
+            control-id="app-display-configuration"
+          >
+            <select
+              id="app-display-configuration"
+              v-model="form.ddConfigurationOption"
+              class="vs-select"
+            >
+              <option
+                v-if="optionIsCustom(displayConfigurationOptions, form.ddConfigurationOption)"
+                :value="form.ddConfigurationOption"
+              >
+                {{
+                  t('ui.application.options.currentValue', { value: form.ddConfigurationOption })
+                }}
+              </option>
+              <option
+                v-for="option in displayConfigurationOptions"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </SettingRow>
+          <p v-if="displaySelection === 'virtual'" class="vs-field__helper">
+            {{ t('config.app_virtual_display_layout_action_hint') }}
+          </p>
+          <p v-if="displaySelection === 'virtual' && effectiveAppDisplayAction === 'verify_only'" class="vs-field__helper">
+            {{ t('config.app_virtual_display_verify_override') }}
+          </p>
+          <InlineAlert
+            v-if="virtualDisplayLayoutBlocked"
+            tone="warning"
+            :title="t('config.app_virtual_display_layout_blocked')"
+            data-testid="app-display-layout-conflict"
+            announce="assertive"
+          >
+            <AppButton @click="form.ddConfigurationOption = 'ensure_active'">
+              {{ t('config.app_virtual_display_layout_enable') }}
+            </AppButton>
+          </InlineAlert>
         </div>
       </section>
 
@@ -4604,7 +4671,7 @@ onBeforeUnmount(() => {
       </section>
 
       <section
-        v-if="!isNew && !isRemoteSession"
+        v-if="!isNew"
         class="editor-danger"
         aria-labelledby="danger-heading"
       >

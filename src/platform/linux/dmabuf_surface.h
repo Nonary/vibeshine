@@ -5,10 +5,19 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <cerrno>
+#include <poll.h>
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
+#include <sstream>
+#include <string>
 #include <unistd.h>
 
 namespace egl {
+  inline constexpr std::uint64_t IMPLICIT_DMA_BUF_MODIFIER = 0x00ffffffffffffffULL;
+
   struct surface_descriptor_t {
     int width {};
     int height {};
@@ -20,12 +29,79 @@ namespace egl {
     bool direct_import_required {};
   };
 
+  inline bool wait_for_source(const surface_descriptor_t &source) {
+    if (source.fds[0] < 0) {
+      return false;
+    }
+    std::array<pollfd, 4> fds {};
+    for (std::size_t i = 0; i < fds.size(); ++i) {
+      fds[i] = {source.fds[i], POLLIN, 0};
+    }
+    // Wait on each live plane, since an RGB modifier can have auxiliary planes.
+    for (auto &plane : fds) {
+      if (plane.fd < 0) {
+        continue;
+      }
+      int ready;
+      do {
+        ready = poll(&plane, 1, 1000);
+      } while (ready < 0 && errno == EINTR);
+      if (ready <= 0 || !(plane.revents & POLLIN) || (plane.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  inline std::string describe_surface_layout(const surface_descriptor_t &surface) {
+    std::ostringstream description;
+    description << "width=" << surface.width
+                << " height=" << surface.height
+                << " fourcc=0x" << std::hex << surface.fourcc
+                << " modifier=0x" << surface.modifier
+                << std::dec;
+
+    std::size_t fd_slot_count = 0;
+    for (const int fd : surface.fds) {
+      fd_slot_count += static_cast<std::size_t>(fd >= 0);
+    }
+
+    description << " fd_slot_count=" << fd_slot_count << " fd_slots=[";
+    bool first_fd_slot = true;
+    for (std::size_t slot = 0; slot < std::size(surface.fds); ++slot) {
+      if (surface.fds[slot] < 0) {
+        continue;
+      }
+      if (!first_fd_slot) {
+        description << ',';
+      }
+      first_fd_slot = false;
+      description << slot << "{pitch=" << surface.pitches[slot]
+                  << ",offset=" << surface.offsets[slot] << '}';
+    }
+    description << ']';
+    return description.str();
+  }
+
   inline bool can_cpu_upload_surface(const surface_descriptor_t &surface) noexcept {
-    constexpr std::uint64_t implicit_modifier = 0x00ffffffffffffffULL;
     // Managed imports retain the exporter's layout. An implicit modifier is
     // unknown, so those bytes cannot safely be read as linear pixels.
     return surface.modifier == 0 ||
-      (surface.modifier == implicit_modifier && !surface.direct_import_required);
+      (surface.modifier == IMPLICIT_DMA_BUF_MODIFIER && !surface.direct_import_required);
+  }
+
+  // Keep the producer's descriptor intact for all three attempts. CPU access
+  // is only valid when we know how to interpret the original pixel layout.
+  template<class Import, class Snapshot, class Upload>
+  auto import_source_with_fallbacks(const surface_descriptor_t &surface, Import &&import, Snapshot &&snapshot, Upload &&upload) {
+    auto result = import(surface);
+    if (!result) {
+      result = snapshot(surface);
+    }
+    if (!result && can_cpu_upload_surface(surface)) {
+      result = upload(surface);
+    }
+    return result;
   }
 
   inline void reset_surface(surface_descriptor_t &surface) noexcept {

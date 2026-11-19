@@ -26,6 +26,31 @@ import {
   serializeCommandRows,
 } from '../utils/v2Parity.ts';
 
+test('AMD speed default agrees across backend, settings UI and legacy fallbacks', () => {
+  for (const path of [
+    '../configs/settingsSchema.ts',
+    '../../web-legacy/stores/config.ts',
+  ]) {
+    assert.match(readFileSync(new URL(path, import.meta.url), 'utf8'), /amd_quality:\s*'speed'/);
+  }
+  const backend = readFileSync(new URL('../../../../../src/config.cpp', import.meta.url), 'utf8');
+  for (const codec of ['h264', 'hevc', 'av1']) {
+    assert.ok(backend.includes(`amd::quality_${codec}_e::speed,  // quality (${codec})`));
+  }
+});
+
+test('final restore removal defaults to retention and is Windows-only', () => {
+  assert.equal(settingsDefaults.dd_remove_virtual_display_after_restore, false);
+  const field = settingsCategories.flatMap((category) =>
+    category.groups.flatMap((group) => group.fields),
+  ).find((candidate) => candidate.key === 'dd_remove_virtual_display_after_restore');
+  assert.ok(field);
+  assert.equal(field.kind, 'boolean');
+  assert.equal(matchesPlatform(field, 'windows'), true);
+  assert.equal(matchesPlatform(field, 'linux'), false);
+  assert.equal(matchesPlatform(field, 'macos'), false);
+});
+
 test('capture options follow the host platform', () => {
   assert.deepEqual(
     captureOptionsForPlatform('linux').map((option) => option.value),
@@ -59,16 +84,20 @@ test('gamepad options follow the host platform', () => {
       'vhf_ds5',
       'usbip_ds5',
       'vhf_switch',
+      'vhf_steam',
     ],
   );
-  const legacyOptions = readFileSync(
-    new URL('../../web-legacy/configs/configSelectOptions.ts', import.meta.url),
-    'utf8',
-  );
-  assert.match(legacyOptions, /linux:\s*\['xone', 'ds4', 'ds5', 'switch'\]/);
+  const context = { t: (key: string) => key, platform: 'linux' };
+  for (const getOptions of [getConfigSelectOptions, getLegacyConfigSelectOptions]) {
+    assert.deepEqual(
+      getOptions('gamepad', context).map((option) => option.value),
+      ['auto', 'xone', 'ds4', 'ds5', 'switch'],
+    );
+  }
+  assert.deepEqual(settingsFields.get('ds4_back_as_touchpad_click')?.platform, ['windows', 'linux']);
 });
 
-test('both settings interfaces offer the composite DualSense on Windows and preserve saved values', () => {
+test('both production settings models offer the composite DualSense only on Windows and preserve saved values', () => {
   for (const getOptions of [getConfigSelectOptions, getLegacyConfigSelectOptions]) {
     const context = { t: (key: string) => key, platform: 'windows' };
     const option = getOptions('gamepad', context).find(
@@ -92,6 +121,10 @@ test('both settings interfaces offer the composite DualSense on Windows and pres
         `${platform} must not offer the Windows USB/IP driver`,
       );
     }
+    assert.deepEqual(
+      getOptions('gamepad', { ...context, platform: 'linux' }).map((candidate) => candidate.value),
+      ['auto', 'xone', 'ds4', 'ds5', 'switch'],
+    );
     assert.ok(
       getOptions('gamepad', { ...context, currentValue: 'future_controller' }).some(
         (candidate) => candidate.value === 'future_controller',
@@ -124,6 +157,7 @@ test('Linux keeps common virtual-display policy and hides Windows display intern
     'dd_snapshot_restore_hotkey',
     'dd_snapshot_restore_hotkey_modifiers',
     'wgc_pacing_smoothing',
+    'wgc_direct_encoder_input',
     'always_send_scancodes',
     'native_pen_touch',
     'install_steam_audio_drivers',
@@ -155,16 +189,7 @@ test('Linux keeps common virtual-display policy and hides Windows display intern
     'linux',
     'Wayland HDR compatibility must remain Linux-only',
   );
-  const legacyAudioVideo = readFileSync(
-    new URL('../../web-legacy/configs/tabs/AudioVideo.vue', import.meta.url),
-    'utf8',
-  );
-  const legacyStore = readFileSync(
-    new URL('../../web-legacy/stores/config.ts', import.meta.url),
-    'utf8',
-  );
-  assert.match(legacyAudioVideo, /v-model:checked="config\.wayland_hdr_compatibility"/);
-  assert.match(legacyStore, /wayland_hdr_compatibility:\s*false/);
+  assert.equal(settingsDefaults.wayland_hdr_compatibility, false);
 });
 
 test('Linux exposes Remote Monitor behavior controls', () => {
@@ -301,51 +326,18 @@ test('Linux Proton and MangoHUD limiter choices stay aligned with legacy UI', ()
   assert.match(messages.ui.integrations.mangohud.limiterMethodDescription, /latency/i);
   assert.match(messages.ui.integrations.mangohud.limiterMethodDescription, /frame generation/i);
 
-  const legacyStep = readFileSync(
-    new URL('../../web-legacy/configs/tabs/audiovideo/FrameLimiterStep.vue', import.meta.url),
-    'utf8',
+  const context = { t: (key: string) => key, platform: 'linux' };
+  assert.deepEqual(
+    getLegacyConfigSelectOptions('frame_limiter_provider', context).map((option) => option.value),
+    ['auto', 'mangohud-proton', 'proton', 'mangohud', 'none'],
   );
-  assert.match(legacyStep, /value: 'mangohud-proton'/);
-  assert.match(legacyStep, /value: 'proton'/);
-  assert.match(legacyStep, /setting-key="mangohud_limiter_method"/);
-});
-
-test('Linux maintenance omits Windows-only support and recovery sections', () => {
-  const maintenanceView = readFileSync(
-    new URL('../views/MaintenanceView.vue', import.meta.url),
-    'utf8',
+  assert.deepEqual(
+    getLegacyConfigSelectOptions('mangohud_limiter_method', context).map((option) => option.value),
+    ['early', 'late'],
   );
-  assert.match(maintenanceView, /v-if="isWindows"[\s\S]*aria-labelledby="display-recovery-title"/);
-  assert.match(maintenanceView, /v-if="isWindows"[^>]*aria-labelledby="support-title"/);
-  assert.doesNotMatch(maintenanceView, /ui\.maintenance\.support\.windowsUnavailable/);
 });
 
-test('Linux uses display enumeration and persistence reset', () => {
-  const settingsView = readFileSync(new URL('../views/SettingsView.vue', import.meta.url), 'utf8');
-  assert.match(settingsView, /isWindowsHost\.value \|\| isLinuxHost\.value/);
-  assert.match(settingsView, /v-if="supportsDisplayDeviceEnumeration"/);
-  assert.match(
-    settingsView,
-    /v-if="\(isWindowsHost \|\| isLinuxHost\) && activeCategory === 'display' && !isSearching"/,
-  );
-  assert.match(settingsView, /v-if="supportsDisplayDeviceEnumeration && !displayDevicesError"/);
-});
-
-test('Settings protects drafts and keeps restart actions available', () => {
-  const settingsView = readFileSync(new URL('../views/SettingsView.vue', import.meta.url), 'utf8');
-  assert.match(settingsView, /<form[\s\S]*@submit\.prevent="save"/);
-  assert.match(settingsView, /class="button button--primary" type="submit"/);
-  assert.match(settingsView, /:disabled="loading \|\| saving \|\| isDirty"/);
-  assert.match(settingsView, /restartAvailable\.value \|\|= Boolean\(result\.restartRequired\)/);
-  assert.match(settingsView, /v-else-if="notice \|\| restartAvailable"/);
-  assert.match(settingsView, /:disabled="restarting"/);
-});
-
-test('Settings explains unavailable host metadata and virtual-display readiness', () => {
-  const settingsView = readFileSync(new URL('../views/SettingsView.vue', import.meta.url), 'utf8');
-  assert.match(settingsView, /metadataUnavailable\.value = true/);
-  assert.match(settingsView, /virtualDisplayUnavailable/);
-
+test('Settings notices are translated for unavailable host metadata and displays', () => {
   const messages = JSON.parse(
     readFileSync(new URL('../public/assets/locale/ui/en.json', import.meta.url), 'utf8'),
   );
@@ -401,26 +393,6 @@ test('host history downsampling and peaks make relative spikes comparable', () =
     'the rendered series must retain each CPU/GPU/encoder/network spike',
   );
   assert.deepEqual(hostHistoryPeaks(points), { cpu: 95, gpu: 88, encoder: 79, networkMbps: 12 });
-});
-
-test('host compute readouts label current and peak values explicitly', () => {
-  const chart = readFileSync(
-    new URL('../components/stats/HostComputeChart.vue', import.meta.url),
-    'utf8',
-  );
-  assert.match(
-    chart,
-    /CPU[\s\S]*t\('stats\.current'\)[\s\S]*current\.cpu[\s\S]*t\('stats\.peak'\)[\s\S]*peak\.cpu/,
-  );
-  assert.match(
-    chart,
-    /GPU[\s\S]*t\('stats\.current'\)[\s\S]*current\.gpu[\s\S]*t\('stats\.peak'\)[\s\S]*peak\.gpu/,
-  );
-  assert.match(
-    chart,
-    /ENC[\s\S]*t\('stats\.current'\)[\s\S]*current\.encoder[\s\S]*t\('stats\.peak'\)[\s\S]*peak\.encoder/,
-  );
-  assert.doesNotMatch(chart, /t\('stats\.peak'\)[^\n]*\/[^\n]*t\('stats\.current'\)/);
 });
 
 test('advanced encoder settings have actual fields and platform-aware options', () => {

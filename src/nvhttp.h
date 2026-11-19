@@ -8,6 +8,7 @@
 // standard includes
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -21,6 +22,7 @@
 
 // local includes
 #include "crypto.h"
+#include "nvhttp_server.h"
 #include "thread_safe.h"
 
 /**
@@ -75,18 +77,7 @@ namespace nvhttp {
   // between this check and a guarded display mutation.
   bool has_remote_role_owner();
 
-  class SunshineHTTPS: public SimpleWeb::HTTPS {
-  public:
-    SunshineHTTPS(boost::asio::io_context &io_context, boost::asio::ssl::context &ctx):
-        SimpleWeb::HTTPS(io_context, ctx) {
-    }
 
-    virtual ~SunshineHTTPS() {
-      // Gracefully shutdown the TLS connection
-      SimpleWeb::error_code ec;
-      shutdown(ec);
-    }
-  };
 
   enum class PAIR_PHASE {
     NONE,  ///< Sunshine is not in a pairing phase
@@ -214,6 +205,9 @@ namespace nvhttp {
    * @return true if the client was found and updated.
    */
   bool set_client_enabled(std::string_view uuid, bool enabled);
+  // Administrator opt-in, separate from permission to stream. New and legacy
+  // pairings deny power control unless this grant was explicitly persisted.
+  bool set_client_sleep_allowed(std::string_view uuid, bool allowed);
   bool has_client_uuid(std::string_view uuid);
   std::string get_cert_by_uuid(std::string_view uuid);
 
@@ -248,7 +242,8 @@ namespace nvhttp {
     const std::string &virtual_display_layout,
     std::optional<std::unordered_map<std::string, std::string>> config_overrides,
     bool prefer_10bit_sdr,
-    std::optional<std::string> hdr_profile
+    std::optional<std::string> hdr_profile,
+    std::optional<bool> requested_resolution_only = std::nullopt
   );
 
   /**
@@ -292,6 +287,13 @@ namespace nvhttp {
    * publication; final teardown holds it through its shared cleanup decision.
    */
   std::mutex &stream_lifecycle_mutex();
+
+#ifdef _WIN32
+  /** End all transports, pending launches and the app, then restore displays.
+   * Revalidate the pinned local helper after draining in-flight starts.
+   */
+  void terminate_all_streams_from_host(const std::function<bool()> &authorized);
+#endif
 
   /**
    * @brief Persist a per-client HDR color profile selection (Windows only).

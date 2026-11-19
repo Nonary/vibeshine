@@ -48,6 +48,11 @@ if(CUDA_FOUND)
 endif()
 
 # libdrm is required for DRM (KMS), KWin ScreenCast and Wayland
+include("${CMAKE_SOURCE_DIR}/cmake/dependencies/truehdr_linux.cmake")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND PLATFORM_TARGET_FILES "${CMAKE_SOURCE_DIR}/src/platform/linux/rtx_hdr_runtime.cpp")
+endif()
+
 if(${SUNSHINE_ENABLE_DRM} OR ${SUNSHINE_ENABLE_KWIN} OR ${SUNSHINE_ENABLE_WAYLAND})
     find_package(LIBDRM REQUIRED)
 else()
@@ -379,7 +384,10 @@ list(APPEND PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/linux/host_stats.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/audio.cpp")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND SUNSHINE_EXTERNAL_LIBRARIES glad_gles2)
     list(APPEND PLATFORM_TARGET_FILES
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/gpu_snapshot.cpp"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/gpu_snapshot.h"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/routed_link.h"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/routed_link.cpp"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/display_power.cpp"
@@ -427,6 +435,10 @@ if(SUNSHINE_ENABLE_PYROWAVE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_compile_options(pyrowave-linux PRIVATE -fvisibility=hidden)
     target_include_directories(pyrowave-linux PRIVATE "${CMAKE_BINARY_DIR}/generated-src" ${LIBDRM_INCLUDE_DIRS})
     target_link_libraries(pyrowave-linux PRIVATE pyrowave granite-vulkan)
+    if(TARGET linux-truehdr)
+        target_link_libraries(pyrowave-linux PRIVATE linux-truehdr)
+        target_compile_definitions(pyrowave-linux PRIVATE SUNSHINE_ENABLE_NV_TRUEHDR=1)
+    endif()
     list(APPEND PLATFORM_LIBRARIES pyrowave-linux)
     list(APPEND PLATFORM_TARGET_FILES "${CMAKE_SOURCE_DIR}/src/platform/linux/pyrowave_encode.cpp")
 endif()

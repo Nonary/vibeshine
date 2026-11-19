@@ -105,6 +105,44 @@ namespace VibeshineInstaller {
     }
   }
 
+  internal sealed class InstallerDriverSelections {
+    public bool DisplayEnabled { get; private set; }
+    public bool GamepadEnabled { get; private set; }
+    private readonly Action<string, bool> _save;
+    public InstallerDriverSelections(Func<string, int?> read, Action<string, bool> save) {
+      DisplayEnabled = Resolve(read("DisplayEnabled"));
+      GamepadEnabled = Resolve(read("GamepadEnabled"));
+      _save = save;
+    }
+    private static bool Resolve(int? value) { return !value.HasValue || value.Value != 0; }
+    public void SelectDisplay(bool selected) { DisplayEnabled = selected; _save("DisplayEnabled", selected); }
+    public void SelectGamepad(bool selected) { GamepadEnabled = selected; _save("GamepadEnabled", selected); }
+  }
+  internal static class InstallerDriverSelectionStore {
+    private const string KeyPath = @"SOFTWARE\Nonary\Vibeshine\Installer\DriverSelections";
+    public static InstallerDriverSelections Load() { return new InstallerDriverSelections(Read, Save); }
+    private static int? Read(string name) {
+      try {
+        using (var user = Registry.CurrentUser.OpenSubKey(KeyPath)) {
+          var value = Parse(user == null ? null : user.GetValue(name));
+          if (value.HasValue) return value;
+        }
+        using (var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+        using (var key = machine.OpenSubKey(KeyPath)) { return Parse(key == null ? null : key.GetValue(name)); }
+      } catch { return null; }
+    }
+    internal static int? Parse(object value) {
+      int number;
+      return value != null && int.TryParse(Convert.ToString(value), out number) && (number == 0 || number == 1) ? (int?)number : null;
+    }
+    private static void Save(string name, bool selected) {
+      // Draft choices survive cancel/reopen; MSI commits machine choices only
+      // after an authorized install. This never touches certificate trust.
+      try { using (var key = Registry.CurrentUser.CreateSubKey(KeyPath)) { key.SetValue(name, selected ? "1" : "0", RegistryValueKind.String); } }
+      catch { /* A restricted profile still retains this window's choices. */ }
+    }
+  }
+
   internal sealed class InstallerWindow : Window {
     private readonly InstallerArguments _arguments;
     private readonly Border _installSection;
@@ -117,6 +155,8 @@ namespace VibeshineInstaller {
     private readonly TextBox _installPathTextBox;
     private readonly ComboBox _virtualDisplayDriverComboBox;
     private readonly CheckBox _virtualGamepadDriverCheckBox;
+    private readonly CheckBox _virtualDisplayDriverCheckBox;
+    private readonly InstallerDriverSelections _driverSelections;
     private readonly CheckBox _usbIpTransportCheckBox;
     private readonly TextBlock _statusText;
     private readonly TextBlock _statusDetailText;
@@ -170,6 +210,7 @@ namespace VibeshineInstaller {
 
     public InstallerWindow(InstallerArguments arguments) {
       _arguments = arguments;
+      _driverSelections = InstallerDriverSelectionStore.Load();
       _bundleVersion = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0, 0);
       _licenseText = LoadEmbeddedLicenseText();
       _installedProduct = InstallerRunner.GetInstalledVibeshineProduct();
@@ -526,6 +567,15 @@ namespace VibeshineInstaller {
         Margin = new Thickness(0, 0, 0, 6)
       };
 
+      _virtualDisplayDriverCheckBox = new CheckBox {
+        Content = "Install or update the virtual display driver",
+        IsChecked = _driverSelections.DisplayEnabled,
+        Foreground = new SolidColorBrush(Color.FromRgb(232, 239, 253)),
+        Margin = new Thickness(0, 0, 0, 8)
+      };
+      _virtualDisplayDriverCheckBox.Checked += (sender, e) => _driverSelections.SelectDisplay(true);
+      _virtualDisplayDriverCheckBox.Unchecked += (sender, e) => _driverSelections.SelectDisplay(false);
+
       _virtualDisplayDriverComboBox = new ComboBox {
         FontSize = 13,
         MinHeight = 32,
@@ -627,6 +677,7 @@ namespace VibeshineInstaller {
       };
       _installVirtualDisplaySection.Child = driverStack;
       driverStack.Children.Add(virtualDisplayDriverLabel);
+      driverStack.Children.Add(_virtualDisplayDriverCheckBox);
       driverStack.Children.Add(_virtualDisplayDriverComboBox);
       driverStack.Children.Add(installVirtualDisplayHintText);
 
@@ -655,10 +706,12 @@ namespace VibeshineInstaller {
         Content = "Install Vibeshine virtual gamepad driver",
         FontSize = 13,
         Foreground = new SolidColorBrush(Color.FromRgb(232, 239, 253)),
-        IsChecked = true,
+        IsChecked = _driverSelections.GamepadEnabled,
         Margin = new Thickness(0, 0, 0, 6),
         ToolTip = "Installs the bundled user-mode virtual gamepad driver."
       };
+      _virtualGamepadDriverCheckBox.Checked += (sender, e) => _driverSelections.SelectGamepad(true);
+      _virtualGamepadDriverCheckBox.Unchecked += (sender, e) => _driverSelections.SelectGamepad(false);
       gamepadStack.Children.Add(_virtualGamepadDriverCheckBox);
       gamepadStack.Children.Add(new TextBlock {
         Text = "Enable this to install or update Vibeshine's bundled virtual gamepad driver.",
@@ -666,6 +719,15 @@ namespace VibeshineInstaller {
         Foreground = new SolidColorBrush(Color.FromRgb(190, 208, 236)),
         TextWrapping = TextWrapping.Wrap
       });
+
+      if (_payloadMsiInfo != null && _payloadMsiInfo.HasLocalGamepadCertificate) {
+        gamepadStack.Children.Add(new TextBlock {
+          Text = "Installing a missing or newer beta gamepad driver also adds persistent machine-wide trust for its verified bundled signing certificate. Equal or newer installed drivers remain unchanged. Windows security enforcement stays enabled.",
+          FontSize = 11,
+          Foreground = new SolidColorBrush(Color.FromRgb(190, 208, 236)),
+          TextWrapping = TextWrapping.Wrap
+        });
+      }
 
       _installUsbIpTransportSection = new Border {
         CornerRadius = new CornerRadius(10),
@@ -1147,6 +1209,8 @@ namespace VibeshineInstaller {
         var installVirtualDisplayDriver = ShouldInstallVirtualDisplayDriver();
         var installVirtualGamepadDriver = ShouldInstallVirtualGamepadDriver();
         var installUsbIpTransport = ShouldInstallUsbIpTransport();
+        _arguments.InstallDisplayDriversRequested = _virtualDisplayDriverCheckBox.IsChecked == true;
+        InstallerRunner.ApplySelectedGamepadTrust(_arguments, _payloadMsiInfo, installVirtualGamepadDriver);
         return await Task.Run(() => InstallerRunner.RunInteractiveInstall(
           _arguments,
           selectedPath,
@@ -1558,6 +1622,7 @@ namespace VibeshineInstaller {
         _installPathTextBox.IsEnabled = false;
         _virtualDisplayDriverComboBox.IsEnabled = false;
         _virtualGamepadDriverCheckBox.IsEnabled = false;
+        _virtualDisplayDriverCheckBox.IsEnabled = false;
         _usbIpTransportCheckBox.IsEnabled = false;
         _browseButton.IsEnabled = false;
         _installSection.Visibility = Visibility.Collapsed;
@@ -1579,6 +1644,7 @@ namespace VibeshineInstaller {
       _installPathTextBox.IsEnabled = allowInstallInputs && showInstallLocation;
       _virtualDisplayDriverComboBox.IsEnabled = allowInstallInputs && _showInstallVirtualDisplayOption;
       _virtualGamepadDriverCheckBox.IsEnabled = allowInstallInputs && _showInstallVirtualGamepadOption;
+      _virtualDisplayDriverCheckBox.IsEnabled = allowInstallInputs && _showInstallVirtualDisplayOption;
       _usbIpTransportCheckBox.IsEnabled = allowInstallInputs && _showInstallUsbIpTransportOption;
       _browseButton.IsEnabled = allowInstallInputs && showInstallLocation;
       _installSection.Visibility = showInstallLocation ? Visibility.Visible : Visibility.Collapsed;
@@ -2174,6 +2240,10 @@ namespace VibeshineInstaller {
     public string InternalInstallPath { get; set; }
     public bool InternalInstallVirtualDisplay { get; set; }
     public bool InternalInstallVirtualGamepad { get; set; }
+    private bool _installDisplayDriversRequested = true;
+    public bool InstallDisplayDriversRequested { get { return _installDisplayDriversRequested; } set { _installDisplayDriversRequested = value; } }
+    public bool AllowLocalGamepadCertificateTrust { get; set; }
+    public string ConsentCertificateThumbprint { get; set; }
     public bool InternalInstallUsbIpTransport { get; set; }
     public bool InternalInstallSaveLogs { get; set; }
     public string InternalInstallResultPath { get; set; }
@@ -2238,6 +2308,18 @@ namespace VibeshineInstaller {
         }
         if (string.Equals(arg, InternalInstallVirtualGamepadDriverToken, StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
           parsed.InternalInstallVirtualGamepad = ParseBooleanToken(args[++index]);
+          continue;
+        }
+        if (string.Equals(arg, "--internal-gamepad-certificate-trust", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
+          parsed.AllowLocalGamepadCertificateTrust = ParseBooleanToken(args[++index]);
+          continue;
+        }
+        if (string.Equals(arg, "--internal-install-display-drivers", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
+          parsed.InstallDisplayDriversRequested = ParseBooleanToken(args[++index]);
+          continue;
+        }
+        if (string.Equals(arg, "--internal-gamepad-consent-thumbprint", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
+          parsed.ConsentCertificateThumbprint = args[++index];
           continue;
         }
         if (string.Equals(arg, InternalInstallUsbIpTransportToken, StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
@@ -2362,7 +2444,6 @@ namespace VibeshineInstaller {
       "/f",
       "/update"
     };
-    private static readonly Version UpgradeSourcePreUninstallVersion = new Version(1, 14, 6);
     private static readonly string[] UninstallRegistryRoots = {
       @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
       @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
@@ -2402,6 +2483,7 @@ namespace VibeshineInstaller {
       "playnite-launcher",
       "playnite_launcher",
       "sunshine_display_helper",
+      "sunshine_end_stream_hotkey",
       "vibeshine_dualsense_haptics"
     };
 
@@ -2425,6 +2507,10 @@ namespace VibeshineInstaller {
       public Version Version { get; set; }
       public bool SupportsTransactionalReplacement { get; set; }
       public bool HasBundledVirtualGamepadDriver { get; set; }
+      public bool HasLocalGamepadCertificate { get; set; }
+      public string LocalGamepadCertificateThumbprint { get; set; }
+      public string LocalGamepadCertificateSubject { get; set; }
+      public string LocalGamepadDriverVersion { get; set; }
       public bool HasBundledUsbIpTransport { get; set; }
     }
 
@@ -2650,8 +2736,10 @@ namespace VibeshineInstaller {
         var upgradeCode = ReadMsiProperty(packageHandle, "UpgradeCode");
         var versionText = ReadMsiProperty(packageHandle, "ProductVersion");
         var transactionalReplacement = ReadMsiProperty(packageHandle, "VIBESHINE_TRANSACTIONAL_REPLACEMENT");
-        var virtualGamepadDriverBundled = ReadMsiProperty(packageHandle, "INSTALL_VIRTUAL_GAMEPAD_DRIVER");
+        var virtualGamepadDriverBundled = ReadMsiProperty(packageHandle, "VhfGamepadDriverBundled");
         var usbIpTransportBundled = ReadMsiProperty(packageHandle, "USBIP_TRANSPORT_BUNDLED");
+        var localGamepadCertificateThumbprint = ReadMsiProperty(packageHandle, "LOCAL_GAMEPAD_CERTIFICATE_THUMBPRINT");
+        var localGamepadPackage = ReadMsiProperty(packageHandle, "ALLOW_LOCAL_VIRTUAL_GAMEPAD_TEST_PACKAGE");
         if (string.IsNullOrWhiteSpace(productCode) && string.IsNullOrWhiteSpace(versionText) && string.IsNullOrWhiteSpace(upgradeCode)) {
           return null;
         }
@@ -2663,7 +2751,11 @@ namespace VibeshineInstaller {
           Version = ParseVersion(versionText),
           SupportsTransactionalReplacement = string.Equals(transactionalReplacement, "1", StringComparison.Ordinal),
           HasBundledVirtualGamepadDriver = string.Equals(virtualGamepadDriverBundled, "1", StringComparison.Ordinal),
-          HasBundledUsbIpTransport = string.Equals(usbIpTransportBundled, "1", StringComparison.Ordinal)
+          HasBundledUsbIpTransport = string.Equals(usbIpTransportBundled, "1", StringComparison.Ordinal),
+          HasLocalGamepadCertificate = string.Equals(localGamepadPackage, "1", StringComparison.Ordinal) && IsCertificateThumbprint(localGamepadCertificateThumbprint),
+          LocalGamepadCertificateThumbprint = localGamepadCertificateThumbprint ?? string.Empty,
+          LocalGamepadCertificateSubject = ReadMsiProperty(packageHandle, "LOCAL_GAMEPAD_CERTIFICATE_SUBJECT") ?? string.Empty,
+          LocalGamepadDriverVersion = ReadMsiProperty(packageHandle, "LOCAL_GAMEPAD_DRIVER_VERSION") ?? string.Empty
         };
       } finally {
         MsiCloseHandle(packageHandle);
@@ -2720,11 +2812,96 @@ namespace VibeshineInstaller {
         }
       }
 
-      return installedProducts
+      return ResolveInstalledProductFacades(installedProducts,
+        code => MsiQueryProductState(NormalizeProductCode(code)) == MsiInstallStateDefault)
         .GroupBy(BuildProductRegistrationIdentity, StringComparer.OrdinalIgnoreCase)
         .Select(MergeInstalledProductGroup)
         .ToList();
     }
+
+    // The released 2.0.0 custom uninstall.exe entry is a facade for a hidden
+    // MSI, not a separate legacy installation. Match branded entries only to
+    // one live machine MSI of the same kind and verified executable root.
+    internal static List<InstalledProductInfo> ResolveInstalledProductFacades(
+      IEnumerable<InstalledProductInfo> registrations,
+      Func<string, bool> isLiveMsi) {
+      var products = registrations.ToList();
+      var resolved = new List<InstalledProductInfo>();
+      foreach (var product in products) {
+        if (product.IsWindowsInstaller
+            || (product.Kind != InstalledProductKind.Vibeshine && product.Kind != InstalledProductKind.Vibepollo)) {
+          resolved.Add(product);
+          continue;
+        }
+        var root = TryGetFullPathOrNull(product.InstallLocation);
+        var matches = products.Where(candidate => candidate.IsWindowsInstaller
+          && !candidate.IsPerUser && !product.IsPerUser
+          && candidate.Kind == product.Kind && root != null
+          && string.Equals(root, TryGetFullPathOrNull(candidate.InstallLocation), StringComparison.OrdinalIgnoreCase)
+          && isLiveMsi(candidate.ProductCode)).ToList();
+        if (matches.Select(candidate => NormalizeProductCode(candidate.ProductCode))
+            .Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1) {
+          throw new InvalidOperationException("Multiple live MSI products claim the installation at " + root + ". No changes were made.");
+        }
+        resolved.Add(matches.Count == 0 ? product : matches[0]);
+      }
+      return resolved.GroupBy(product => product.IsWindowsInstaller
+        ? "msi|" + NormalizeProductCode(product.ProductCode)
+        : BuildProductRegistrationIdentity(product), StringComparer.OrdinalIgnoreCase)
+        .Select(group => group.First()).ToList();
+    }
+
+    private static string ReadMsiRecordString(IntPtr record, uint field) {
+      uint length = 1024;
+      var value = new StringBuilder((int)length);
+      var result = MsiRecordGetString(record, field, value, ref length);
+      if (result == MsiErrorMoreData) {
+        value = new StringBuilder((int)++length);
+        result = MsiRecordGetString(record, field, value, ref length);
+      }
+      return result == 0 ? value.ToString() : string.Empty;
+    }
+
+    private static string ReadInstalledMsiRoot(string productCode) {
+      return ReadCachedMsiInstallRoot(TryGetProductLocalPackagePath(productCode), productCode, ReadRegisteredMsiComponentPath);
+    }
+
+    private static string ReadRegisteredMsiComponentPath(string productCode, string component) {
+      uint length = 32768;
+      var path = new StringBuilder((int)length);
+      // Component LOCAL is 3; product DEFAULT is 5. These are distinct
+      // Windows Installer states even for a healthy installed product.
+      return MsiGetComponentPath(productCode, component, path, ref length) == 3 ? path.ToString() : null;
+    }
+
+    internal static string ReadCachedMsiInstallRoot(string cache, string productCode, Func<string, string, string> componentPath) {
+      IntPtr database = IntPtr.Zero, view = IntPtr.Zero;
+      try {
+        if (string.IsNullOrWhiteSpace(cache) || MsiOpenDatabase(cache, IntPtr.Zero, out database) != 0) return null;
+        const string query = "SELECT `Component`.`ComponentId`, `File`.`FileName` FROM `Component`, `File` WHERE `Component`.`Component` = `File`.`Component_` AND `Component`.`KeyPath` = `File`.`File`";
+        if (MsiDatabaseOpenView(database, query, out view) != 0 || MsiViewExecute(view, IntPtr.Zero) != 0) return null;
+        IntPtr record;
+        while (MsiViewFetch(view, out record) == 0 && record != IntPtr.Zero) {
+          try {
+            var name = ReadMsiRecordString(record, 2).Split('|').Last();
+            if (!string.Equals(name, "sunshine.exe", StringComparison.OrdinalIgnoreCase)) continue;
+            var component = ReadMsiRecordString(record, 1);
+            var path = componentPath(productCode, component);
+            if (!string.IsNullOrWhiteSpace(path) && string.Equals(Path.GetFileName(path), "sunshine.exe", StringComparison.OrdinalIgnoreCase)) return Path.GetDirectoryName(path);
+          } finally { MsiCloseHandle(record); }
+        }
+      } catch { return null; }
+      finally {
+        if (view != IntPtr.Zero) { MsiViewClose(view); MsiCloseHandle(view); }
+        if (database != IntPtr.Zero) MsiCloseHandle(database);
+      }
+      return null;
+    }
+
+    [DllImport("msi.dll", CharSet = CharSet.Unicode)]
+    private static extern int MsiGetComponentPath(string productCode, string componentCode, StringBuilder path, ref uint length);
+    [DllImport("msi.dll", CharSet = CharSet.Unicode)]
+    private static extern uint MsiRecordGetString(IntPtr record, uint field, StringBuilder value, ref uint length);
 
     private static string BuildRegistryPath(RegistryKey hive, string rootPath, string subKeyName) {
       var hivePrefix = hive == Registry.LocalMachine ? "HKLM" : "HKCU";
@@ -2770,7 +2947,10 @@ namespace VibeshineInstaller {
             Kind = kind,
             IsWindowsInstaller = true,
             IsPerUser = hive == Registry.CurrentUser,
-            InstallLocation = ResolveInstallLocation(productKey, uninstallString, quietUninstallString),
+            InstallLocation = IsWindowsInstallerProduct(productKey) && hive == Registry.LocalMachine
+              && (kind == InstalledProductKind.Vibeshine || kind == InstalledProductKind.Vibepollo)
+              ? (ReadInstalledMsiRoot(subKeyName) ?? string.Empty)
+              : ResolveInstallLocation(productKey, uninstallString, quietUninstallString),
             UninstallString = uninstallString,
             QuietUninstallString = quietUninstallString,
             RegistryPath = BuildRegistryPath(hive, rootPath, subKeyName)
@@ -2811,7 +2991,10 @@ namespace VibeshineInstaller {
             Kind = kind,
             IsWindowsInstaller = IsWindowsInstallerProduct(productKey) && LooksLikeProductCode(subKeyName),
             IsPerUser = hive == Registry.CurrentUser,
-            InstallLocation = ResolveInstallLocation(productKey, uninstallString, quietUninstallString),
+            InstallLocation = IsWindowsInstallerProduct(productKey) && hive == Registry.LocalMachine
+              && (kind == InstalledProductKind.Vibeshine || kind == InstalledProductKind.Vibepollo)
+              ? (ReadInstalledMsiRoot(subKeyName) ?? string.Empty)
+              : ResolveInstallLocation(productKey, uninstallString, quietUninstallString),
             UninstallString = uninstallString,
             QuietUninstallString = quietUninstallString,
             RegistryPath = BuildRegistryPath(hive, rootPath, subKeyName)
@@ -3427,34 +3610,6 @@ namespace VibeshineInstaller {
         }
       }
 
-      StashedVibeshinePayload upgradeSourceStash;
-      var uninstallUpgradeSourceResult = TryPreUninstallProblematicUpgradeSourceVersion(
-        "install_remove_vibeshine_1146",
-        true,
-        false,
-        out upgradeSourceStash);
-      AdoptStashedPayload(ref stashedPreviousPayload, upgradeSourceStash);
-      if (uninstallUpgradeSourceResult != null) {
-        restartRequired |= uninstallUpgradeSourceResult.ExitCode == 3010;
-        if (!uninstallUpgradeSourceResult.Succeeded) {
-          string recoveryDetail;
-          if (TryRepairBustedMsiRegistration(
-            uninstallUpgradeSourceResult,
-            new[] { InstalledProductKind.Vibeshine },
-            "upgrade source pre-uninstall",
-            out recoveryDetail)) {
-            recoveryDetails.Add(recoveryDetail);
-          } else {
-            return ApplyStashedPayloadRecovery(new InstallerResult {
-              Operation = InstallerOperation.Install,
-              ExitCode = uninstallUpgradeSourceResult.ExitCode,
-              Message = BuildUpgradeSourcePreUninstallFailureMessage(uninstallUpgradeSourceResult.Message),
-              LogPath = uninstallUpgradeSourceResult.LogPath
-            }, stashedPreviousPayload, "install_restore_previous");
-          }
-        }
-      }
-
       var installResult = RunInstallAttempt(
         msiPath,
         installDirectory,
@@ -3463,7 +3618,7 @@ namespace VibeshineInstaller {
         installUsbIpTransport,
         saveInstallLogs,
         restartRequired,
-        "install");
+        "install", arguments);
 
       if (ShouldRetryInstallWithFreshPayload(arguments, msiPath, installResult)) {
         TryDeleteFile(msiPath);
@@ -3492,7 +3647,7 @@ namespace VibeshineInstaller {
           installUsbIpTransport,
           saveInstallLogs,
           restartRequired,
-          "install_recovery");
+          "install_recovery", arguments);
         msiPath = refreshedMsiPath;
         if (!installResult.Succeeded && !string.IsNullOrWhiteSpace(initialLogPath)) {
           installResult.Message += " Initial attempt log: " + initialLogPath;
@@ -3523,7 +3678,7 @@ namespace VibeshineInstaller {
           installUsbIpTransport,
           saveInstallLogs,
           restartRequired,
-          "install_firewall_cleanup_recovery");
+          "install_firewall_cleanup_recovery", arguments);
         if (!installResult.Succeeded && !string.IsNullOrWhiteSpace(initialLogPath)) {
           installResult.Message += " Initial attempt log: " + initialLogPath;
         }
@@ -3546,7 +3701,7 @@ namespace VibeshineInstaller {
             installUsbIpTransport,
             saveInstallLogs,
             restartRequired,
-            "install_registration_recovery");
+            "install_registration_recovery", arguments);
           if (!installResult.Succeeded && !string.IsNullOrWhiteSpace(initialLogPath)) {
             installResult.Message += " Initial attempt log: " + initialLogPath;
           }
@@ -3557,6 +3712,33 @@ namespace VibeshineInstaller {
       return ApplyStashedPayloadRecovery(installResult, stashedPreviousPayload, "install_restore_previous");
     }
 
+    private static bool IsCertificateThumbprint(string value) {
+      return value != null && value.Length == 40 && value.All(character =>
+        (character >= '0' && character <= '9') || (character >= 'A' && character <= 'F'));
+    }
+
+    internal static void ApplySelectedGamepadTrust(InstallerArguments arguments, PayloadMsiInfo payload, bool installGamepad) {
+      var approved = installGamepad && payload != null && payload.HasLocalGamepadCertificate
+        && string.Equals(payload.LocalGamepadCertificateThumbprint, "7F1868BF86698A8674F40E686B02C8C702BD3B88", StringComparison.OrdinalIgnoreCase);
+      arguments.AllowLocalGamepadCertificateTrust = approved;
+      arguments.ConsentCertificateThumbprint = approved ? payload.LocalGamepadCertificateThumbprint : string.Empty;
+    }
+    internal static IEnumerable<string> BuildDriverSelectionArguments(InstallerArguments arguments, bool useVirtualDisplay, bool installGamepad) {
+      return new[] {
+        "INSTALL_DISPLAY_DRIVERS=" + (arguments == null || arguments.InstallDisplayDriversRequested ? "1" : "0"),
+        "INSTALL_VIRTUAL_DISPLAY_DRIVER=" + (useVirtualDisplay ? "1" : "0"),
+        "INSTALL_VIRTUAL_GAMEPAD_DRIVER=" + (installGamepad ? "1" : "0")
+      };
+    }
+    private static IEnumerable<string> BuildLocalGamepadTrustArguments(InstallerArguments arguments, bool installGamepad) {
+      var consent = installGamepad && arguments != null && arguments.AllowLocalGamepadCertificateTrust
+        && IsCertificateThumbprint(arguments.ConsentCertificateThumbprint);
+      return new[] {
+        "ALLOW_LOCAL_GAMEPAD_CERTIFICATE_TRUST=" + (consent ? "1" : "0"),
+        "LOCAL_GAMEPAD_CERTIFICATE_THUMBPRINT=" + (consent ? arguments.ConsentCertificateThumbprint : "none")
+      };
+    }
+
     private static InstallerResult RunInstallAttempt(
       string msiPath,
       string installDirectory,
@@ -3565,7 +3747,7 @@ namespace VibeshineInstaller {
       bool installUsbIpTransport,
       bool saveInstallLogs,
       bool competingProductsRequireRestart,
-      string logPhase) {
+      string logPhase, InstallerArguments arguments = null) {
       var logPath = BuildLogPath(logPhase);
       var args = new List<string> {
         "/i",
@@ -3575,13 +3757,14 @@ namespace VibeshineInstaller {
         "/l*v",
         logPath,
         CreatePropertyArgument("INSTALL_ROOT", installDirectory),
-        "INSTALL_VIRTUAL_DISPLAY_DRIVER=" + (installVirtualDisplayDriver ? "1" : "0"),
-        "INSTALL_VIRTUAL_GAMEPAD_DRIVER=" + (installVirtualGamepadDriver ? "1" : "0"),
         "INSTALL_USBIP_TRANSPORT=" + (installUsbIpTransport ? "1" : "0"),
         "SKIP_REMOVE_CONFLICTING_PRODUCTS=1",
         "REBOOT=ReallySuppress",
         "SUPPRESSMSGBOXES=1"
       };
+
+      args.AddRange(BuildDriverSelectionArguments(arguments, installVirtualDisplayDriver, installVirtualGamepadDriver));
+      args.AddRange(BuildLocalGamepadTrustArguments(arguments, installVirtualGamepadDriver));
 
       AppendInstallerLogMessage(logPath, "Quiescing Vibeshine/Sunshine services and helper processes before MSI install attempt.");
       TryStopRelatedServicesAndProcesses(logPath);
@@ -5273,6 +5456,7 @@ namespace VibeshineInstaller {
       if (!HasProperty(cliArgs, "SUPPRESSMSGBOXES")) {
         cliArgs.Add("SUPPRESSMSGBOXES=1");
       }
+      PreserveCliInstallDirectory(cliArgs);
       PreserveCliVirtualDisplayDriverSelection(cliArgs);
 
       var logPath = TryGetMsiLogPath(cliArgs);
@@ -5313,41 +5497,6 @@ namespace VibeshineInstaller {
       }
 
       StashedVibeshinePayload stashedPreviousPayload = null;
-      if (ShouldPreUninstallProblematicUpgradeSource(cliArgs)) {
-        StashedVibeshinePayload upgradeSourceStash;
-        var uninstallUpgradeSourceResult = TryPreUninstallProblematicUpgradeSourceVersion(
-          "cli_remove_vibeshine_1146",
-          arguments.IsCliQuietMode(),
-          true,
-          out upgradeSourceStash);
-        AdoptStashedPayload(ref stashedPreviousPayload, upgradeSourceStash);
-        if (uninstallUpgradeSourceResult != null) {
-          if (!uninstallUpgradeSourceResult.Succeeded) {
-            if (ShouldRerunCliElevatedForMsiRecovery(uninstallUpgradeSourceResult, new[] { InstalledProductKind.Vibeshine })) {
-              return ApplyStashedPayloadRecovery(
-                RunElevatedBootstrapperCli(arguments),
-                stashedPreviousPayload,
-                "cli_restore_previous");
-            }
-            string recoveryDetail;
-            if (TryRepairBustedMsiRegistration(
-              uninstallUpgradeSourceResult,
-              new[] { InstalledProductKind.Vibeshine },
-              "CLI upgrade source pre-uninstall",
-              out recoveryDetail)) {
-              recoveryDetails.Add(recoveryDetail);
-            } else {
-              return ApplyStashedPayloadRecovery(new InstallerResult {
-                Operation = InstallerOperation.Install,
-                ExitCode = uninstallUpgradeSourceResult.ExitCode,
-                Message = BuildUpgradeSourcePreUninstallFailureMessage(uninstallUpgradeSourceResult.Message),
-                LogPath = uninstallUpgradeSourceResult.LogPath
-              }, stashedPreviousPayload, "cli_restore_previous");
-            }
-          }
-          vibeshineSourceRequiresRestart |= uninstallUpgradeSourceResult.ExitCode == 3010;
-        }
-      }
       if (uninstallCompetingProducts && !HasProperty(cliArgs, "SKIP_REMOVE_CONFLICTING_PRODUCTS")) {
         cliArgs.Add("SKIP_REMOVE_CONFLICTING_PRODUCTS=1");
       }
@@ -5572,6 +5721,13 @@ namespace VibeshineInstaller {
       return ApplyStashedPayloadRecovery(cliResult, stashedPreviousPayload, "cli_restore_previous");
     }
 
+    private static void PreserveCliInstallDirectory(List<string> cliArgs) {
+      if (!IsMsiInstallOperation(cliArgs) || HasProperty(cliArgs, "INSTALL_ROOT")) return;
+      var installed = GetInstalledVibeshineProduct();
+      if (installed != null && !string.IsNullOrWhiteSpace(installed.InstallLocation))
+        cliArgs.Add(CreatePropertyArgument("INSTALL_ROOT", installed.InstallLocation));
+    }
+
     private static void PreserveCliVirtualDisplayDriverSelection(List<string> cliArgs) {
       if (!IsMsiInstallOperation(cliArgs) || HasProperty(cliArgs, "INSTALL_VIRTUAL_DISPLAY_DRIVER")) {
         return;
@@ -5739,15 +5895,6 @@ namespace VibeshineInstaller {
 
     private static string BuildCompetingProductUninstallFailureMessage(string uninstallMessage) {
       var prefix = "Failed to uninstall Apollo, Vibepollo, or Sunshine before starting Vibeshine installation.";
-      if (string.IsNullOrWhiteSpace(uninstallMessage)) {
-        return prefix;
-      }
-      return prefix + " " + uninstallMessage;
-    }
-
-    private static string BuildUpgradeSourcePreUninstallFailureMessage(string uninstallMessage) {
-      var prefix = "Failed to uninstall Vibeshine 1.14.6 before starting installation."
-        + " This version requires uninstall/reinstall to avoid web UI files being removed during upgrade.";
       if (string.IsNullOrWhiteSpace(uninstallMessage)) {
         return prefix;
       }
@@ -6017,31 +6164,6 @@ namespace VibeshineInstaller {
         new[] { InstalledProductKind.Vibeshine });
     }
 
-    private static InstallerResult TryPreUninstallProblematicUpgradeSourceVersion(
-      string logPhase,
-      bool hiddenWindow,
-      bool requestElevationIfNeeded,
-      out StashedVibeshinePayload stashedPayload) {
-      stashedPayload = null;
-      var installedVibeshine = GetInstalledVibeshineProduct();
-      if (!RequiresPreUninstallUpgradeWorkaround(installedVibeshine)) {
-        return null;
-      }
-
-      stashedPayload = TryStashInstalledProductPayload(installedVibeshine, logPhase + "_stash");
-      if (stashedPayload == null) {
-        return BuildRollbackPreservationFailure(installedVibeshine);
-      }
-      return UninstallInstalledProducts(
-        logPhase,
-        hiddenWindow,
-        requestElevationIfNeeded,
-        false,
-        false,
-        false,
-        new[] { InstalledProductKind.Vibeshine });
-    }
-
     private static bool RequiresPreUninstallDowngradeWorkaround(InstalledProductInfo installedProduct, string msiPath) {
       if (installedProduct == null || installedProduct.Kind != InstalledProductKind.Vibeshine || installedProduct.Version == null) {
         return false;
@@ -6083,24 +6205,6 @@ namespace VibeshineInstaller {
       return LooksLikeProductCode(installed)
         && LooksLikeProductCode(payload)
         && !string.Equals(installed, payload, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool RequiresPreUninstallUpgradeWorkaround(InstalledProductInfo installedProduct) {
-      if (installedProduct == null || installedProduct.Kind != InstalledProductKind.Vibeshine || installedProduct.Version == null) {
-        return false;
-      }
-
-      if (installedProduct.Version.Major != UpgradeSourcePreUninstallVersion.Major
-          || installedProduct.Version.Minor != UpgradeSourcePreUninstallVersion.Minor) {
-        return false;
-      }
-
-      // The 1.14.6 registration may surface either as a raw build (6, from a
-      // four-part ProductVersion string) or ordinal-encoded (600..699, when
-      // ParseVersion mapped a three-part DisplayVersion).
-      return installedProduct.Version.Build == UpgradeSourcePreUninstallVersion.Build
-        || (installedProduct.Version.Build >= UpgradeSourcePreUninstallVersion.Build * 100
-          && installedProduct.Version.Build <= UpgradeSourcePreUninstallVersion.Build * 100 + 99);
     }
 
     private static InstallerResult UninstallCompetingProducts(
@@ -6147,6 +6251,10 @@ namespace VibeshineInstaller {
             "REBOOT=ReallySuppress",
             "SUPPRESSMSGBOXES=1"
           };
+          // Preserve driver devices while replacing the application, including VHF root cleanup.
+          if (logPhase.StartsWith("install_", StringComparison.OrdinalIgnoreCase) || logPhase.StartsWith("cli_remove_", StringComparison.OrdinalIgnoreCase)) {
+            args.Add("UPGRADINGPRODUCTCODE=1");
+          }
           AppendInstallerLogMessage(logPath, "Quiescing Vibeshine/Sunshine services and helper processes before MSI uninstall attempt.");
           TryStopRelatedServicesAndProcesses(logPath);
           CleanupStaleComponentClientsForInstallLocation(product.InstallLocation, logPath);
@@ -6253,6 +6361,10 @@ namespace VibeshineInstaller {
           "SUPPRESSMSGBOXES=1"
         };
 
+        // Preserve driver devices while replacing the application, including VHF root cleanup.
+        if (logPhase.StartsWith("install_", StringComparison.OrdinalIgnoreCase) || logPhase.StartsWith("cli_remove_", StringComparison.OrdinalIgnoreCase)) {
+          args.Add("UPGRADINGPRODUCTCODE=1");
+        }
         AppendInstallerLogMessage(logPath, "Quiescing Vibeshine/Sunshine services and helper processes before MSI uninstall attempt.");
         TryStopRelatedServicesAndProcesses(logPath);
         CleanupStaleComponentClientsForInstallLocation(product.InstallLocation, logPath);
@@ -6937,16 +7049,6 @@ namespace VibeshineInstaller {
         || string.Equals(operation, "/package", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool ShouldPreUninstallProblematicUpgradeSource(List<string> args) {
-      var operation = args.FirstOrDefault(IsOperationSwitch);
-      if (string.IsNullOrWhiteSpace(operation)) {
-        return false;
-      }
-
-      return string.Equals(operation, "/i", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(operation, "/package", StringComparison.OrdinalIgnoreCase);
-    }
-
     private static bool ShouldPreUninstallVibeshineInstallSource(List<string> args) {
       return IsMsiInstallOperation(args);
     }
@@ -6984,7 +7086,7 @@ namespace VibeshineInstaller {
 
       try {
         var lines = File.ReadAllLines(installLogPath);
-        if (installVirtualDisplayDriver) {
+        if (installVirtualDisplayDriver || lines.Any(line => line != null && line.IndexOf("VIRTUAL_DISPLAY_DRIVER_WARNING", StringComparison.OrdinalIgnoreCase) >= 0)) {
           var virtualDisplayDriverFailed = lines.Any(line =>
             !string.IsNullOrWhiteSpace(line)
             && line.IndexOf("CustomAction InstallVirtualDisplayDriver returned actual error code", StringComparison.OrdinalIgnoreCase) >= 0);
@@ -6998,7 +7100,7 @@ namespace VibeshineInstaller {
             failures.Add(virtualDisplayDriverRestartRequired
               ? "Virtual display driver installed, but Windows restart is required before virtual display can function."
               : "Virtual display driver setup failed. Virtual display may be unavailable.");
-            var detail = ExtractDriverFailureDetail(lines, "[SunshineVirtualDisplay]");
+            var detail = ExtractDriverFailureDetail(lines, installVirtualDisplayDriver ? "[SunshineVirtualDisplay]" : "[SudoVDA]");
             if (!string.IsNullOrWhiteSpace(detail)) {
               failures.Add("Driver detail: " + detail);
             }
@@ -7036,7 +7138,10 @@ namespace VibeshineInstaller {
         var usbIpTransportWarning = lines.Any(line =>
           !string.IsNullOrWhiteSpace(line)
           && line.IndexOf("USBIP_TRANSPORT_WARNING", StringComparison.OrdinalIgnoreCase) >= 0);
-        if (usbIpTransportFailed || usbIpTransportRestartRequired || usbIpTransportWarning) {
+        // Optional runtime readiness is diagnostic only. A restart marker still
+        // promotes the successful MSI result to 3010, without a failure dialog.
+        // Keep actual setup errors/warnings visible; do not suppress exceptions.
+        if (usbIpTransportFailed || usbIpTransportWarning) {
           failures.Add(usbIpTransportRestartRequired
             ? "USB/IP driver installed, but Windows restart is required before DualSense USB waveform haptics can function."
             : "USB/IP driver setup failed. DualSense USB waveform haptics may be unavailable.");
@@ -7189,10 +7294,16 @@ namespace VibeshineInstaller {
         "--internal-elevated-install",
         "--internal-install-path",
         installDirectory,
+        "--internal-install-display-drivers",
+        arguments.InstallDisplayDriversRequested ? "1" : "0",
         "--internal-install-virtual-display-driver",
         installVirtualDisplayDriver ? "1" : "0",
         "--internal-install-virtual-gamepad-driver",
         installVirtualGamepadDriver ? "1" : "0",
+        "--internal-gamepad-certificate-trust",
+        arguments.AllowLocalGamepadCertificateTrust && installVirtualGamepadDriver ? "1" : "0",
+        "--internal-gamepad-consent-thumbprint",
+        arguments.ConsentCertificateThumbprint ?? string.Empty,
         "--internal-install-usbip-transport",
         installUsbIpTransport ? "1" : "0",
         "--internal-install-save-logs",

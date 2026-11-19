@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Vibeshine Tray
+Comment=Status and controls for the Vibeshine streaming host
+Exec=@CMAKE_INSTALL_FULL_BINDIR@/vibeshine-tray
+TryExec=@CMAKE_INSTALL_FULL_BINDIR@/vibeshine-tray
+Icon=@PROJECT_FQDN@
+Terminal=false
+Categories=RemoteAccess;Network;
+X-KDE-autostart-after=panel

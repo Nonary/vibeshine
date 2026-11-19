@@ -245,11 +245,14 @@ namespace SunshinePlaynite
         {
             log.Info("Pipe server starting");
             var security = ConnectorPipeTransport.CreatePipeSecurity();
+            var retry = new ConnectorRetryPolicy();
+            var elapsed = Stopwatch.StartNew();
             while (!token.IsCancellationRequested)
             {
                 NamedPipeServerStream control = null;
                 NamedPipeServerStream data = null;
                 PipeConnection unownedConnection = null;
+                string failure = null;
                 try
                 {
                     control = ConnectorPipeTransport.CreateServer(ControlPipeName, security);
@@ -295,15 +298,16 @@ namespace SunshinePlaynite
                         unownedConnection = null;
                     }
                     if (previous != null) previous.Dispose();
+                    retry.Reset();
                 }
                 catch (OperationCanceledException) { break; }
                 catch (TimeoutException ex)
                 {
-                    if (!token.IsCancellationRequested) log.Warn("Pipe handshake timed out: " + ex.Message);
+                    failure = "Pipe handshake timed out: " + ex.Message;
                 }
                 catch (Exception ex)
                 {
-                    if (!token.IsCancellationRequested) log.Warn("Pipe connection failed: " + ex.Message);
+                    failure = "Pipe connection failed: " + ex.Message;
                 }
                 finally
                 {
@@ -312,6 +316,15 @@ namespace SunshinePlaynite
                     if (unownedConnection != null) unownedConnection.Dispose();
                     if (control != null) control.Dispose();
                     if (data != null) data.Dispose();
+                }
+                if (failure != null && !token.IsCancellationRequested)
+                {
+                    bool report;
+                    var delay = retry.Failed(elapsed.ElapsedMilliseconds, out report);
+                    if (report) log.Warn(failure + " (retrying; repeated failures are logged at most every 30 seconds)");
+                    // Release all pending pipes before waiting. Cancellation wakes this
+                    // wait immediately, including when another plugin owns the pipe.
+                    if (token.WaitHandle.WaitOne(delay)) break;
                 }
             }
             log.Info("Pipe server exiting");
@@ -720,4 +733,27 @@ namespace SunshinePlaynite
         }
 
     }
+
+    // One policy per server run: a successful accepted connection resets both
+    // the retry delay and the initial-error diagnostic.
+    internal sealed class ConnectorRetryPolicy
+    {
+        private int delayMs;
+        private long nextLogMs;
+
+        public int Failed(long elapsedMs, out bool report)
+        {
+            report = delayMs == 0 || elapsedMs >= nextLogMs;
+            if (report) nextLogMs = elapsedMs + 30000;
+            delayMs = delayMs == 0 ? 250 : Math.Min(delayMs * 2, 5000);
+            return delayMs;
+        }
+
+        public void Reset()
+        {
+            delayMs = 0;
+            nextLogMs = 0;
+        }
+    }
+
 }

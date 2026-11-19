@@ -4,6 +4,46 @@ param([switch]$InstallerBestEffort, [switch]$ValidateOnly)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'package.ps1')
 
+# DRIVER_INTEROP_COMPILER_BEGIN
+# Windows PowerShell 5's Add-Type uses CodeDOM's ANSI environment block and
+# rejects otherwise valid environments above 65535 bytes (#610). Invoke the
+# same framework compiler directly so Windows inherits the full environment.
+# Keep this helper inline: the driver scripts also ship as standalone files.
+function Add-DriverInteropType {
+    param(
+        [Parameter(Mandatory = $true)][string]$TypeDefinition,
+        [string[]]$ReferencedAssemblies = @('System', 'System.Core')
+    )
+    # PowerShell Core compiles in-process and has no Framework csc.exe.
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        Add-Type @PSBoundParameters
+        return
+    }
+    $runtime = [Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
+    $compiler = Join-Path $runtime 'csc.exe'
+    $temporary = Join-Path ([IO.Path]::GetTempPath()) ('driver-interop-' + [Guid]::NewGuid().ToString('N'))
+    $null = New-Item -ItemType Directory -Path $temporary -ErrorAction Stop
+    try {
+        $source = Join-Path $temporary 'interop.cs'
+        $assembly = Join-Path $temporary 'interop.dll'
+        [IO.File]::WriteAllText($source, $TypeDefinition, [Text.UTF8Encoding]::new($true))
+        $compilerArguments = @('/nologo', '/noconfig', '/target:library', "/out:$assembly")
+        foreach ($reference in $ReferencedAssemblies) {
+            $compilerArguments += '/reference:' + (Join-Path $runtime ($reference + '.dll'))
+        }
+        $compilerArguments += $source
+        $diagnostics = & $compiler @compilerArguments 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Driver interop compilation failed (exit $LASTEXITCODE): $($diagnostics -join [Environment]::NewLine)"
+        }
+        # Load bytes so no assembly file remains locked when the scratch is removed.
+        $null = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($assembly))
+    } finally {
+        Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction Stop
+    }
+}
+# DRIVER_INTEROP_COMPILER_END
+
 function Write-UsbIpWarning([string]$Message) {
     Write-Output "[VibeshineUsbIp] USBIP_TRANSPORT_WARNING: $Message"
 }
@@ -25,7 +65,7 @@ try {
 
     # SetupAPI implements only the root-device registration performed by the
     # upstream devnode utility. No test certificates or unsigned kernel code.
-    Add-Type -TypeDefinition @'
+    Add-DriverInteropType -TypeDefinition @'
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
@@ -169,7 +209,7 @@ public static class VibeshineUsbIpSetup {
                 Write-Output '[VibeshineUsbIp] Reusing the existing shared USB/IP transport without changing it.'
                 if ($state) { Remove-Item -LiteralPath $stateKey -Force }
             } else {
-                Write-UsbIpWarning 'Shared USB/IP drivers already exist but the controller is unavailable. Restart Windows or repair that installation; Vibeshine leaves it unchanged.'
+                Write-Output '[VibeshineUsbIp] USBIP_TRANSPORT_INFO: Shared USB/IP drivers already exist but the controller is unavailable. Vibeshine leaves them unchanged. Optional DualSense USB waveform haptics may be unavailable until Windows is restarted or that installation is repaired.'
             }
             exit 0
         }
@@ -194,7 +234,7 @@ public static class VibeshineUsbIpSetup {
         for ($i=0; $i -lt 40 -and ![VibeshineUsbIpSetup]::Available(); ++$i) { Start-Sleep -Milliseconds 250 }
         if ($rebootRequired) { Write-Output '[VibeshineUsbIp] USBIP_TRANSPORT_RESTART_REQUIRED' }
         if (![VibeshineUsbIpSetup]::Available()) {
-            Write-UsbIpWarning 'Driver installation completed but the controller is not ready. Restart Windows before using DualSense USB waveform haptics.'
+            Write-Output '[VibeshineUsbIp] USBIP_TRANSPORT_INFO: Driver installation completed but the controller is not ready. Restart Windows before using optional DualSense USB waveform haptics.'
             Write-Output '[VibeshineUsbIp] USBIP_TRANSPORT_RESTART_REQUIRED'
         } else {
             Remove-Item -LiteralPath $stateKey -Force

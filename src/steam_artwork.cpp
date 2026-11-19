@@ -1,4 +1,5 @@
 /** @file src/steam_artwork.cpp */
+#include "file_clock.h"
 #include "steam_artwork.h"
 #include "provider_scan_protocol.h"
 
@@ -38,6 +39,7 @@ extern "C" {
 
 #ifdef _WIN32
   #include <windows.h>
+  #include "platform/windows/steam_discovery.h"
 #endif
 
 namespace fs = std::filesystem;
@@ -130,7 +132,7 @@ namespace {
     if (ec) return std::nullopt;
     const auto size = fs::file_size(canonical, ec);
     if (ec) return std::nullopt;
-    const auto mtime = fs::last_write_time(canonical, ec).time_since_epoch().count();
+    const auto mtime = file_clock::count_string(fs::last_write_time(canonical, ec).time_since_epoch().count());
     if (ec) return std::nullopt;
     return platf::steam::artwork::source_fingerprint_t {canonical.generic_string(), size, mtime};
   }
@@ -147,7 +149,7 @@ namespace {
       try {
         if (key == "path") out.path = value;
         else if (key == "size") out.size = static_cast<std::uintmax_t>(std::stoull(value));
-        else if (key == "mtime") out.mtime = static_cast<std::intmax_t>(std::stoll(value));
+        else if (key == "mtime") out.mtime = value;
       } catch (...) {
         return false;
       }
@@ -392,8 +394,7 @@ namespace {
   }
 #endif
 
-  std::optional<std::vector<std::uint8_t>> convert_to_png(const fs::path &source) {
-    const auto bytes = read_bytes(source);
+  std::optional<std::vector<std::uint8_t>> convert_to_png(const fs::path &source, const std::vector<std::uint8_t> &bytes) {
     if (bytes.empty()) return std::nullopt;
     const auto id = codec_id_for(source, bytes);
     // A validated PNG is already in the client format. Preserve it directly
@@ -589,12 +590,12 @@ namespace {
     return total;
   }
 
-  std::optional<std::vector<std::uint8_t>> fetch_remote(const std::string &url) {
+  platf::steam::artwork::remote_fetch_result_t fetch_remote(const std::string &url) {
     CURL *curl = curl_easy_init();
-    if (!curl) return std::nullopt;
+    if (!curl) return {};
     if (!http::configure_curl_tls(curl)) {
       curl_easy_cleanup(curl);
-      return std::nullopt;
+      return {};
     }
     curl_buffer_t buffer;
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -614,48 +615,72 @@ namespace {
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     curl_easy_cleanup(curl);
-    if (result != CURLE_OK || buffer.overflow || status < 200 || status >= 300 || buffer.bytes.empty()) {
-      return std::nullopt;
+    if (result == CURLE_OK && !buffer.overflow && status == 404) {
+      return {platf::steam::artwork::remote_fetch_status::not_found};
     }
-    return std::move(buffer.bytes);
+    if (result != CURLE_OK || buffer.overflow || status < 200 || status >= 300 || buffer.bytes.empty()) return {};
+    return {platf::steam::artwork::remote_fetch_status::success, std::move(buffer.bytes)};
   }
 #else
-  std::optional<std::vector<std::uint8_t>> fetch_remote(const std::string &) {
+  platf::steam::artwork::remote_fetch_result_t fetch_remote(const std::string &) {
     // Component tests inject a fetcher; builds without the application HTTP
     // stack remain offline by construction.
-    return std::nullopt;
+    return {};
   }
 #endif
 
-  fs::path obtain_remote_portrait(std::uint32_t app_id, const fs::path &appdata,
+  // Newer apps publish artwork only under a content-hash directory, so the
+  // fixed CDN path 404s. Steam caches them locally as <appid>/<hash>/<file>,
+  // and the CDN serves <file>_2x.jpg from the same hash directory.
+  std::string hashed_portrait_url(std::uint32_t app_id, const fs::path &local_source) {
+    const auto hash = local_source.parent_path().filename().string();
+    const auto stem = local_source.stem().string();
+    if (hash.size() != 40 || !std::all_of(hash.begin(), hash.end(), [](unsigned char ch) {
+          return std::isdigit(ch) || (ch >= 'a' && ch <= 'f');
+        }) ||
+        (stem != "library_600x900" && stem != "library_capsule")) {
+      return {};
+    }
+    return "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/" +
+           std::to_string(app_id) + "/" + hash + "/" + stem + "_2x.jpg";
+  }
+
+  fs::path obtain_remote_portrait(std::uint32_t app_id, const fs::path &local_source, const fs::path &appdata,
                                   const platf::steam::artwork::remote_fetcher_t &injected_fetcher) {
     if (app_id == 0) return {};
-    const auto cache = platf::steam::artwork::remote_cache_path(appdata, app_id);
+    const auto hashed = hashed_portrait_url(app_id, local_source);
+    const auto base_cache = platf::steam::artwork::remote_cache_path(appdata, app_id);
+    // Never reuse an app-ID-only cache for a content-hashed source: it may
+    // have been populated by a different hash under an earlier build.
+    const auto cache = hashed.empty() ? base_cache : fs::path {
+      base_cache.string() + "." + local_source.parent_path().filename().string() + "." + local_source.stem().string()
+    };
     const auto failure = cache.string() + ".failed";
     std::error_code ec;
     fs::create_directories(cache.parent_path(), ec);
-    // Steam's CDN asset is immutable for the app ID in practice. Treat the
-    // validated file as a stable source and fetch only when it is absent or
-    // unusable; the 30-second catalog poll therefore never redownloads it.
+    // Hash-scoped paths also scope failures; a new source can retry immediately.
     if (regular(cache) && full_portrait(cache)) return cache;
     if (recent_failure_marker(failure)) return {};
 
     const auto fetcher = injected_fetcher ? injected_fetcher : fetch_remote;
-    const auto bytes = fetcher(platf::steam::artwork::remote_portrait_url(app_id));
-    if (!bytes || bytes->empty() || bytes->size() > max_remote_bytes) {
+    auto result = fetcher(platf::steam::artwork::remote_portrait_url(app_id));
+    if (result.status == platf::steam::artwork::remote_fetch_status::not_found && !hashed.empty()) {
+      result = fetcher(hashed);
+    }
+    if (result.status != platf::steam::artwork::remote_fetch_status::success || result.bytes.empty() || result.bytes.size() > max_remote_bytes) {
       mark_remote_failure(failure);
       return {};
     }
 
     const auto temporary = cache.string() + ".download." + unique_suffix();
-    if (!write_output(temporary, *bytes)) {
+    if (!write_output(temporary, result.bytes)) {
       mark_remote_failure(failure);
       return {};
     }
     const auto downloaded = read_bytes(temporary);
     const auto downloaded_id = codec_id_for(temporary, downloaded);
     const bool strict_png_ok = downloaded_id != AV_CODEC_ID_PNG || valid_png_bytes(downloaded);
-    const auto converted = strict_png_ok ? convert_to_png(temporary) : std::nullopt;
+    const auto converted = strict_png_ok ? convert_to_png(temporary, downloaded) : std::nullopt;
     const auto dimensions = converted ? png_dimensions(*converted) : std::nullopt;
     if (!dimensions || dimensions->width < full_portrait_width || dimensions->height < full_portrait_height ||
         !replace_atomically(temporary, cache)) {
@@ -670,9 +695,19 @@ namespace {
 
 namespace platf::steam::artwork {
   std::optional<std::vector<std::uint8_t>> export_png(const fs::path &source) {
-    std::error_code ec;
-    if (!fs::is_regular_file(source, ec) || fs::file_size(source, ec) > max_remote_bytes || ec) return std::nullopt;
-    const auto png = convert_to_png(source);
+    const auto read_source = [&]() {
+      std::error_code ec;
+      if (!fs::is_regular_file(source, ec) || fs::file_size(source, ec) > max_remote_bytes || ec) return std::vector<std::uint8_t> {};
+      return read_bytes(source);
+    };
+    const auto bytes = [&]() {
+#ifdef _WIN32
+      return windows_discovery::read_user_source(read_source);
+#else
+      return read_source();
+#endif
+    }();
+    const auto png = convert_to_png(source, bytes);
     if (!png || png->size() > max_remote_bytes) return std::nullopt;
     return png;
   }
@@ -728,9 +763,17 @@ namespace platf::steam::artwork {
     return appdata / "covers" / ("steam_" + std::to_string(app_id) + ".png");
   }
 
-  sync_result_t sync_to(const fs::path &source, const fs::path &output) {
+  static sync_result_t sync_to_impl(const fs::path &source, const fs::path &output, bool trusted_cache) {
     sync_result_t result;
-    const auto fp = fingerprint(source);
+    const auto read_source = [trusted_cache](auto read) {
+#ifdef _WIN32
+      if (!trusted_cache) return windows_discovery::read_user_source(read);
+#else
+      (void) trusted_cache;
+#endif
+      return read();
+    };
+    const auto fp = read_source([&]() { return fingerprint(source); });
     if (!fp) {
       std::error_code ec;
       fs::remove(sidecar_path(output), ec);
@@ -745,7 +788,8 @@ namespace platf::steam::artwork {
       result.reused = true;
       return result;
     }
-    const auto converted = convert_to_png(source);
+    const auto bytes = read_source([&]() { return read_bytes(source); });
+    const auto converted = convert_to_png(source, bytes);
     if (!converted || !write_output(output, *converted)) {
       fs::remove(sidecar_path(output), ec);
       return result;
@@ -754,6 +798,10 @@ namespace platf::steam::artwork {
     result.converted = true;
     write_meta(sidecar_path(output), *fp);
     return result;
+  }
+
+  sync_result_t sync_to(const fs::path &source, const fs::path &output) {
+    return sync_to_impl(source, output, false);
   }
 
   sync_result_t sync(std::uint32_t app_id, const fs::path &source, const fs::path &appdata) {
@@ -772,8 +820,15 @@ namespace platf::steam::artwork {
       // it: use the official fixed-origin 600x900 CDN asset when available,
       // retaining the local image as an offline fallback.
       fs::path effective_source = source;
-      if (source.empty() || !full_portrait(source)) {
-        const auto remote = obtain_remote_portrait(game.app_id, appdata, fetcher);
+      const auto full_source_portrait = [&]() {
+#ifdef _WIN32
+        return windows_discovery::read_user_source([&]() { return full_portrait(source); });
+#else
+        return full_portrait(source);
+#endif
+      };
+      if (source.empty() || !full_source_portrait()) {
+        const auto remote = obtain_remote_portrait(game.app_id, game.artwork_path, appdata, fetcher);
         if (!remote.empty()) effective_source = remote;
       }
       // Keep the last converted cover through transient Steam cache/CDN failures.
@@ -788,7 +843,10 @@ namespace platf::steam::artwork {
         game.artwork_client_path = source;
         continue;
       }
-      const auto result = sync(game.app_id, effective_source, appdata);
+      // Only our fixed-origin CDN cache is a trusted service-owned source.
+      // User Steam paths are read under their user's token; cache writes happen
+      // after that scope ends so protected appdata permissions remain intact.
+      const auto result = sync_to_impl(effective_source, cached, effective_source != source);
       if (!result.client_path.empty()) {
         game.artwork_client_path = result.client_path;
       }

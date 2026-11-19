@@ -5,12 +5,14 @@
 #pragma once
 
 // standard includes
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <utility>
 #include <vector>
 
 // local includes
+#include "input_session_config.h"
 #include "platform/common.h"
 #include "thread_safe.h"
 
@@ -30,7 +32,13 @@ namespace input {
 
   bool probe_gamepads();
 
-  std::shared_ptr<input_t> alloc(safe::mail_t mail, bool persist_gamepads = false);
+  std::shared_ptr<input_t> alloc(safe::mail_t mail, guide_button_config_t guide_button, bool persist_gamepads = false);
+
+  /**
+   * @brief Whether any gamepad slot of this input context is currently allocated.
+   * @details Reads an atomic summary published by the input worker; no gamepad state is shared.
+   */
+  bool has_gamepad(const std::shared_ptr<input_t> &input);
 
   struct touch_port_t: public platf::touch_port_t {
     int env_width;
@@ -46,8 +54,13 @@ namespace input {
     int env_logical_width;
     int env_logical_height;
 
+    std::uint64_t capture_generation = 0;
+    std::uint64_t geometry_sequence = 0;
+    bool geometry_valid = true;
+    platf::input_geometry_target_identity_t geometry_target;
+
     explicit operator bool() const {
-      return width != 0 && height != 0 && env_width != 0 && env_height != 0;
+      return geometry_valid && width != 0 && height != 0 && env_width != 0 && env_height != 0;
     }
   };
 

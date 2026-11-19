@@ -97,6 +97,13 @@ else()
     find_package(Udev)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        include("${CMAKE_CURRENT_LIST_DIR}/linux_desktop_tray.cmake")
+        # The incoming installer extracts this compatibility step before old
+        # ALPM hooks run; it cannot depend on an already installed new helper.
+        install(FILES "${CMAKE_SOURCE_DIR}/scripts/linux/migrations/upgrade-2.0-lifecycle.sh"
+                "${CMAKE_SOURCE_DIR}/scripts/linux/migrations/upgrade-2.0.1-lifecycle.sh"
+                "${CMAKE_SOURCE_DIR}/scripts/linux/migrations/upgrade-2.0.2-fuse-scan.sh"
+                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/vibeshine/installer-migrations")
         add_executable(vibeshine_session_exec
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-session-exec.c")
         set_target_properties(vibeshine_session_exec PROPERTIES OUTPUT_NAME "vibeshine-session-exec")
@@ -107,12 +114,20 @@ else()
         set_target_properties(vibeshine_session_broker PROPERTIES OUTPUT_NAME "vibeshine-session-broker")
         target_include_directories(vibeshine_session_broker PRIVATE "${LIBCAP_INCLUDE_DIRS}")
         target_link_libraries(vibeshine_session_broker PRIVATE "${LIBCAP_LIBRARIES}")
+        add_executable(vibeshine_touch_map
+                "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-touch-map.c")
+        set_target_properties(vibeshine_touch_map PROPERTIES OUTPUT_NAME "vibeshine-touch-map")
+        target_include_directories(vibeshine_touch_map PRIVATE ${GIO_INCLUDE_DIRS})
+        target_link_libraries(vibeshine_touch_map PRIVATE ${GIO_LIBRARIES})
         add_executable(vibeshine_display_power
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-display-power.c")
         set_target_properties(vibeshine_display_power PROPERTIES OUTPUT_NAME "vibeshine-display-power")
         target_include_directories(vibeshine_display_power PRIVATE ${GIO_INCLUDE_DIRS})
         target_link_libraries(vibeshine_display_power PRIVATE ${GIO_LIBRARIES})
         if(WAYLAND_FOUND)
+            target_compile_definitions(vibeshine_touch_map PRIVATE VIBESHINE_HAVE_WAYLAND_TOUCH_MAP=1)
+            target_include_directories(vibeshine_touch_map PRIVATE ${WAYLAND_INCLUDE_DIRS})
+            target_link_libraries(vibeshine_touch_map PRIVATE ${WAYLAND_LIBRARIES})
             add_executable(vibeshine_display_observer
                     "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-display-observer.c"
                     "${CMAKE_BINARY_DIR}/generated-src/dpms.c")
@@ -184,13 +199,42 @@ else()
                 "${LIBVIRTUALDISPLAY_LINUX_ROOT}/packaging/vibeshine-vkms-quiesce"
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-global-limiter.py"
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-machine-host"
+                "${CMAKE_SOURCE_DIR}/packaging/linux/Arch/vibeshine-package-preflight"
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-session-controller"
                 "${CMAKE_CURRENT_BINARY_DIR}/vibeshine-drm-install"
                 "${CMAKE_CURRENT_BINARY_DIR}/vibeshine-ds5-install"
                 DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
+        # Pacman loads hooks before extraction. Future upgrades use the
+        # previously installed function library to abort an unsafe transaction.
+        install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/Arch/vibeshine.install"
+                DESTINATION "${CMAKE_INSTALL_DATADIR}/vibeshine"
+                RENAME "arch-package-hooks")
+        install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/Arch/00-vibeshine-quiesce.hook"
+                DESTINATION "${CMAKE_INSTALL_DATADIR}/libalpm/hooks")
+        option(VIBESHINE_ARCH_KWIN_BRIDGE_REFRESH
+                "Validate and activate the KWin bridge after Arch package transactions" OFF)
+        if(VIBESHINE_ARCH_KWIN_BRIDGE_REFRESH)
+            if(NOT VIBESHINE_KWIN_GPU_LIBRARY_INSTALL_DIR STREQUAL "/usr/lib/vibeshine/kwin-bridge")
+                message(FATAL_ERROR "The Arch KWin bridge must install to its inactive package directory")
+            endif()
+            set(_arch_bridge "${CMAKE_SOURCE_DIR}/packaging/linux/Arch")
+            install(PROGRAMS "${_arch_bridge}/vibeshine-kwin-bridge-rebuild"
+                    DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
+            install(FILES "${_arch_bridge}/95-vibeshine-kwin-bridge.hook"
+                          "${_arch_bridge}/00-vibeshine-kwin-bridge-deactivate.hook"
+                    DESTINATION "${CMAKE_INSTALL_DATADIR}/libalpm/hooks")
+            install(FILES "${_arch_bridge}/vibeshine-kwin-build.conf"
+                    DESTINATION "${VIBESHINE_SYSUSERS_INSTALL_DIR}")
+            install(FILES "${_arch_bridge}/kwin_bridge_abi.h"
+                    DESTINATION "${VIBESHINE_KWIN_GPU_LIBRARY_INSTALL_DIR}")
+            foreach(_kwin_unit IN ITEMS plasma-kwin_wayland plasma-login-kwin_wayland)
+                install(FILES "${_arch_bridge}/vibeshine-kwin-local-gpu.conf"
+                        DESTINATION "/usr/lib/systemd/user/${_kwin_unit}.service.d")
+            endforeach()
+        endif()
         install(TARGETS vibeshine_session_exec vibeshine_app_supervisor
                 vibeshine_profile_import vibeshine_kwin_session_environment
-                vibeshine_provider_scan vibeshine_steam_launch vibeshine_display_power vibeshine_app_focus
+                vibeshine_provider_scan vibeshine_steam_launch vibeshine_display_power vibeshine_app_focus vibeshine_touch_map
                 RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
         if(TARGET vibeshine_display_observer)
             install(TARGETS vibeshine_display_observer
@@ -313,6 +357,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(CPACK_RPM_PRE_INSTALL_SCRIPT_FILE "${CMAKE_CURRENT_BINARY_DIR}/preinst")
     set(CPACK_RPM_POST_INSTALL_SCRIPT_FILE "${CMAKE_CURRENT_BINARY_DIR}/postinst")
     set(CPACK_RPM_PRE_UNINSTALL_SCRIPT_FILE "${CMAKE_CURRENT_BINARY_DIR}/prerm")
+    set(CPACK_RPM_POST_UNINSTALL_SCRIPT_FILE "${CMAKE_CURRENT_BINARY_DIR}/postrm")
 else()
     set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/postinst")
     set(CPACK_RPM_POST_INSTALL_SCRIPT_FILE "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/postinst")
@@ -330,6 +375,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-display-power"
             "%attr(0700,root,root) %caps(cap_kill,cap_setgid,cap_setuid+p) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-session-broker"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-app-supervisor"
+            "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-touch-map"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-steam-launch"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-app-focus"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-kwin-session-environment"
@@ -423,6 +469,10 @@ set(CPACK_RPM_PACKAGE_REQUIRES "\
             util-linux")
 set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "dkms")
 set(CPACK_RPM_PACKAGE_SUGGESTS "dkms, gcc, kernel-devel")
+if(VIBESHINE_DESKTOP_TRAY_PACKAGED)
+    string(APPEND CPACK_DEBIAN_PACKAGE_RECOMMENDS ", python3-pyside6.qtwidgets")
+    string(APPEND CPACK_RPM_PACKAGE_SUGGESTS ", python3-pyside6")
+endif()
 list(APPEND CPACK_FREEBSD_PACKAGE_DEPS
         audio/opus
         ftp/curl

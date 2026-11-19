@@ -36,24 +36,30 @@ extern "C" {
 
 // local includes
 #include "cbs.h"
+#include "capture_recovery.h"
 #include "config.h"
 #include "display_device.h"
 #include "amf/amf_encoder.h"
 #include "amf/amf_lifecycle.h"
 #include "globals.h"
 #include "input.h"
+#include "input_geometry_policy.h"
 #include "logging.h"
 #include "nvenc/nvenc_base.h"
 #include "platform/common.h"
 #include "pyrowave_host.h"
 #include "sync.h"
 #include "video.h"
+#include "video_framerate_policy.h"
 #include "video_encoder_probe_policy.h"
 #include "video_policy.h"
 #include "webrtc_stream.h"
 
 #if defined(__linux__) && defined(SUNSHINE_BUILD_CUDA)
   #include "platform/linux/cuda.h"
+#endif
+#ifdef __linux__
+  #include "platform/linux/rtx_hdr_runtime.h"
 #endif
 
 #ifdef _WIN32
@@ -95,6 +101,25 @@ using namespace std::literals;
 namespace video {
 
   namespace {
+#ifdef _WIN32
+    void observe_recovery_capture_frame(const std::string &output, std::uint64_t instance) {
+      // A capture name is mutable: resolve it against the current Windows
+      // device list and let the observer accept only the exact leased ID.
+      capture_recovery::observe_frame_from_current_device_list(
+        capture_recovery::observations(),
+        output,
+        instance,
+        [] {
+          return display_helper_integration::enumerate_devices(
+            display_device::DeviceEnumerationDetail::Minimal
+          );
+        },
+        [](const auto &device) -> const std::string & { return device.m_display_name; },
+        [](const auto &device) -> const std::string & { return device.m_device_id; }
+      );
+    }
+#endif
+
     void wait_before_display_retry(std::size_t &consecutive_failures) {
       std::this_thread::sleep_for(policy::display_retry_delay(consecutive_failures));
       if (consecutive_failures < std::numeric_limits<std::size_t>::max()) {
@@ -444,7 +469,7 @@ namespace video {
 
 #endif
 
-    probe_target_t resolve_probe_target() {
+    probe_target_t resolve_probe_target(const bool materialize_capture_output = true) {
 #ifdef _WIN32
       const auto active_output = config::get_active_output_name();
       const auto mapped_output = display_device::map_output_name(active_output);
@@ -479,6 +504,21 @@ namespace video {
       }
       if (pending_virtual_display_adapter_hint) {
         const auto pending_adapter = adapter_id_from_luid(*pending_virtual_display_adapter_hint);
+        // A cache lookup needs only the expected adapter identity. Materializing
+        // a capture output here creates a D3D device even on a positive cache
+        // hit, repeatedly waking the GPU while clients poll /serverinfo.
+        // Actual probes still select a capture target and must observe this
+        // adapter before they can own a successful capability entry.
+        if (!materialize_capture_output) {
+          return probe_target_t {
+            .required_adapter = pending_adapter,
+            .adapter_identity = probe_adapter_identity_t {
+              .identity = luid_cache_identity(*pending_virtual_display_adapter_hint),
+              .source = "pending-virtual-display-adapter-cache-lookup",
+              .resolved = true,
+            },
+          };
+        }
         std::optional<LUID> observed_adapter;
         std::string_view observed_source;
         if (current_wgc_identity) {
@@ -558,6 +598,16 @@ namespace video {
         );
         if (configured_adapter) {
           const auto configured_adapter_id = adapter_id_from_luid(*configured_adapter.luid);
+          if (!materialize_capture_output) {
+            return probe_target_t {
+              .required_adapter = configured_adapter_id,
+              .adapter_identity = probe_adapter_identity_t {
+                .identity = luid_cache_identity(*configured_adapter.luid),
+                .source = "configured-adapter-cache-lookup",
+                .resolved = true,
+              },
+            };
+          }
           const bool preferred_output_matches_adapter =
             mapped_output_matches_adapter(*configured_adapter.luid);
           const bool wgc_mismatches_configured_adapter =
@@ -669,6 +719,7 @@ namespace video {
         },
       };
 #else
+      (void) materialize_capture_output;
       const auto active_output = display_device::map_output_name(config::get_active_output_name());
       return probe_target_t {
         .display_name =
@@ -703,7 +754,8 @@ namespace video {
           << "|pyrowave=" << (config::video.pyrowave ? 1 : 0)
           << "|amd_coder=" << config::video.amd.amd_coder
           << "|amd_ltr=" << config::video.amd.amd_ltr_frames
-          << "|amd_queue=" << config::video.amd.amd_input_queue_size;
+          << "|amd_queue=" << config::video.amd.amd_input_queue_size
+          << "|amd_av1_tiles=" << config::video.amd.amd_av1_tiles;
       append_optional("amd_usage_h264", config::video.amd.amd_usage_h264);
       append_optional("amd_usage_hevc", config::video.amd.amd_usage_hevc);
       append_optional("amd_usage_av1", config::video.amd.amd_usage_av1);
@@ -731,7 +783,7 @@ namespace video {
       oss << "|amf_quarantined=" << (native_amf_lifecycle_gate.is_quarantined() ? 1 : 0);
       const auto adapter_identity = probe_target ?
                                       probe_target->adapter_identity :
-                                      resolve_probe_target().adapter_identity;
+                                      resolve_probe_target(false).adapter_identity;
       return probe_cache_key_t {
         .encoder_configuration = oss.str(),
         .adapter_identity = adapter_identity.identity,
@@ -1146,6 +1198,10 @@ namespace video {
       return device->convert(img);
     }
 
+    platf::converted_frame_t converted_frame() const override {
+      return device ? device->converted_frame : platf::converted_frame_t {};
+    }
+
     void request_idr_frame() override {
       if (device && device->frame) {
         auto &frame = device->frame;
@@ -1162,9 +1218,10 @@ namespace video {
       }
     }
 
-    void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
+    bool invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
       BOOST_LOG(error) << "Encoder doesn't support reference frame invalidation";
       request_idr_frame();
+      return false;
     }
 
     void set_hdr_metadata(const SS_HDR_METADATA &metadata) override {
@@ -1243,6 +1300,10 @@ namespace video {
       return device->convert(img);
     }
 
+    platf::converted_frame_t converted_frame() const override {
+      return device ? device->converted_frame : platf::converted_frame_t {};
+    }
+
     void request_idr_frame() override {
       force_idr = true;
     }
@@ -1251,14 +1312,16 @@ namespace video {
       force_idr = false;
     }
 
-    void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
+    bool invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
       if (!device || !device->nvenc) {
-        return;
+        return false;
       }
 
       if (!device->nvenc->invalidate_ref_frames(first_frame, last_frame)) {
         force_idr = true;
+        return false;
       }
+      return true;
     }
 
     bool set_bitrate(int bitrate_kbps) override {
@@ -1282,14 +1345,33 @@ namespace video {
         return {};
       }
 
+      if (output_identity_failed) {
+        return {};
+      }
+
       auto result = device->nvenc->encode_frame(frame_index, force_idr);
       force_idr = false;
+      if (!result.data.empty() && result.frame_index != frame_index) {
+        // Native NVENC has one synchronous input/output transaction. Delivering
+        // another index would attribute this picture's timestamps to other pixels.
+        // Keep this failure latched until the client stream ends; rebuilding the
+        // encoder alone does not establish a decoder reset or picture continuity.
+        BOOST_LOG(error) << "NvEnc: refusing output with frame index " << result.frame_index
+                         << " for submitted frame " << frame_index;
+        output_identity_failed = true;
+        return {};
+      }
       return result;
+    }
+
+    bool has_output_identity_failure() const {
+      return output_identity_failed;
     }
 
   private:
     std::unique_ptr<platf::nvenc_encode_device_t> device;
     bool force_idr = false;
+    bool output_identity_failed = false;
   };
 
   class amf_encode_session_t: public encode_session_t {
@@ -1303,10 +1385,14 @@ namespace video {
         return -1;
       }
       const auto result = device->convert(img);
-      if (result == 0) {
+      if (result == 0 && !device->converted_frame.repeats_previous) {
         fresh_conversion_pending = true;
       }
       return result;
+    }
+
+    platf::converted_frame_t converted_frame() const override {
+      return device ? device->converted_frame : platf::converted_frame_t {};
     }
 
     void request_idr_frame() override {
@@ -1319,14 +1405,16 @@ namespace video {
       // backpressure drops, so clearing it here would lose recovery IDRs.
     }
 
-    void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
+    bool invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
       if (!device || !device->amf) {
-        return;
+        return false;
       }
 
       if (!device->amf->invalidate_ref_frames(first_frame, last_frame)) {
         force_idr = true;
+        return false;
       }
+      return true;
     }
 
     bool set_bitrate(int bitrate_kbps) override {
@@ -1362,6 +1450,10 @@ namespace video {
       if (!device->amf->set_hdr_metadata(std::optional<amf::amf_hdr_metadata> {amf_metadata})) {
         BOOST_LOG(warning) << "AMF: failed to update live HDR mastering metadata; the bitstream keeps the previous values"sv;
       }
+    }
+
+    bool has_fresh_conversion() const {
+      return fresh_conversion_pending;
     }
 
     amf::amf_encode_result encode_frames(uint64_t frame_index) {
@@ -1530,7 +1622,14 @@ namespace video {
   struct capture_ctx_t {
     img_event_t images;
     config_t config;
+    safe::mail_raw_t::event_t<input::touch_port_t> touch_port_events;
   };
+
+  void raise_touch_port_if_geometry_changed(
+    const safe::mail_raw_t::event_t<input::touch_port_t> &event,
+    platf::display_t *display,
+    const config_t &config
+  );
 
 #ifdef _WIN32
   SS_HDR_METADATA synthetic_probe_hdr_metadata() {
@@ -1794,6 +1893,7 @@ namespace video {
   void end_capture_async(capture_thread_async_ctx_t &ctx);
 
   // Keep a reference counter to ensure the capture thread only runs when other threads have a reference to the capture thread
+  auto capture_thread_async = safe::make_shared<capture_thread_async_ctx_t>(start_capture_async, end_capture_async);
   auto capture_thread_sync = safe::make_shared<capture_thread_sync_ctx_t>(start_capture_sync, end_capture_sync);
 
 #ifdef _WIN32
@@ -2078,12 +2178,12 @@ namespace video {
     PARALLEL_ENCODING | CBR_WITH_VBR | RELAXED_COMPLIANCE | NO_RC_BUF_LIMIT | YUV444_SUPPORT
   };
 
-  // Experimental native AMD AMF encoder (src/amf/amf_d3d11.cpp). Bypasses the
+  // Preferred native AMD AMF encoder (src/amf/amf_d3d11.cpp). Bypasses the
   // FFmpeg AMF wrapper for direct AMF SDK access: D3D11 zero-copy input, reference-frame
   // invalidation and HDR metadata. Selecting amdvce_experimental is a strict native-AMF
   // contract: feature, initialization, or runtime failures are reported instead
-  // of silently changing encoder implementations. It is excluded from automatic
-  // probing because hardware and driver coverage is currently limited.
+  // of silently changing encoder implementations. Automatic selection prefers
+  // this path and permits a compatible, bounded initialization rollback.
   encoder_t amdvce_experimental {
     "amdvce_experimental"sv,
     std::make_unique<encoder_platform_formats_amf>(
@@ -2129,7 +2229,7 @@ namespace video {
   };
 
   // Supported FFmpeg-based AMF encoder. Its explicit name identifies the
-  // implementation, and it is the AMD encoder selected by automatic probing.
+  // implementation; select it explicitly to retain legacy AMD behavior.
   encoder_t amdvce_ffmpeg {
     "amdvce_ffmpeg"sv,
     std::make_unique<encoder_platform_formats_avcodec>(
@@ -2613,8 +2713,8 @@ namespace video {
 #endif
 #ifdef _WIN32
     &quicksync,
-    &amdvce_ffmpeg,
     &amdvce_experimental,
+    &amdvce_ffmpeg,
     &mediafoundation,
 #endif
 #if defined(__linux__) || defined(linux) || defined(__linux) || defined(__FreeBSD__)
@@ -2630,6 +2730,11 @@ namespace video {
   };
 
   static encoder_t *chosen_encoder;
+#ifdef _WIN32
+  // A transient native initialization failure during startup probing does not
+  // permanently opt later streams out of the preferred implementation.
+  std::atomic_bool native_amf_probe_retry_allowed {false};
+#endif
   int active_hevc_mode;
   int active_av1_mode;
   std::atomic_int active_pyrowave_mode {0};
@@ -2683,7 +2788,7 @@ namespace video {
     state.pending_virtual_display_adapter_hint = adapter_luid;
     state.pending_virtual_display_adapter_hint_lease = lease;
     state.pending_virtual_display_adapter_hint_ready_for_verification = false;
-    BOOST_LOG(debug)
+    BOOST_LOG(verbose)
       << "Published pending virtual-display adapter identity "
       << luid_cache_identity(adapter_luid)
       << " for encoder capability matching (lease=" << lease << ").";
@@ -2714,8 +2819,8 @@ namespace video {
     state.pending_virtual_display_adapter_hint.reset();
     state.pending_virtual_display_adapter_hint_lease = 0;
     state.pending_virtual_display_adapter_hint_ready_for_verification = false;
-    BOOST_LOG(debug)
-      << "Cleared pending virtual-display adapter identity after display publication (lease="
+    BOOST_LOG(verbose)
+      << "Cleared pending virtual-display adapter identity (lease="
       << lease << ").";
     return true;
   }
@@ -2724,6 +2829,14 @@ namespace video {
   advertised_encoder_capabilities_t advertised_encoder_capabilities(
     const bool probe_before_negative,
     bool *probe_complete
+  ) {
+    return advertised_encoder_capabilities(probe_before_negative, probe_complete, nullptr);
+  }
+
+  advertised_encoder_capabilities_t advertised_encoder_capabilities(
+    const bool probe_before_negative,
+    bool *probe_complete,
+    std::string *adapter_identity
   ) {
     auto current_key = build_probe_cache_key();
     auto probe_status = encoder_probe_status_for_key(current_key);
@@ -2759,6 +2872,9 @@ namespace video {
     if (probe_complete) {
       *probe_complete = probe_status.successful;
     }
+    if (adapter_identity) {
+      *adapter_identity = current_key.adapter_identity;
+    }
     if (!probe_status.successful) {
       log_probe_cache_miss(current_key);
       return {};
@@ -2789,6 +2905,7 @@ namespace video {
       disp.reset();
       disp = platf::display(type, display_name, config, required_adapter);
       if (disp) {
+        disp->recovery_capture_instance = capture_recovery::observations().begin_capture();
         break;
       }
 
@@ -2969,9 +3086,30 @@ namespace video {
     int display_p = -1;
     std::shared_ptr<platf::display_t> disp;
     std::size_t display_retry_failures = 0;
+    config_t producer_config {};
+
+    auto capture_pacing_for_display = [&]() {
+      capture_pacing_context_t pacing;
+#ifdef _WIN32
+      pacing.adjust_to_display = true;
+      if (auto *windows_display = dynamic_cast<platf::dxgi::display_base_t *>(disp.get())) {
+        pacing.display_refresh = {
+          static_cast<int>(windows_display->display_refresh_rate.Numerator),
+          static_cast<int>(windows_display->display_refresh_rate.Denominator)
+        };
+        pacing.rounded_refresh = windows_display->display_refresh_rate_rounded;
+      }
+#endif
+      return pacing;
+    };
 
     while (capture_ctx_queue->running()) {
-      const auto &capture_config = capture_ctxs.front().config;
+      const auto demand = await_capture_config(capture_ctxs, *capture_ctx_queue, capture_pacing_for_display());
+      if (!demand) {
+        return;
+      }
+      producer_config = *demand;
+      const auto &capture_config = producer_config;
       if (capture_config.capture_source == capture_source_e::synthetic_black) {
         disp = make_black_display(capture_config);
         if (disp) break;
@@ -2979,6 +3117,7 @@ namespace video {
         return;
       }
 
+      if (capture_config.capture_target_valid && !capture_config.capture_target_valid()) return;
       const auto required_output = capture_config.capture_source == capture_source_e::exact_output ? capture_config.capture_output : std::nullopt;
       const bool log_display_retry = policy::should_log_display_retry(display_retry_failures);
       refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, required_output, log_display_retry);
@@ -3011,8 +3150,9 @@ namespace video {
         BOOST_LOG(info) << "Capture worker selecting source=" << static_cast<int>(capture_config.capture_source)
                         << " output='" << display_names[display_p] << "'.";
       }
-      disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
+      disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_config);
       if (disp) {
+        disp->recovery_capture_instance = capture_recovery::observations().begin_capture();
         break;
       }
 
@@ -3188,6 +3328,11 @@ namespace video {
       const bool event_driven_capture = disp->is_event_driven_capture();
 
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
+#ifdef _WIN32
+        if (frame_captured && img && display_p >= 0 && static_cast<std::size_t>(display_p) < display_names.size()) {
+          observe_recovery_capture_frame(display_names[display_p], disp->recovery_capture_instance);
+        }
+#endif
         if (event_driven_capture) {
           bool new_context_needs_frame = false;
           while (auto pending_context = capture_ctx_queue->pop(0ms)) {
@@ -3225,7 +3370,14 @@ namespace video {
           while (auto pending_context = capture_ctx_queue->pop(0ms)) {
             capture_ctxs.emplace_back(std::move(*pending_context));
           }
-        } else if (capture_ctxs.empty()) {
+        }
+
+        const auto pacing = capture_pacing_for_display();
+        if (const auto demand = capture_config_for_consumers(capture_ctxs, pacing); demand && !same_capture_demand(producer_config, *demand, pacing)) {
+          // Reuse the existing serialized teardown: all encoders release the
+          // old display before its single replacement is created. This also
+          // refreshes WGC admission and the capture loop's pacing state.
+          artificial_reinit = true;
           return false;
         }
 
@@ -3247,15 +3399,29 @@ namespace video {
       auto status = disp->capture(push_captured_image_callback, pull_free_image_callback, &display_cursor);
 
       if (artificial_reinit && status != platf::capture_e::error) {
+        BOOST_LOG(debug) << "Capture restart: source=explicit-display-switch";
         status = platf::capture_e::reinit;
 
         artificial_reinit = false;
       }
 
+      // Close the async session admission gate only for a reinit before draining
+      // the queue. Every capture return still publishes terminal geometry to
+      // already-admitted contexts, without changing non-reinit encoder teardown.
+      input::geometry::terminalize_capture_contexts(
+        reinit_event,
+        *capture_ctx_queue,
+        capture_ctxs,
+        status == platf::capture_e::reinit,
+        [](const auto &capture_ctx) { return capture_ctx.images->running(); },
+        [&](auto &capture_ctx) {
+          raise_touch_port_if_geometry_changed(capture_ctx.touch_port_events, disp.get(), capture_ctx.config);
+        }
+      );
+
       switch (status) {
         case platf::capture_e::reinit:
           {
-            reinit_event.raise(true);
             disp->prepare_for_reinit();
 
             // Some classes of images contain references to the display --> display won't delete unless img is deleted.
@@ -3326,22 +3492,34 @@ namespace video {
             }
 #endif
 
+            // Metadata was observed by this exact capture instance. Let it
+            // advance that observation only after every old encoder released
+            // its display reference, then republish it for encoder selection.
+            if (disp->commit_pending_capture_metadata()) {
+              display_wp = disp;
+              reinit_event.reset();
+              continue;
+            }
+
             while (auto pending_context = capture_ctx_queue->pop(0ms)) {
               if (pending_context->images->running()) {
                 capture_ctxs.emplace_back(std::move(*pending_context));
               }
             }
-            if (capture_ctxs.empty()) {
-              return;
-            }
-
             std::size_t display_retry_failures = 0;
             while (capture_ctx_queue->running()) {
+              const auto demand = await_capture_config(capture_ctxs, *capture_ctx_queue, capture_pacing_for_display());
+              if (!demand) {
+                return;
+              }
+              producer_config = *demand;
+
               // Release the display before reenumerating displays, since some capture backends
               // only support a single display session per device/application.
               disp.reset();
 
               // Refresh display names since a display removal might have caused the reinitialization
+              if (capture_ctxs.front().config.capture_target_valid && !capture_ctxs.front().config.capture_target_valid()) return;
               const auto required_output = capture_ctxs.front().config.capture_source == capture_source_e::exact_output ? capture_ctxs.front().config.capture_output : std::nullopt;
               refresh_displays(
                 encoder.platform_formats->dev_type,
@@ -3378,7 +3556,7 @@ namespace video {
               }
 
               // reset_display() will sleep between retries
-              reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
+              reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], producer_config);
               if (disp) {
                 break;
               }
@@ -3491,10 +3669,6 @@ namespace video {
       return -1;
     }
 
-    if (frame_nr != encoded_frame.frame_index) {
-      BOOST_LOG(error) << "NvENC frame index mismatch " << frame_nr << " " << encoded_frame.frame_index;
-    }
-
     auto packet = std::make_unique<packet_raw_generic>(std::move(encoded_frame.data), encoded_frame.frame_index, encoded_frame.idr);
     packet->channel_data = channel_data;
     packet->after_ref_frame_invalidation = encoded_frame.after_ref_frame_invalidation;
@@ -3553,26 +3727,35 @@ namespace video {
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp,
     std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp
   ) {
-    // Stash this frame's timestamps before submitting; the encoder is pipelined and
-    // emits an earlier frame, so the packet is stamped from this map by emitted index.
-    session.store_frame_timestamps((uint64_t) frame_nr, {frame_timestamp, host_processing_timestamp});
+    // A completion can race the pre-conversion output drain. Deliver the older
+    // packet first, then give the retained fresh capture one submission attempt
+    // before the outer loop consumes another image/index. Never retry accepted
+    // input or loop through persistent backpressure; ordinary drops stay visible.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      // Stash this frame's timestamps before submitting; the encoder is pipelined and
+      // emits an earlier frame, so the packet is stamped from this map by emitted index.
+      session.store_frame_timestamps((uint64_t) frame_nr, {frame_timestamp, host_processing_timestamp});
 
-    auto encode_result = session.encode_frames(frame_nr);
-    auto &encoded_frames = encode_result.frames;
-    if (!encode_result.input_accepted) {
-      session.discard_frame_timestamps((uint64_t) frame_nr);
-    }
-    if (encode_result.fatal || std::any_of(encoded_frames.begin(), encoded_frames.end(), [](const auto &frame) { return frame.fatal; })) {
-      BOOST_LOG(error) << "AMF encoder entered an unrecoverable state, requesting reinit";
-      return -1;
-    }
-    if (encoded_frames.empty()) {
-      // No output this call (pipeline still filling or transient stall); not fatal.
-      // The stashed timestamps stay until this frame is actually emitted.
-      return 0;
-    }
+      auto encode_result = session.encode_frames(frame_nr);
+      auto &encoded_frames = encode_result.frames;
+      if (!encode_result.input_accepted) {
+        session.discard_frame_timestamps((uint64_t) frame_nr);
+      }
+      if (encode_result.fatal || std::any_of(encoded_frames.begin(), encoded_frames.end(), [](const auto &frame) { return frame.fatal; })) {
+        BOOST_LOG(error) << "AMF encoder entered an unrecoverable state, requesting reinit";
+        return -1;
+      }
+      if (encoded_frames.empty()) {
+        // No output this call (pipeline still filling or transient stall); not fatal.
+        // The stashed timestamps stay until this frame is actually emitted.
+        return 0;
+      }
 
-    deliver_amf_frames(frame_nr, session, encoded_frames, packets, channel_data);
+      deliver_amf_frames(frame_nr, session, encoded_frames, packets, channel_data);
+      if (encode_result.input_accepted || !session.has_fresh_conversion()) {
+        return 0;
+      }
+    }
 
     return 0;
   }
@@ -3640,7 +3823,7 @@ namespace video {
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
   bool refresh_rtx_hdr_metadata_if_needed(
     config_t &config,
-    encode_session_t &encode_session,
+    encode_session_t *encode_session,
     safe::mail_raw_t::event_t<hdr_info_t> &hdr_event,
     std::optional<hdr_info_raw_t> &last_hdr_info,
     rtx_hdr_metadata_refresh_state_t &refresh_state
@@ -3680,7 +3863,7 @@ namespace video {
 
     config.rtx_hdr_peak_nits = peak_nits;
     const auto metadata = synthesize_rtx_hdr_metadata(peak_nits);
-    encode_session.set_hdr_metadata(metadata);
+    if (encode_session) encode_session->set_hdr_metadata(metadata);
     raise_hdr_info_if_changed(
       hdr_event,
       last_hdr_info,
@@ -4300,7 +4483,9 @@ namespace video {
     std::chrono::steady_clock::time_point deadline,
     const initialization_cancel_t &cancelled,
     bool &operation_cancelled,
-    bool &gate_contended) {
+    bool &gate_contended,
+    amf::lifecycle::initialization_failure_e &failure) {
+    failure = amf::lifecycle::initialization_failure_e::device_or_capture;
     operation_cancelled = false;
     gate_contended = false;
     // Native AMF can wedge inside Init/Terminate on a damaged driver. Run the
@@ -4357,10 +4542,12 @@ namespace video {
     auto display_lease = encode_device->release_display_lease_for_initialization();
     auto handoff = std::make_shared<amf::lifecycle::worker_handoff_t<std::unique_ptr<platf::amf_encode_device_t>>>();
     const auto colorspace = encode_device->colorspace;
+    auto worker_failure = std::make_shared<amf::lifecycle::initialization_failure_e>(
+      amf::lifecycle::initialization_failure_e::device_or_capture);
     std::thread initialization_thread;
     try {
       initialization_thread = std::thread {
-        [encode_device = std::move(encode_device), client_config, colorspace, resolved_hdr_metadata, handoff]() mutable {
+        [encode_device = std::move(encode_device), client_config, colorspace, resolved_hdr_metadata, handoff, worker_failure]() mutable {
           bool handed_off_to_caller = false;
           auto initialization_gate = util::fail_guard([&handed_off_to_caller]() {
             if (!handed_off_to_caller) {
@@ -4369,9 +4556,12 @@ namespace video {
           });
           auto owned_encode_device = std::move(encode_device);
           try {
-            if (!owned_encode_device->initialize_hardware_device() ||
-                !owned_encode_device->init_encoder(client_config, colorspace) ||
-                !owned_encode_device->finish_encoder_initialization(client_config, colorspace)) {
+            const bool hardware_ready = owned_encode_device->initialize_hardware_device();
+            const bool encoder_ready = hardware_ready && owned_encode_device->init_encoder(client_config, colorspace);
+            const bool output_ready = encoder_ready && owned_encode_device->finish_encoder_initialization(client_config, colorspace);
+            if (!output_ready) {
+              *worker_failure = encoder_ready ? amf::lifecycle::initialization_failure_e::conversion :
+                                               owned_encode_device->initialization_failure;
               // Failure destruction is part of this same watchdog interval. Only
               // publish failure after the D3D/AMF resources are gone, so legacy
               // fallback cannot race a still-unwinding native runtime.
@@ -4384,7 +4574,12 @@ namespace video {
               BOOST_LOG(warning) << "AMF: HDR stream will continue without mastering metadata"sv;
             }
             handed_off_to_caller = handoff->publish(std::move(owned_encode_device));
+          } catch (const std::exception &err) {
+            BOOST_LOG(error) << "AMF: native initialization exception: " << err.what();
+            owned_encode_device.reset();
+            handoff->publish(nullptr);
           } catch (...) {
+            BOOST_LOG(error) << "AMF: native initialization failed with an unknown exception"sv;
             owned_encode_device.reset();
             handoff->publish(nullptr);
           }
@@ -4413,6 +4608,7 @@ namespace video {
     encode_device = std::move(*accepted);
     if (!encode_device) {
       initialization_thread.join();
+      failure = *worker_failure;
       return nullptr;
     }
     initialization_thread.join();
@@ -4442,6 +4638,7 @@ namespace video {
     }
     encode_device->restore_display_lease_after_initialization(std::move(display_lease));
 
+    failure = amf::lifecycle::initialization_failure_e::none;
     return std::make_unique<amf_encode_session_t>(std::move(encode_device));
   }
 
@@ -4455,7 +4652,8 @@ namespace video {
     std::chrono::steady_clock::time_point initialization_deadline = std::chrono::steady_clock::time_point::max(),
     initialization_cancel_t cancelled = {},
     bool *operation_cancelled_out = nullptr,
-    bool *gate_contended_out = nullptr) {
+    bool *gate_contended_out = nullptr,
+    amf::lifecycle::initialization_failure_e *failure_out = nullptr) {
     if (!cancelled) cancelled = []() { return false; };
     if (operation_cancelled_out) *operation_cancelled_out = false;
     if (gate_contended_out) *gate_contended_out = false;
@@ -4469,9 +4667,11 @@ namespace video {
       return make_nvenc_encode_session(config, std::move(nvenc_encode_device));
     } else if (dynamic_cast<platf::amf_encode_device_t *>(encode_device.get())) {
       auto amf_encode_device = boost::dynamic_pointer_cast<platf::amf_encode_device_t>(std::move(encode_device));
+      amf::lifecycle::initialization_failure_e failure;
       auto session = make_amf_encode_session(
         config, std::move(amf_encode_device), initialization_deadline, cancelled,
-        operation_cancelled, gate_contended);
+        operation_cancelled, gate_contended, failure);
+      if (failure_out) *failure_out = failure;
       if (operation_cancelled_out) *operation_cancelled_out = operation_cancelled;
       if (gate_contended_out) *gate_contended_out = gate_contended;
       return session;
@@ -4592,7 +4792,9 @@ namespace video {
     std::chrono::steady_clock::time_point deadline,
     const initialization_cancel_t &cancelled,
     bool &operation_cancelled,
-    bool &gate_contended) {
+    bool &gate_contended,
+    std::optional<sunshine_colorspace_t> required_colorspace = std::nullopt,
+    const SS_HDR_METADATA *required_hdr_metadata = nullptr) {
     operation_cancelled = false;
     gate_contended = false;
     if (!disp || native_amf_lifecycle_gate.is_quarantined()) {
@@ -4625,6 +4827,11 @@ namespace video {
       return std::nullopt;
     }
 
+    if (required_colorspace) prepared_device->colorspace = *required_colorspace;
+    if (required_hdr_metadata) {
+      prepared_device->hdr_metadata = *required_hdr_metadata;
+      prepared_device->hdr_metadata_valid = true;
+    }
     legacy_amf_session_bundle_t prepared_bundle;
     prepared_bundle.hdr_metadata_valid = prepared_device->hdr_metadata_valid;
     prepared_bundle.hdr_metadata = prepared_device->hdr_metadata;
@@ -4648,7 +4855,11 @@ namespace video {
             const bool initialized = static_cast<bool>(prepared_bundle.session);
             const bool accepted = handoff->publish(std::move(prepared_bundle));
             gate_finished = initialized && accepted;
+          } catch (const std::exception &err) {
+            BOOST_LOG(error) << "AMF: FFmpeg initialization exception: " << err.what();
+            handoff->publish(legacy_amf_session_bundle_t {});
           } catch (...) {
+            BOOST_LOG(error) << "AMF: FFmpeg initialization failed with an unknown exception"sv;
             handoff->publish(legacy_amf_session_bundle_t {});
           }
         }
@@ -4787,6 +4998,7 @@ namespace video {
 
   enum class encode_run_result_e {
     completed,
+    native_nvenc_identity_failed,
     native_amf_failed,
     temporarily_busy,
     initialization_failed,
@@ -4810,6 +5022,10 @@ namespace video {
     rtx_hdr_metadata_refresh_state_t &rtx_hdr_metadata_refresh
   ) {
     const encoder_t *session_encoder = &encoder;
+    const int effective_encoding_framerate_milli_fps = framerate_policy::effective_encoding_framerate_milli_fps(
+      config.encodingFramerate,
+      config.framerate
+    );
     bool initialization_was_cancelled = false;
     bool initialization_gate_contended = false;
     auto session = prepared_session ?
@@ -4818,6 +5034,17 @@ namespace video {
                        disp.get(), encoder, config, disp->width, disp->height,
                        std::move(encode_device), initialization_deadline, initialization_cancelled,
                        &initialization_was_cancelled, &initialization_gate_contended);
+#if defined(__linux__)
+    BOOST_LOG(info) << "Linux encoder dimensions: encoder=" << encoder.name
+                    << " capture=" << disp->width << 'x' << disp->height
+                    << " encoder_context=" << config.width << 'x' << config.height
+                    << " stream_fps=" << config.framerate
+                    << " requested_encoding_framerate_milli_fps=" << config.encodingFramerate
+                    << " effective_encoding_framerate_milli_fps=" << effective_encoding_framerate_milli_fps
+                    << " result=" << (session ? "ready" : initialization_gate_contended ? "temporarily_busy" :
+                                                                                          "failed")
+                    << '.';
+#endif
 #ifdef _WIN32
     if (initialization_was_cancelled) return encode_run_result_e::completed;
     if (!session && &encoder == &amdvce_experimental) {
@@ -4846,6 +5073,7 @@ namespace video {
     const auto session_encoder_flags = session_encoder->flags;
 
     auto shutdown_event = mail->event<bool>(mail::shutdown);
+    auto touch_port_event = mail->event<input::touch_port_t>(mail::touch_port);
 
     bool force_sync_teardown = false;
 
@@ -5031,7 +5259,7 @@ namespace video {
     // SETUP request, so it can be absent or zero. The native AMF tail-flush budget below
     // divides by it, so clamp it before anything reads it.
     if (config.encodingFramerate <= 0) {
-      const int fallback_fps = config.framerate > 0 ? config.framerate * 1000 : 60000;
+      const int fallback_fps = effective_encoding_framerate_milli_fps;
       BOOST_LOG(warning) << "Encoding framerate missing; falling back to " << fallback_fps;
       config.encodingFramerate = fallback_fps;
     }
@@ -5070,6 +5298,17 @@ namespace video {
 
     encode_bootstrap_state_t bootstrap_state {.allow_placeholder_before_first_real = frame_nr <= 1};
 
+    auto deliver_ready_amf_output = [&]() {
+      if (!amf::lifecycle::deliver_ready_output(native_session, [&](auto &frames) {
+            deliver_amf_frames(frame_nr, *native_session, frames, packets, channel_data);
+          })) {
+        BOOST_LOG(error) << "AMF failed while delivering ready output"sv;
+        native_amf_runtime_failed = true;
+        return false;
+      }
+      return true;
+    };
+
     // Per-session encode-loop accounting. When several clients share one capture target, a
     // single client can freeze while the others stream fine, and nothing else in the log
     // distinguishes a session that is encoding live frames from one that is starved or gated.
@@ -5080,12 +5319,17 @@ namespace video {
       uint64_t pop_timeouts = 0;
       uint64_t gate_skipped = 0;
       uint64_t converted = 0;
+      uint64_t repeated_inputs = 0;
       uint64_t encoded = 0;
       uint64_t dropped_submissions = 0;
       std::chrono::steady_clock::time_point last_log = std::chrono::steady_clock::now();
     } loop_stats;
 
+    // A keyframe request that arrived with an input the conversion then reported as a repeat.
+    bool retry_idr = false;
+
     while (true) {
+      raise_touch_port_if_geometry_changed(touch_port_event, disp.get(), config);
       if (auto now = std::chrono::steady_clock::now(); now - loop_stats.last_log >= 10s) {
         BOOST_LOG(debug) << "Encode loop [" << channel_data << "] " << config.width << 'x' << config.height
                          << ": popped_real=" << loop_stats.popped_real
@@ -5093,6 +5337,7 @@ namespace video {
                          << " pop_timeouts=" << loop_stats.pop_timeouts
                          << " gate_skipped=" << loop_stats.gate_skipped
                          << " converted=" << loop_stats.converted
+                         << " repeated_inputs=" << loop_stats.repeated_inputs
                          << " encoded=" << loop_stats.encoded
                          << " dropped_submissions=" << loop_stats.dropped_submissions
                          << " frame_nr=" << frame_nr;
@@ -5134,11 +5379,13 @@ namespace video {
         }
       }
 
-      bool requested_idr_frame = false;
+      bool requested_idr_frame = std::exchange(retry_idr, false);
 
       while (invalidate_ref_frames_events->peek()) {
         if (auto frames = invalidate_ref_frames_events->pop(0ms)) {
-          session->invalidate_ref_frames(frames->first, frames->second);
+          // A failed invalidation requests an IDR inside the backend. Carry it
+          // through duplicate-input skips just like an explicit client IDR.
+          requested_idr_frame |= !session->invalidate_ref_frames(frames->first, frames->second);
         }
       }
 
@@ -5155,6 +5402,12 @@ namespace video {
       std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp;
       bool placeholder_input = bootstrap_state.current_input_placeholder;
 
+      // Also service ready output on zero-wait bootstrap and requested-IDR
+      // iterations, which can bypass the normal capture wait entirely.
+      if (!deliver_ready_amf_output()) {
+        break;
+      }
+
       // Encode at a minimum FPS to avoid image quality issues with static content
       if (!requested_idr_frame || images->peek()) {
         auto image_wait_budget = max_frametime;
@@ -5167,20 +5420,6 @@ namespace video {
         const auto image_wait_started = std::chrono::steady_clock::now();
         if (auto *amf_session = native_session;
             amf_session && image_wait_budget > decltype(max_frametime)::zero()) {
-          // Never hold an already-completed packet behind conversion/submission
-          // of a newer image. This zero-wait drain also runs during continuous
-          // motion, where images->peek() remains true and the sparse loop below
-          // intentionally yields immediately.
-          if (amf_session->has_completed_output()) {
-            auto ready = amf_session->drain_frames(0ms);
-            if (ready.fatal || std::any_of(ready.frames.begin(), ready.frames.end(), [](const auto &frame) { return frame.fatal; })) {
-              BOOST_LOG(error) << "AMF failed while delivering ready output"sv;
-              native_amf_runtime_failed = true;
-              break;
-            }
-            deliver_amf_frames(frame_nr, *amf_session, ready.frames, packets, channel_data);
-          }
-
           // Wait for either the next capture or output that became due with the
           // previous native submission. This preserves high-refresh pipelining
           // when another image arrives, while delivering the final moving frame
@@ -5230,7 +5469,16 @@ namespace video {
           image_wait_budget = std::min(image_wait_budget, remaining_tail_budget);
         }
 
-        if (auto img = images->pop(image_wait_budget)) {
+        auto img = images->pop(image_wait_budget);
+        raise_touch_port_if_geometry_changed(touch_port_event, disp.get(), config);
+        // Completion can race the pre-wait drain, including when capture and
+        // output become ready together. Send the older packet before acquiring
+        // the next image's GPU mutex or reserving/converting its input surface.
+        // This is zero-wait and leaves the captured image and frame index intact.
+        if (!deliver_ready_amf_output()) {
+          break;
+        }
+        if (img) {
           placeholder_input = is_placeholder_capture_image(*img);
           if (placeholder_input) {
             ++loop_stats.popped_placeholder;
@@ -5246,12 +5494,24 @@ namespace video {
             native_amf_runtime_failed = native_amf_session;
             break;
           }
+
+          // Direct WGC input reads the helper's live frame, so the conversion reports
+          // which frame it actually got. Pixels this session already sent would only
+          // repeat that frame; wait for the next capture instead.
+          const auto converted = policy::resolve_converted_input(session->converted_frame(), img->frame_timestamp, img->host_processing_timestamp);
+          if (!converted.encode) {
+            ++loop_stats.repeated_inputs;
+            // Skipping must not delay a requested keyframe until the next capture: carry
+            // it into the next iteration, which encodes the last input without waiting.
+            retry_idr = policy::retry_idr_after_repeat(converted, requested_idr_frame);
+            continue;
+          }
           ++loop_stats.converted;
 
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
           if (refresh_rtx_hdr_metadata_if_needed(
                 config,
-                *session,
+                session.get(),
                 hdr_event,
                 last_hdr_info,
                 rtx_hdr_metadata_refresh
@@ -5264,8 +5524,8 @@ namespace video {
 
           if (!placeholder_input) {
             bootstrap_state.real_frame_seen = true;
-            frame_timestamp = img->frame_timestamp;
-            host_processing_timestamp = img->host_processing_timestamp;
+            frame_timestamp = converted.frame_timestamp;
+            host_processing_timestamp = converted.host_processing_timestamp;
           } else {
             frame_timestamp.reset();
             host_processing_timestamp.reset();
@@ -5313,6 +5573,13 @@ namespace video {
       // This is useful for KVM switch scenarios where mouse may disappear during streaming
       platf::enable_mouse_keys();
     }
+    if (auto *native_session = dynamic_cast<nvenc_encode_session_t *>(session.get());
+        native_session && native_session->has_output_identity_failure()) {
+      // Signal stream termination before driver teardown can block this thread.
+      shutdown_event->raise(true);
+      force_sync_teardown = true;
+      return encode_run_result_e::native_nvenc_identity_failed;
+    }
     if (native_amf_runtime_failed) {
       force_sync_teardown = true;
     }
@@ -5349,12 +5616,15 @@ namespace video {
     auto offsetX = (config.width - w2) * 0.5f;
     auto offsetY = (config.height - h2) * 0.5f;
 
-    return input::touch_port_t {
+    input::touch_port_t result {
       {
         display->offset_x,
         display->offset_y,
         config.width,
         config.height,
+        0,
+        0,
+        display->input_output_name,
       },
       display->env_width,
       display->env_height,
@@ -5365,6 +5635,26 @@ namespace video {
       display_env_logical_width,
       display_env_logical_height
     };
+
+    if (auto geometry = display->input_geometry_snapshot()) {
+      input::geometry::apply_snapshot_to_port(result, *geometry);
+    }
+    return result;
+  }
+
+  void publish_touch_port(
+    const safe::mail_raw_t::event_t<input::touch_port_t> &event,
+    input::touch_port_t port
+  ) {
+    input::geometry::publish_monotonic_port(event, std::move(port));
+  }
+
+  void raise_touch_port_if_geometry_changed(
+    const safe::mail_raw_t::event_t<input::touch_port_t> &event,
+    platf::display_t *display,
+    const config_t &config
+  ) {
+    input::geometry::publish_port_if_geometry_changed(event, make_port(display, config));
   }
 
   std::unique_ptr<platf::encode_device_t> make_encode_device(
@@ -5443,6 +5733,12 @@ namespace video {
     }
 
     if (result) {
+#ifdef __linux__
+      if (config.rtx_hdr_active && (!result->supports_rtx_hdr() || display_is_hdr)) {
+        BOOST_LOG(error) << "RTX HDR requires an SDR capture source and a CUDA/GL NVIDIA encoder on Linux.";
+        return {};
+      }
+#endif
       result->colorspace = colorspace;
       result->rtx_hdr_active = config.rtx_hdr_active;
 
@@ -5510,7 +5806,7 @@ namespace video {
     if (!encode_device && !session) return std::nullopt;
 
     // absolute mouse coordinates require that the dimensions of the screen are known
-    ctx.touch_port_events->raise(make_port(disp.get(), ctx.config));
+    publish_touch_port(ctx.touch_port_events, make_port(disp.get(), ctx.config));
 
     if (!session) {
       session = make_encode_session(
@@ -5601,6 +5897,7 @@ namespace video {
         return encode_e::ok;
       }
       // Refresh display names since a display removal might have caused the reinitialization
+      if (synced_session_ctxs.front()->config.capture_target_valid && !synced_session_ctxs.front()->config.capture_target_valid()) return encode_e::error;
       const auto required_output = synced_session_ctxs.front()->config.capture_source == capture_source_e::exact_output ? synced_session_ctxs.front()->config.capture_output : std::nullopt;
       refresh_displays(
         encoder.platform_formats->dev_type,
@@ -5668,6 +5965,11 @@ namespace video {
     auto ec = platf::capture_e::ok;
     while (encode_session_ctx_queue.running()) {
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
+#ifdef _WIN32
+        if (frame_captured && img && display_p >= 0 && static_cast<std::size_t>(display_p) < display_names.size()) {
+          observe_recovery_capture_frame(display_names[display_p], disp->recovery_capture_instance);
+        }
+#endif
         if (frame_captured && !img) {
           BOOST_LOG(error) << "Capture backend reported a frame without an image"sv;
           ec = platf::capture_e::error;
@@ -5696,6 +5998,7 @@ namespace video {
 
         KITTY_WHILE_LOOP(auto pos = std::begin(synced_sessions), pos != std::end(synced_sessions), {
           auto ctx = pos->ctx;
+          raise_touch_port_if_geometry_changed(ctx->touch_port_events, disp.get(), ctx->config);
           if (ctx->shutdown_event->peek()) {
             // Let waiting thread know it can delete shutdown_event
             ctx->join_event->raise(true);
@@ -5718,7 +6021,9 @@ namespace video {
             continue;
           }
 
+          bool idr_requested = false;
           if (ctx->idr_events->peek()) {
+            idr_requested = true;
             pos->session->request_idr_frame();
             ctx->idr_events->pop();
           }
@@ -5761,10 +6066,20 @@ namespace video {
               continue;
             }
 
+            // Direct WGC input: encode the frame the conversion actually read, and
+            // skip pixels this session already sent rather than repeating them.
+            const auto converted = policy::resolve_converted_input(pos->session->converted_frame(), img->frame_timestamp, img->host_processing_timestamp);
+            if (!converted.encode && !policy::retry_idr_after_repeat(converted, idr_requested)) {
+              ++pos;
+              continue;
+            }
+            // Otherwise a requested keyframe is not delayed behind the repeat: the last
+            // input is encoded as the IDR now, unstamped like the no-new-frame path.
+
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
             if (refresh_rtx_hdr_metadata_if_needed(
                   ctx->config,
-                  *pos->session,
+                  pos->session.get(),
                   ctx->hdr_events,
                   ctx->last_hdr_info,
                   ctx->rtx_hdr_metadata_refresh
@@ -5777,8 +6092,8 @@ namespace video {
 
             if (!placeholder_input) {
               pos->bootstrap.real_frame_seen = true;
-              frame_timestamp = img->frame_timestamp;
-              host_processing_timestamp = img->host_processing_timestamp;
+              frame_timestamp = converted.frame_timestamp;
+              host_processing_timestamp = converted.host_processing_timestamp;
             }
           } else {
             placeholder_input = pos->bootstrap.current_input_placeholder;
@@ -5834,6 +6149,25 @@ namespace video {
       };
 
       auto status = disp->capture(push_captured_image_callback, pull_free_image_callback, &display_cursor);
+      // capture() terminalizes this display's geometry before returning. Make
+      // the terminal mapping visible to every active synchronous session before
+      // tearing down their encoder state or returning to the caller.
+      for (auto &ctx : synced_session_ctxs) {
+        raise_touch_port_if_geometry_changed(ctx->touch_port_events, disp.get(), ctx->config);
+      }
+      if (status == platf::capture_e::reinit && ec == platf::capture_e::ok) {
+        // Synchronous encoders share this thread, so destroying their sessions
+        // is the equivalent of the async worker's display-reference barrier.
+        synced_sessions.clear();
+        if (disp->commit_pending_capture_metadata()) {
+          for (auto &ctx : synced_session_ctxs) {
+            auto session = make_synced_session(disp, encoder, *img, *ctx);
+            if (!session) return encode_e::error;
+            synced_sessions.emplace_back(std::move(*session));
+          }
+          continue;
+        }
+      }
       switch (status) {
         case platf::capture_e::reinit:
         case platf::capture_e::error:
@@ -5890,18 +6224,21 @@ namespace video {
    * @brief Stream colorspace and HDR info for a PyroWave session.
    *
    * Shares the source state and metadata lifetime of codec streams.
-   * RTX HDR is never active for PyroWave sessions (see rtsp.cpp).
+   * Synthesized HDR uses SDR capture and session-owned HDR10 metadata.
    */
   sunshine_colorspace_t pyrowave_session_colorspace(platf::display_t &disp, const config_t &config, hdr_info_t &hdr_info) {
     const bool display_is_hdr = disp.is_hdr();
-    bool hdr_display = display_is_hdr;
+    bool hdr_display = display_is_hdr || config.rtx_hdr_active;
 
     const auto colorspace = colorspace_from_client_config(config, hdr_display);
 
     hdr_info = std::make_unique<hdr_info_raw_t>(false);
     if (colorspace_is_hdr(colorspace)) {
       SS_HDR_METADATA metadata {};
-      if (display_is_hdr && disp.get_hdr_metadata(metadata)) {
+      if (config.rtx_hdr_active) {
+        metadata = synthesize_rtx_hdr_metadata(config.rtx_hdr_peak_nits);
+        hdr_info = std::make_unique<hdr_info_raw_t>(true, metadata);
+      } else if (display_is_hdr && disp.get_hdr_metadata(metadata)) {
         hdr_info = std::make_unique<hdr_info_raw_t>(true, metadata);
       } else {
         BOOST_LOG(error) << "Couldn't get display hdr metadata when colorspace selection indicates it should have one";
@@ -5949,6 +6286,7 @@ namespace video {
     params.height = config.height;
     params.yuv444 = config.chromaSamplingType == 1;
     params.colorspace = colorspace;
+    params.rtx_hdr = config.rtx_hdr_active;
     params.framerate = config.framerate;
     params.bitrate_kbps = config.bitrate;
     params.framing = config.pyrowave_framing;
@@ -5980,6 +6318,7 @@ namespace video {
     const std::chrono::duration<double, std::milli> max_frametime {1000.0 / minimum_fps_target};
 
     auto shutdown_event = mail->event<bool>(mail::shutdown);
+    auto touch_port_event = mail->event<input::touch_port_t>(mail::touch_port);
     auto packets = mail::man->queue<packet_t>(mail::video_packets);
     auto idr_events = mail->event<bool>(mail::idr);
     auto hdr_event = mail->event<hdr_info_t>(mail::hdr);
@@ -5996,7 +6335,9 @@ namespace video {
     std::vector<std::uint8_t> frame;
     std::size_t critical_bytes = 0;
     pyrowave::policy::detail_fec_controller_t detail_fec_controller(config.framerate);
+    rtx_hdr_metadata_refresh_state_t metadata_refresh;
     while (true) {
+      raise_touch_port_if_geometry_changed(touch_port_event, disp.get(), config);
       // Capture can change before the first encoded packet too.
       const bool reinit_pending = reinit_event.peek();
       if (shutdown_event->peek() || !images->running() || reinit_pending) {
@@ -6029,6 +6370,7 @@ namespace video {
       } else if (!images->running()) {
         return false;
       }
+      raise_touch_port_if_geometry_changed(touch_port_event, disp.get(), config);
 
       const auto submitted_at = std::chrono::steady_clock::now();
       encoder->on_frame(submitted_at);
@@ -6042,6 +6384,10 @@ namespace video {
       }
 
       if (pending_hdr_info) raise_hdr_info_if_changed(hdr_event, last_hdr_info, std::move(pending_hdr_info));
+      // Every PyroWave frame is intra-coded; refreshed metadata precedes it.
+#ifdef SUNSHINE_ENABLE_NV_TRUEHDR
+      refresh_rtx_hdr_metadata_if_needed(config, nullptr, hdr_event, last_hdr_info, metadata_refresh);
+#endif
 
       const auto detail_fec = params.critical_fec && params.framing == pyrowave::policy::framing_e::records ?
                                 detail_fec_controller.observe(frame, submitted_at, config.bitrate) :
@@ -6073,24 +6419,31 @@ namespace video {
     void *channel_data
   ) {
     auto shutdown_event = mail->event<bool>(mail::shutdown);
+    auto touch_port_event = mail->event<input::touch_port_t>(mail::touch_port);
 
     auto images = std::make_shared<img_event_t::element_type>();
-    // A capture worker belongs to the session's source key. The former shared
-    // worker selected its first context's display for every later context,
-    // which made a second Remote Monitor silently capture the wrong output.
-    capture_thread_async_ctx_t source_ctx {};
-    if (start_capture_async(source_ctx) != 0) {
+    // DXGI allows only one duplication per process/output. Normal mirror
+    // clients must share that producer, including WGC's secure-desktop fallback.
+    // Exact Remote Monitor outputs and synthetic Input stay session-local.
+    capture_source_lease_t source {
+      config.capture_source,
+      capture_thread_async,
+      start_capture_async,
+      end_capture_async
+    };
+    if (!source.get()) {
       return;
     }
-    auto stop_source = util::fail_guard([&]() {
-      end_capture_async(source_ctx);
-    });
+    auto &source_ctx = *source.get();
     auto lg = util::fail_guard([&]() {
       images->stop();
       shutdown_event->raise(true);
     });
 
-    source_ctx.capture_ctx_queue->raise(capture_ctx_t {images, config});
+    if (!source_ctx.capture_ctx_queue->try_raise(capture_ctx_t {images, config, touch_port_event})) {
+      BOOST_LOG(error) << "Shared capture session queue is full or stopped; rejecting the session."sv;
+      return;
+    }
 
     if (!source_ctx.capture_ctx_queue->running()) {
       return;
@@ -6102,13 +6455,13 @@ namespace video {
     std::optional<hdr_info_raw_t> last_hdr_info;
     rtx_hdr_metadata_refresh_state_t rtx_hdr_metadata_refresh;
 
-    auto touch_port_event = mail->event<input::touch_port_t>(mail::touch_port);
     auto hdr_event = mail->event<hdr_info_t>(mail::hdr);
 #if defined(_WIN32) || (defined(__linux__) && defined(SUNSHINE_BUILD_CUDA))
     int consecutive_encoder_initialization_failures = 0;
 #endif
 #ifdef _WIN32
     int consecutive_native_amf_runtime_failures = 0;
+    amf::lifecycle::initialization_fallback_t amd_initialization_fallback;
 #endif
 
     // Encoding takes place on this thread
@@ -6136,7 +6489,7 @@ namespace video {
         const auto colorspace = pyrowave_session_colorspace(*display, config, hdr_info);
 
         // absolute mouse coordinates require that the dimensions of the screen are known
-        touch_port_event->raise(make_port(display.get(), config));
+        publish_touch_port(touch_port_event, make_port(display.get(), config));
         if (!encode_run_pyrowave(frame_nr, mail, images, config, display, colorspace, source_ctx.reinit_event, channel_data, std::move(hdr_info), last_hdr_info)) {
           // Shutdown, or an encoder failure: end the session either way.
           return;
@@ -6149,6 +6502,12 @@ namespace video {
         BOOST_LOG(error) << "No encoder available for async capture"sv;
         return;
       }
+#ifdef _WIN32
+      if (config::video.encoder.empty() && enc_ptr == &amdvce_ffmpeg &&
+          native_amf_probe_retry_allowed.load(std::memory_order_acquire)) {
+        enc_ptr = &amdvce_experimental;
+      }
+#endif
       auto &encoder = *enc_ptr;
       const auto initialization_deadline = std::chrono::steady_clock::now() + 5s;
       initialization_cancel_t initialization_cancelled = [&]() {
@@ -6162,15 +6521,70 @@ namespace video {
       bool initialization_was_cancelled = false;
       bool initialization_gate_contended = false;
 #ifdef _WIN32
-      if (&encoder == &amdvce_ffmpeg) {
-        auto legacy = make_legacy_amf_session_bounded(
-          display, config, display->width, display->height,
-          initialization_deadline, initialization_cancelled,
-          initialization_was_cancelled, initialization_gate_contended);
-        if (legacy) {
-          prepared_session = std::move(legacy->session);
-          session_hdr_metadata_valid = legacy->hdr_metadata_valid;
-          session_hdr_metadata = legacy->hdr_metadata;
+      if (&encoder == &amdvce_experimental || &encoder == &amdvce_ffmpeg) {
+        using failure_e = amf::lifecycle::initialization_failure_e;
+        using result_t = amf::lifecycle::initialization_result_t<legacy_amf_session_bundle_t>;
+        const bool automatic = config::video.encoder.empty();
+        const auto &amd = config::video.amd;
+        const bool native_options = amd.amd_av1_tiles != 0 || amd.amd_ltr_frames != 0 ||
+                                    amd.amd_input_queue_size != 0 || amd.amd_smart_access_video ||
+                                    amd.amd_lowlatency_mode || amd.amd_high_motion_quality_boost ||
+                                    amd.amd_av1_screen_content || amd.amd_av1_latency_mode;
+        const bool compatible = amf::lifecycle::legacy_stream_format_compatible(
+          config.videoFormat, config.chromaSamplingType, config.dynamicRange != 0,
+          config.enableIntraRefresh == 1, native_options, config.numRefFrames,
+          amdvce_ffmpeg.codec_from_config(config)[encoder_t::REF_FRAMES_RESTRICT]);
+        std::optional<sunshine_colorspace_t> native_colorspace;
+        std::optional<SS_HDR_METADATA> native_hdr_metadata;
+        const auto native = [&]() -> result_t {
+          auto device = make_encode_device(*display, encoder, config);
+          if (!device) return {std::nullopt, failure_e::device_or_capture};
+          legacy_amf_session_bundle_t bundle;
+          bundle.hdr_metadata_valid = device->hdr_metadata_valid;
+          bundle.hdr_metadata = device->hdr_metadata;
+          native_colorspace = device->colorspace;
+          if (device->hdr_metadata_valid) native_hdr_metadata = device->hdr_metadata;
+          failure_e failure = failure_e::device_or_capture;
+          bundle.session = make_encode_session(
+            display.get(), encoder, config, display->width, display->height,
+            std::move(device), initialization_deadline, initialization_cancelled,
+            &initialization_was_cancelled, &initialization_gate_contended, &failure);
+          if (bundle.session) return {std::move(bundle), failure_e::none};
+          if (initialization_was_cancelled) failure = failure_e::cancelled;
+          else if (initialization_gate_contended) failure = failure_e::busy;
+          else if (native_amf_lifecycle_gate.is_quarantined()) failure = failure_e::unsafe_runtime;
+          if (failure == failure_e::encoder_create || failure == failure_e::encoder_init) {
+            BOOST_LOG(error) << "AMF: native encoder creation/initialization failed after completed cleanup"sv;
+          }
+          return {std::nullopt, failure};
+        };
+        const auto legacy = [&]() -> result_t {
+          // Fresh bounded vendor budget after native cleanup. Reuse the exact
+          // negotiated config: codec, depth, chroma and HDR are never relaxed.
+          auto bundle = make_legacy_amf_session_bounded(
+            display, config, display->width, display->height,
+            std::chrono::steady_clock::now() + 5s, initialization_cancelled,
+            initialization_was_cancelled, initialization_gate_contended,
+            native_colorspace, native_hdr_metadata ? &*native_hdr_metadata : nullptr);
+          if (bundle && bundle->session) return {std::move(*bundle), failure_e::none};
+          return {std::nullopt, initialization_was_cancelled ? failure_e::cancelled :
+                                initialization_gate_contended ? failure_e::busy : failure_e::encoder_init};
+        };
+        if (&encoder == &amdvce_ffmpeg) amd_initialization_fallback.legacy = true;
+        auto initialized = amd_initialization_fallback.initialize(
+          automatic, compatible, native, legacy, [&](failure_e) {
+            BOOST_LOG(warning) << "AMF: automatic native initialization failed; trying amdvce_ffmpeg once for this stream with the same codec/depth/chroma/HDR. The next stream will retry native AMF"sv;
+          });
+        if (amd_initialization_fallback.legacy) enc_ptr = &amdvce_ffmpeg;
+        if (initialized.value) {
+          prepared_session = std::move(initialized.value->session);
+          session_hdr_metadata_valid = initialized.value->hdr_metadata_valid;
+          session_hdr_metadata = initialized.value->hdr_metadata;
+        } else if (amd_initialization_fallback.failed_rollback ||
+                   (!initialization_was_cancelled && !initialization_gate_contended)) {
+          BOOST_LOG(error) << "AMF: stream initialization failed (stage=" << amf::lifecycle::initialization_failure_name(initialized.failure)
+                           << ", implementation=" << enc_ptr->name << "); ending stream without changing negotiated format"sv;
+          return;
         }
       } else
 #endif
@@ -6181,12 +6595,6 @@ namespace video {
           session_hdr_metadata = encode_device->hdr_metadata;
         }
       }
-#ifdef _WIN32
-      if (initialization_was_cancelled) continue;
-      if (!encode_device && !prepared_session && &encoder == &amdvce_experimental) {
-        BOOST_LOG(error) << "AMF: native device creation failed; refusing silent amdvce_ffmpeg fallback"sv;
-      }
-#endif
 #if defined(__linux__) && defined(SUNSHINE_BUILD_CUDA)
       if (!encode_device && !prepared_session && &encoder == &nvenc) {
         ++consecutive_encoder_initialization_failures;
@@ -6212,7 +6620,7 @@ namespace video {
       auto &session_encoder = *enc_ptr;
 
       // absolute mouse coordinates require that the dimensions of the screen are known
-      touch_port_event->raise(make_port(display.get(), config));
+      publish_touch_port(touch_port_event, make_port(display.get(), config));
 
       hdr_info_t pending_hdr_info = std::make_unique<hdr_info_raw_t>(false);
       if (session_hdr_metadata_valid) pending_hdr_info = std::make_unique<hdr_info_raw_t>(true, session_hdr_metadata);
@@ -6233,6 +6641,12 @@ namespace video {
         last_hdr_info,
         rtx_hdr_metadata_refresh
       );
+      if (encode_result == encode_run_result_e::native_nvenc_identity_failed) {
+        // No replacement encoder may resume this client decoder after identity
+        // was lost. The capture scope's guard stops images and signals shutdown.
+        BOOST_LOG(error) << "NvEnc: ending stream after output picture identity failure"sv;
+        return;
+      }
 #ifdef _WIN32
       if (encode_result == encode_run_result_e::native_amf_failed && &session_encoder == &amdvce_experimental) {
         // Runtime fatals (TDR, sustained backpressure, output stalls) are
@@ -6403,9 +6817,18 @@ namespace video {
         {
           auto encode_device = make_encode_device(*disp, encoder, config);
           if (encode_device) {
+            amf::lifecycle::initialization_failure_e failure = amf::lifecycle::initialization_failure_e::device_or_capture;
             session = make_encode_session(
               disp.get(), encoder, config, disp->width, disp->height,
-              std::move(encode_device), probe_deadline, []() { return false; });
+              std::move(encode_device), probe_deadline, []() { return false; }, nullptr, nullptr, &failure);
+#ifdef _WIN32
+            if (&encoder == &amdvce_experimental && config.videoFormat == 0) {
+              native_amf_probe_retry_allowed.store(
+                !session && (failure == amf::lifecycle::initialization_failure_e::encoder_create ||
+                             failure == amf::lifecycle::initialization_failure_e::encoder_init),
+                std::memory_order_release);
+            }
+#endif
           }
         }
         if (!session) {
@@ -6518,12 +6941,6 @@ namespace video {
     return -1;
   }
 
-  static thread_local std::shared_ptr<platf::display_t> cached_probe_display;
-  static thread_local platf::mem_type_e cached_display_type = platf::mem_type_e::system;
-#if defined(__linux__) && defined(SUNSHINE_BUILD_CUDA)
-  static thread_local bool cached_display_is_native_nvenc_probe = false;
-#endif
-
   bool validate_encoder(
     encoder_t &encoder,
     const bool expect_failure,
@@ -6600,31 +7017,12 @@ namespace video {
     config_t config_max_ref_frames {1920, 1080, 60, 6000, 1000, 1, 1, 1, 0, 0, 0};
     config_t config_autoselect {1920, 1080, 60, 6000, 1000, 1, 0, 1, 0, 0, 0};
 
-    // If the encoder isn't supported at all (not even H.264), bail early
-    // Try to reuse cached display if same device type
-    const auto cached_adapter = cached_probe_display ? cached_probe_display->capture_adapter_id() : std::nullopt;
-    const bool cached_display_matches_required =
-      !required_adapter || (cached_adapter && *cached_adapter == *required_adapter);
-#if defined(__linux__) && defined(SUNSHINE_BUILD_CUDA)
-    const bool wants_native_nvenc_probe = &encoder == &nvenc && !required_adapter;
-    const bool cached_probe_kind_matches =
-      cached_display_is_native_nvenc_probe == wants_native_nvenc_probe;
-#else
-    const bool cached_probe_kind_matches = true;
-#endif
-    if (cached_probe_display &&
-        cached_display_type == encoder.platform_formats->dev_type &&
-        cached_probe_kind_matches &&
-        cached_display_matches_required) {
-      disp = cached_probe_display;
-    } else {
-      reset_probe_display(config_autoselect);
-      cached_probe_display = disp;
-      cached_display_type = encoder.platform_formats->dev_type;
-#if defined(__linux__) && defined(SUNSHINE_BUILD_CUDA)
-      cached_display_is_native_nvenc_probe = wants_native_nvenc_probe;
-#endif
-    }
+    // The capability cache stores values, never a live GPU device. Keep the
+    // probe source local to this validation so success, failure, and exceptions
+    // all release it, even when the caller is a long-lived startup/worker thread.
+    // All codec/ref-frame checks below still share this source until HDR needs
+    // a different format.
+    reset_probe_display(config_autoselect);
 
     if (!disp) {
       clear_capabilities();
@@ -6746,7 +7144,6 @@ namespace video {
         // Reset the synthetic surface since we're switching from SDR to HDR.
         // The D3D adapter remains exact while the fake source format changes to
         // FP16, exercising the real 10-bit encoder conversion path.
-        cached_probe_display.reset();
         reset_probe_display(generic_hdr_config);
         if (!disp) {
           return false;
@@ -6930,7 +7327,7 @@ namespace video {
 #endif
 #ifdef _WIN32
     const auto amf_selection_policy = amf::lifecycle::encoder_selection_policy(config::video.encoder);
-    // The native encoder is experimental and must never be selected implicitly.
+    // Prefer native AMD automatically; explicit implementation choices remain strict.
     if (!amf_selection_policy.include_experimental) {
       encoder_list.erase(std::remove(encoder_list.begin(), encoder_list.end(), &amdvce_experimental), encoder_list.end());
     }
@@ -6955,9 +7352,6 @@ namespace video {
     active_av1_mode = config::video.av1_mode;
     last_encoder_probe_supported_ref_frames_invalidation = false;
     last_encoder_probe_supported_yuv444_for_codec = {};
-
-    // Clear any cached display from previous probes to ensure fresh start
-    cached_probe_display.reset();
 
     auto adjust_encoder_constraints = [&](encoder_t *encoder) {
       // If we can't satisfy both the encoder and codec requirement, prefer the encoder over codec support
@@ -7011,7 +7405,7 @@ namespace video {
 #endif
 #ifdef _WIN32
         if (amf_selection_policy.fail_closed) {
-          BOOST_LOG(error) << "Experimental native AMF was explicitly selected; refusing automatic fallback to amdvce_ffmpeg or another encoder"sv;
+          BOOST_LOG(error) << "An AMD implementation was explicitly selected; refusing automatic fallback to another encoder"sv;
           return -1;
         }
 #endif
@@ -7096,12 +7490,24 @@ namespace video {
     auto &encoder = *new_encoder;
 
 #ifdef _WIN32
+    if (&encoder == &amdvce_experimental && config::video.encoder.empty()) {
+      std::optional<platf::adapter_id_t> legacy_adapter;
+      const bool legacy_available = validate_encoder(
+        amdvce_ffmpeg, true, successful_probe_adapter ? successful_probe_adapter : required_adapter,
+        &legacy_adapter, probe_target.display_name);
+      BOOST_LOG(info) << "AMF: native is the automatic default; compatible FFmpeg initialization rollback is "
+                      << (legacy_available ? "available"sv : "unavailable"sv);
+      if (native_amf_lifecycle_gate.is_quarantined()) {
+        BOOST_LOG(error) << "AMF: capability probing left the runtime quarantined; refusing to start an AMD stream"sv;
+        return -1;
+      }
+    }
     if (encoder.name == "software"sv) {
       // Software is probed last, so reaching it means every hardware encoder —
       // including native AMF — failed validation. Make the degradation loud:
       // an AMD user should never discover software encoding from stutter alone.
       BOOST_LOG(error) << "No hardware encoder passed validation; the SOFTWARE encoder was selected."sv;
-      BOOST_LOG(error) << "If this system has an AMD GPU, hardware encoding is NOT active. Check the AMD driver and FFmpeg AMF availability; the native AMF encoder is experimental and is not selected automatically."sv;
+      BOOST_LOG(error) << "If this system has an AMD GPU, hardware encoding is NOT active. Check the AMD driver and FFmpeg AMF availability; automatic AMD selection prefers native AMF, with FFmpeg AMF available for compatible initialization failures."sv;
     }
 #endif
 

@@ -7,9 +7,21 @@ ownership, connection/config checkpoints and handle-wait decisions are extracted
 unchanged. Usage: script repository [compiler] [original-source directory].
 """
 from pathlib import Path
-import re, subprocess, sys, tempfile
-root=Path(sys.argv[1]).resolve();compiler=sys.argv[2] if len(sys.argv)>2 else 'c++'
-before=Path(sys.argv[3]) if len(sys.argv)>3 else None
+import argparse, re, subprocess, sys, tempfile
+parser=argparse.ArgumentParser()
+parser.add_argument('repository')
+parser.add_argument('compiler',nargs='?',default='c++')
+parser.add_argument('original_source_directory',nargs='?')
+parser.add_argument('--include-directory',action='append',default=[])
+args=parser.parse_args()
+root=Path(args.repository).resolve();compiler=args.compiler
+before=Path(args.original_source_directory) if args.original_source_directory else None
+compile_includes=['-I',str(root)]
+for value in args.include_directory:
+    for directory in filter(None,value.split(';')):
+        include=Path(directory).resolve()
+        if not include.is_dir():raise RuntimeError(f'Missing replay dependency include directory: {include}')
+        compile_includes.extend(['-I',str(include)])
 def read(path):
     candidate=before/Path(path).name if before else root/path
     return (candidate if candidate.exists() else root/path).read_text()
@@ -38,11 +50,21 @@ for cls in ('display_wgc_ipc_vram_t','display_wgc_ipc_ram_t'):
     start=display.index('  capture_e '+cls+'::snapshot(')
     body=display.index('{',start)
     boundary='    timeout = effective_wgc_timeout' if 'vram' in cls else '    winrt::com_ptr<ID3D11Texture2D> gpu_tex'
-    snapshots.append('capture_e '+cls+'::before_frame() '+display[body:display.index(boundary,body)]+'    return capture_e::ok;\n  }')
+    snapshots.append('capture_e '+cls+'::before_frame(bool cursor_visible) '+display[body:display.index(boundary,body)]+'    return capture_e::ok;\n  }')
 stream=read('src/stream.cpp');start=stream.index('    class join_deadline_t {')
 watch=stream[start:stream.index('\n  }  // namespace',start)].replace('std::chrono::seconds(10)','std::chrono::milliseconds(100)')
-start=stream.index('        auto hung_stage = std::make_shared<std::atomic<const char *>>("video thread");',stream.index('    void join(session_t &session'))
-join='      {\n'+stream[start:stream.index('      // Watchdog coverage ends',start)]
+join_anchor=stream.index('void join(session_t &session')
+start=stream.index('auto hung_stage = std::make_shared<std::atomic<const char *>>("video thread");',join_anchor)
+join=stream[start:stream.index('      // Watchdog coverage ends',start)]
+def extract_cpp_function(source,signature):
+    start=source.index(signature);brace=source.index('{',start);depth=1;end=brace+1
+    while depth:
+        depth+=(source[end]=='{')-(source[end]=='}');end+=1
+    return source[start:end]
+audio_header=read('src/audio_context.h');audio_source=read('src/audio_context.cpp')
+join_release=extract_cpp_function(audio_header,'template<class Join>\n  void join_capture_and_release(')
+rtsp_join=extract_cpp_function(audio_source,'void join_rtsp_capture(')
+audio_join='namespace audio {\n  enum class join_stage_e { video, audio, control };\n'+join_release+'\n'+rtsp_join+'\n}\n'
 code=r'''
 #include <algorithm>
 #include <array>
@@ -51,12 +73,14 @@ code=r'''
 #include <condition_variable>
 #include <cstring>
 #include <future>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <span>
 #include <sstream>
 #include <thread>
+#include <utility>
 #include "src/thread_safe.h"
 #include "src/sync.h"
 using namespace std::literals;
@@ -92,6 +116,7 @@ struct IPC {
 // METHODS
  bool setup_shared_resources_from_shared_handles(const shared_handle_data_t&){++setups;return true;}
  bool should_swap_to_dxgi(){return false;}bool should_reinit(){return false;}bool is_initialized(){return _initialized;}
+ bool set_cursor_visible(bool){return !stop_requested();}
  void handle_desktop_switch_message(std::span<const uint8_t>){}
  void initialize_if_needed(){
 // PRE
@@ -104,8 +129,8 @@ struct IPC {
 };
 namespace platf {enum class capture_e{ok,error,reinit,interrupted};struct display_t{virtual ~display_t()=default;};namespace dxgi {
 struct display_base_t:display_t{virtual void request_capture_stop() noexcept {}};
-struct display_wgc_ipc_vram_t:display_base_t{std::shared_ptr<IPC> _ipc_session;void request_capture_stop() noexcept override;capture_e before_frame();};
-struct display_wgc_ipc_ram_t:display_base_t{std::shared_ptr<IPC> _ipc_session;void request_capture_stop() noexcept override;capture_e before_frame();};
+struct display_wgc_ipc_vram_t:display_base_t{std::shared_ptr<IPC> _ipc_session;void request_capture_stop() noexcept override;capture_e before_frame(bool cursor_visible=true);};
+struct display_wgc_ipc_ram_t:display_base_t{std::shared_ptr<IPC> _ipc_session;void request_capture_stop() noexcept override;capture_e before_frame(bool cursor_visible=true);};
 // FORWARD
 // SNAPSHOTS
 }}
@@ -117,7 +142,8 @@ struct capture_thread_async_ctx_t {
 #define _WIN32
 // END
 #undef _WIN32
-struct session_t{std::thread videoThread,audioThread;safe::signal_t controlEnd;};
+struct session_t{std::thread videoThread,audioThread;safe::signal_t controlEnd;std::shared_ptr<void> audio_context_guard=std::make_shared<int>(1);};
+// AUDIO_JOIN
 void join_session(session_t& session){
 // JOIN
 }
@@ -134,7 +160,7 @@ template<class Display> void cancel(int phase){
  auto limit=std::chrono::steady_clock::now()+1s;while(c.capture_ctx_queue->running()&&std::chrono::steady_clock::now()<limit)std::this_thread::yield();
  check(!c.capture_ctx_queue->running(),"capture queue stopped");
  std::thread reaper([&]{join_session(s);});resume.set_value();reaper.join();
- check(traps==0,"WGC cancellation completes before video watchdog");check(ipc->stop_requested(),"stop targets this WGC generation");check(ipc->setups==0,"cancelled helper imports no handles");
+ check(traps==0,"WGC cancellation completes before video watchdog");check(ipc->stop_requested(),"stop targets this WGC generation");check(ipc->setups==0,"cancelled helper imports no handles");check(!s.videoThread.joinable()&&!s.audioThread.joinable(),"video and audio threads are joined");check(!s.audio_context_guard,"capture hold is released after joins");
 }
 int main(){
  for(int p=0;p<3;++p){cancel<platf::dxgi::display_wgc_ipc_vram_t>(p);cancel<platf::dxgi::display_wgc_ipc_ram_t>(p);}
@@ -152,8 +178,8 @@ int main(){
 '''
 budgets='\n'.join(re.findall(r'^    constexpr auto kHelperHandle(?:WaitTimeout|ProgressInterval) = [^\n]+',ipc,re.M))
 if len(budgets.splitlines())!=2:raise RuntimeError('Missing production WGC helper wait budgets')
-for name,value in [('METHODS','\n'.join(methods)),('PRE',pre),('CONNECT',connect),('SEND',send),('WAIT',wait),('FORWARD','\n'.join(forward)),('SNAPSHOTS','\n'.join(snapshots)),('WATCH',watch),('END',end),('JOIN',join),('BUDGETS',budgets)]:code=code.replace('// '+name+'\n',value+'\n')
+for name,value in [('METHODS','\n'.join(methods)),('PRE',pre),('CONNECT',connect),('SEND',send),('WAIT',wait),('FORWARD','\n'.join(forward)),('SNAPSHOTS','\n'.join(snapshots)),('WATCH',watch),('END',end),('JOIN',join),('BUDGETS',budgets),('AUDIO_JOIN',audio_join)]:code=code.replace('// '+name+'\n',value+'\n')
 with tempfile.TemporaryDirectory(prefix='wgc-stop-replay-') as temp:
     cpp=Path(temp)/'test.cpp';exe=Path(temp)/'test';cpp.write_text(code)
-    subprocess.run([compiler,'-std=c++23','-O2','-pthread','-Wall','-Wextra','-I',str(root),str(cpp),'-o',str(exe)],check=True)
+    subprocess.run([compiler,'-std=c++23','-O2','-pthread','-Wall','-Wextra',*compile_includes,str(cpp),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True,timeout=8)

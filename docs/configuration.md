@@ -387,9 +387,10 @@ editing the `conf` file in a text editor. Use the examples as reference.
             @note{This option applies to Windows only and requires the Vibeshine virtual gamepad
             driver to be installed. It presents a DualSense to clients that report a PlayStation
             controller, or when motion_as_ds4 or touchpad_as_ds4 applies, and an Xbox Series
-            controller otherwise. On an older driver it falls back to a generic HID pad that
-            publishes the DirectInput Physical Interface Device report set, so force feedback still
-            works in DirectInput games.}</td>
+            controller otherwise. A client that reports a Steam Controller, Switch or PlayStation
+            controller gets that profile when the driver offers it, and the driver's automatic
+            profile otherwise. A driver that offers no console profile is reported as unusable
+            (the reserved generic HID profiles are never selected).}</td>
     </tr>
     <tr>
         <td>vhf_switch</td>
@@ -398,6 +399,24 @@ editing the `conf` file in a text editor. Use the examples as reference.
             driver to be installed. Includes motion sensors, battery reporting, rumble, and the
             Capture button. This controller has no analog triggers, so trigger travel is reported
             as ZL and ZR presses, and it has no touchpad.}</td>
+    </tr>
+    <tr>
+        <td>vhf_steam</td>
+        <td>Steam Controller (2026) on Vibeshine's own virtual gamepad driver
+            @note{This option applies to Windows only and requires a Vibeshine virtual gamepad
+            driver with the Steam Controller profile. Steam recognises it as a real Steam
+            Controller: two trackpads (the client's touchpad 0 and 1), four grip buttons, motion
+            sensors, battery and pad haptics rendered as rumble. Plain `vhf` and `auto` select it
+            for clients that report a Steam Controller. Whether selected here or automatically, only
+            a client controller that reports the Steam type together with the Steam extensions (grip
+            sense, the pad haptic relay or explicit pad clicks) gets this profile; any other controller
+            the same client forwards, a keyboard's joystick interface for instance, or a Steam Deck's
+            built-in controls through SDL, gets the automatic choice instead of becoming a second
+            Steam Controller. A client that reads the real controller's
+            firmware attributes (firmware and bootloader build times, board revision, build id,
+            serials) relays them, so Steam sees the real firmware build and offers an update only
+            when the real controller needs one; a driver that predates this keeps its defaults.}
+            @warning{Do not start a Steam Controller firmware update from Steam while streaming: the update would target this virtual controller, not the real one. Update with the controller connected directly to a PC.}</td>
     </tr>
     <tr>
         <td>vhf_xbox</td>
@@ -492,7 +511,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             <br>
             <br>
             When disabled, motion sensors will not be taken into account during gamepad type selection.
-            @hint{Only applies when gamepad is set to auto.}
+            @hint{Applies when gamepad is set to auto or vhf.}
         </td>
     </tr>
     <tr>
@@ -520,7 +539,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             <br>
             <br>
             When disabled, touchpad presence will not be taken into account during gamepad type selection.
-            @hint{Only applies when gamepad is set to auto.}
+            @hint{Applies when gamepad is set to auto or vhf.}
         </td>
     </tr>
     <tr>
@@ -562,6 +581,35 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### guide_button_key
+
+The raw client keyboard virtual-key code to consume as a held Home/Guide button.
+`0` (default) disables the binding; values `1` through `255` enable it. For example,
+set `guide_button_key = 124` and map a Steam Input chord to F13 on the client.
+The key is matched before `keybindings` and host shortcuts. No host keyboard event
+or keyboard repeat is generated for the bound key.
+
+Only the configured controller slot of the client sending the key is targeted.
+Both keyboard and controller input must be enabled, and that controller must
+already be connected. A press without a connected target is consumed; connecting
+or reconnecting a controller while the key is held does not press Guide. Release
+and press the key again. Key-up releases the binding, including after input is
+disabled. Controller removal and session disconnect clear its held Guide state.
+Native Guide remains independent. The existing `back_button_timeout` is unchanged;
+set it below `0` if the Back/Select shortcut is unwanted.
+
+The binding and target slot are captured for each new session using file/command
+line settings, then that session's application overrides, then its client overrides.
+Concurrent clients can select different keys and slots, including disabling the
+binding. Global, app or per-client changes apply to new sessions; WebRTC input
+reconnection and capture replacement keep the registered session's settings.
+
+### guide_button_controller
+
+Client-relative controller slot for `guide_button_key`, from `0` through `15`.
+The default `0` selects the sending client's first controller, never the first
+controller of another client. This option does not create or redirect controllers.
+
 ### keyboard
 
 <table>
@@ -592,7 +640,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Description</td>
         <td colspan="2">
             The initial delay, in milliseconds, before repeating keys. Controls how fast keys will
-            repeat themselves.
+            repeat themselves. When VHF is active for keyboard input, Windows controls key repeat.
         </td>
     </tr>
     <tr>
@@ -615,7 +663,8 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            How often keys repeat every second.
+            How often keys repeat every second. When VHF is active for keyboard input, Windows
+            controls key repeat.
             @tip{This configurable option supports decimals.}
         </td>
     </tr>
@@ -710,6 +759,45 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### keyboard_mouse_backend
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Select how Vibeshine sends keyboard and mouse input on Windows. `auto` (the default)
+            prefers VHF when a compatible driver is available at input initialization and otherwise
+            uses Windows SendInput. `sendinput` always uses Windows SendInput; `vhf` explicitly
+            prefers virtual HID devices. Existing explicit settings are preserved. Backend selection
+            does not switch automatically just because a game starts or stops.
+            VHF requires a compatible virtual input driver
+            and Vibeshine running as SYSTEM or an elevated administrator. If the driver is missing,
+            lacks the capability, or access is denied, Vibeshine uses SendInput. Auto logs this normal
+            fallback as informational; an explicitly selected VHF backend logs a warning.
+            The bundled driver supports VHF keyboard and mouse input.
+            VHF keyboard repeat follows Windows settings; a modifier sent only as a temporary
+            packet flag may not remain active during a repeated key. Mouse scrolling uses whole detents.
+            Unicode text, unsupported keys, and absolute pointer positions outside the primary display
+            use SendInput. Mixed VHF and SendInput events may be processed in a different order, which
+            can affect absolute dragging on secondary displays. The keyboard and mouse enable settings
+            still apply. Restart Vibeshine after changing this setting.
+            @caution{Applies to Windows only. VHF requires a compatible virtual input driver.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            auto
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            keyboard_mouse_backend = vhf
+            @endcode</td>
+    </tr>
+</table>
+
 ### high_resolution_scrolling
 
 <table>
@@ -719,7 +807,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             When enabled, Sunshine will pass through high resolution scroll events from Moonlight clients.
             <br>
             This can be useful to disable for older applications that scroll too fast with high resolution scroll
-            events.
+            events. When VHF is active for mouse input, scrolling uses whole detents.
         </td>
     </tr>
     <tr>
@@ -1018,6 +1106,43 @@ dualsense_haptics_gain = 1.5
     </tr>
 </table>
 
+### audio_format
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Selects the encoded audio format sent to a compatible client. Opus remains the default.
+            AC-3 (Dolby Digital) and E-AC-3 (Dolby Digital Plus) are offered only when the linked FFmpeg build
+            includes the selected encoder. The client must explicitly accept the exact codec offer; otherwise
+            Vibeshine falls back to Opus. Dolby supports stereo and 5.1 channels.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2"><code>opus</code></td>
+    </tr>
+    <tr><td>Choices</td><td>opus</td><td>Use Opus encoding.</td></tr>
+    <tr><td></td><td>ac3</td><td>Use Dolby Digital AC-3 encoding.</td></tr>
+    <tr><td></td><td>eac3</td><td>Use Dolby Digital Plus E-AC-3 encoding.</td></tr>
+    <tr><td>Example</td><td colspan="2"><code>audio_format = ac3</code></td></tr>
+</table>
+
+### high_quality_audio
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            When AC-3 or E-AC-3 is accepted by the client, selects a higher Dolby bitrate at the cost of increased
+            network bandwidth. Stereo uses 128 kbit/s by default or 192 kbit/s with high quality; AC-3 5.1 uses
+            384 or 640 kbit/s; E-AC-3 5.1 uses 192 or 384 kbit/s. This setting has no effect when Opus is selected.
+        </td>
+    </tr>
+    <tr><td>Default</td><td colspan="2"><code>disabled</code></td></tr>
+    <tr><td>Example</td><td colspan="2"><code>high_quality_audio = enabled</code></td></tr>
+</table>
+
 ### install_steam_audio_drivers
 
 <table>
@@ -1265,6 +1390,10 @@ dualsense_haptics_gain = 1.5
     </tr>
 </table>
 
+The Devices editor can offer **Advertise only this client's resolution** for a private Windows virtual display. The option appears only when the opened bundled driver reports control protocol 3.8 or later; an existing saved choice remains visible so it can be disabled after a downgrade. The default is off. This setting belongs to the paired client, rather than the global configuration or application overrides. Matching refresh rates remain available, including supported base and multiplied rates.
+
+An explicit request fails with a client-visible error when the producer cannot confirm support or the session uses a physical, shared, SudoVDA or peer capture target. Catalog changes take effect at a new session boundary by replacing only a securely reclaimed owned temporary monitor. A matching retained catalog is reused when its refresh and adapter provenance permit it. A capture-ready retained output can be reconciled only by the same paired app owner after all live and pending capture work has ended, with an exact tracked display identity. Changing the create provider does not bypass catalog checks for owned Sunshine displays; restore the bundled provider before resuming that retained private target. Windows driver packaging, signing and native enumeration must qualify a compatible producer before deployment.
+
 ### virtual_display_mode
 
 <table>
@@ -1441,6 +1570,94 @@ or safely reprovision the pool with the host and compositor stopped before
 requesting more than four clients. The topology editor reports the effective
 limit. Arbitrarily many displays are not supported.
 
+### Remote Monitor display policy
+
+Remote Monitor uses one stable private virtual display per paired client on
+Windows and Linux. Its display extends the current desktop through the topology
+coordinator. A normal per-client game and Remote Monitor from the same paired
+client share that display identity and release their ownership independently.
+The Remote Monitor disconnect settings below determine whether its display is
+retained for Resume after the stream ends.
+
+Set placement, gap, alignment, and primary status under **Devices → Arrange client
+displays** in the v2 interface. Selecting a physical display as a layout anchor
+positions the client's virtual display relative to it; it does not select that
+physical display for capture.
+
+The ordinary top-level application fields `virtual-display-mode`,
+`virtual-display-layout`, `virtual-screen`, `dd-configuration-option`, and
+`display-output` do not select Remote Monitor's target or layout. The application
+editors hide those controls for Remote Monitor and preserve existing values on
+unrelated saves. Runtime `config-overrides` remain available and follow their
+existing activation rules; they do not create a separate monitor target.
+
+Additional Monitor profiles can be configured as applications with a fresh UUID
+and `"remote-monitor-profile": true`. For example, add the following app to
+`apps.json` while preserving the other entries (replace the example UUID for each
+additional profile):
+
+```json
+{
+  "name": "Work Monitor",
+  "uuid": "f1a171c5-66eb-4cc1-8d15-9f8d20680845",
+  "remote-monitor-profile": true,
+  "image-path": "remote-session/remote-monitor.png",
+  "config-overrides": { "remote_monitor_mute_audio": true }
+}
+```
+
+Marked Remote Monitor profiles require a literal, non-nil UUID unique among all
+configured applications. Fixed Resume, Disconnect, Terminate, Monitor, Input and
+running-game control UUIDs are reserved, including case variants. The save API
+rejects invalid or conflicting marked identities with an explicit validation
+error before writing the catalog. Existing invalid marked entries remain in
+apps.json for repair, are logged and omitted from the runtime catalog, and are
+never converted to ordinary apps or assigned a replacement UUID. Legacy builtin
+entries without the marker keep their existing control identity.
+
+Steam and Lutris sync preserve marked rows, including their provider metadata.
+Their publication step rejects changes that would invalidate a previously valid
+profile before writing the catalog or refreshing the runtime cache. An unchanged
+already-invalid profile remains available for repair; this exception does not
+promise to reject further conflicts while that profile is already omitted.
+
+The marker is explicit: a matching title, copied artwork, or ordinary routing
+fields do not turn an application into a Monitor profile. Profiles have distinct
+catalogue identities and use the same paired client's stable private display.
+The app allocator and launch routing share one identity policy for all current
+and legacy built-in controls, including saved IDs and aliases. Existing valid
+app IDs and unambiguous aliases remain usable. The running game's extra Resume
+tile keeps its prior app/art-based numeric ID when free; otherwise it chooses a
+free ID against every configured app and retained alias, including hidden apps.
+Only that synthetic tile changes; configured app IDs and UUIDs remain stable.
+
+Clients must refresh their catalogue after a control-ID migration or a catalogue
+change that occupies a cached running tile's ID. A numeric-only cached tile has
+no way to distinguish its old meaning from a newly configured app; the current
+configured ID or alias takes that meaning. For contextual running tiles, a
+supplied configured UUID selects that app, while the synthetic running UUID
+continues to select Resume. Fixed numeric control IDs retain their control meaning.
+Their commands and ordinary app display selectors are not executed. Profile
+application overrides are copied when ownership is accepted; paired-client
+overrides retain their existing precedence and activation rules. The two editors
+preserve the marker and hide ineffective ordinary display selectors when editing
+an existing profile. The v2 editor's advanced JSON can add the marker; a dedicated
+profile creation/target selector is not yet available.
+
+Only one Monitor profile is retained per paired client. Transport loss and
+**Resume** keep that selected UUID and its application overrides, including after
+its entry is renamed, edited, or deleted. Launching another profile (including
+the built-in Monitor) returns a conflict until **Disconnect Monitor** completes.
+After Disconnect, a fresh launch reads the current profile configuration. The
+built-in Monitor preserves its existing live-configuration behavior. Profiles
+can coexist with another client's Monitor and with the same client's normal
+per-client game without replacing the stable display identity.
+
+Shared virtual targets and physical capture targets remain unsupported. A normal
+application can select a display using ordinary app routing, but follows the
+normal game lifecycle and does not acquire an independent monitor role alongside
+a running game.
+
 ### remote_monitor_mute_audio
 
 Do not capture or transmit host audio for Remote Monitor sessions. Video and
@@ -1516,6 +1733,14 @@ this option to replace the running app immediately. The default is `true`.
         <td>Activate the display if it's currently inactive and disable all others.</td>
     </tr>
 </table>
+
+Display preparation follows Client → Application → Global precedence. A client's
+`dd_configuration_option` override wins over the application's dedicated or generic
+preparation setting. A virtual-display selection or layout at a higher level can
+use its normal virtual layout preparation despite inherited `verify_only`.
+An explicit `verify_only` at the same or a higher level remains authoritative.
+These overrides are temporary for the session. If virtual-display creation falls
+back to a physical output, the virtual-only promotion is not applied.
 
 ### dd_resolution_option
 
@@ -1728,6 +1953,16 @@ this option to replace the running app immediately. The default is `true`.
     </tr>
 </table>
 
+### dd_remove_virtual_display_after_restore
+
+Remove owned virtual displays after the application has closed, the last stream has ended, and the display helper confirms successful physical display restoration. Only the exact managed display identities captured for that restore are eligible. A pending, failed, or unavailable confirmation keeps the displays retained. Launching or resuming another session cancels deferred removal.
+
+This option applies to Windows. The default is `disabled`, preserving stable identities between streams. Paused applications retain their displays. This setting does not change when physical restoration is requested; `dd_config_revert_on_disconnect` and application shutdown still control that behavior.
+
+```ini
+dd_remove_virtual_display_after_restore = disabled
+```
+
 ### dd_config_revert_on_disconnect
 
 <table>
@@ -1895,6 +2130,65 @@ this option to replace the running app immediately. The default is `true`.
             @endcode</td>
     </tr>
 </table>
+
+### end_stream_hotkey
+
+Optional Windows host keyboard shortcut that ends **all** RTSP and WebRTC streams,
+cancels pending launches and previously queued launch/resume/WebRTC starts,
+terminates the current application (including its undo
+commands), and restores the physical desktop. This is separate from the
+restore-only `dd_snapshot_restore_hotkey` action.
+
+Default: empty (disabled). Accepts letters, digits, or F1-F24. At least one modifier
+is required. To opt in to Ctrl+Alt+Shift+Q:
+
+```ini
+end_stream_hotkey = Q
+end_stream_hotkey_modifiers = ctrl+alt+shift
+```
+
+The shortcut is registered by a helper owned by the active console user on the
+ordinary Windows desktop, including when the host runs as a machine service.
+It follows console user changes and is unavailable on the lock screen, secure
+UAC desktop, or an RDP-only session. Registration conflicts are logged; choose a
+combination different from the restore shortcut and other applications. Applying a
+new combination retires the old helper. Requests accepted during terminal cleanup
+are canceled too; submit a fresh request after cleanup finishes to start again.
+The helper runs as the console user. A manually elevated host passes its elevation
+to the helper; service mode uses the console user's existing token without
+requesting elevation. This does not guarantee a limited token when UAC is disabled.
+Before display recovery the host closes stream admission and drains in-process
+startup, teardown, pending-expiry work and WebRTC negotiation through its SDK
+completion callbacks and the cleanup of each enclosing native call, callback
+context and owned peer resource. Inline nested completions retain a shared owner
+of that cleanup reservation until the enclosing callback returns. WebRTC peer
+retirement refuses new native-call guards. Work admitted before retirement may
+finish, including its next SDP SDK stage, while remaining counted for cleanup.
+A missing SDK completion also defers recovery. If existing work does not drain
+within 30 seconds, or a topology failure retains display ownership, recovery is deferred
+and the log explains the failure; retry after that condition is resolved. The
+30-second limit covers admission draining, not the existing synchronous capture
+joins or per-command app shutdown timeouts. Configured undo commands can be left
+running by the process manager after their timeout. Side effects from those
+external children are outside this in-process cleanup guarantee.
+Display recovery is best effort if a monitor or driver is unavailable.
+
+Application startup remains counted while waiting for lifecycle serialization and
+through its in-process completion tail. Queued starts from an earlier terminal
+epoch are canceled; submit a new request after cleanup returns. A process execute
+first reached while cleanup has closed admission returns 503 before changing app
+or display state, while an execute already admitted may finish before terminal
+teardown proceeds.
+The paired sleep POST uses the same epoch fence, covering acceptance response
+flush and the native power callback. An accepted callback must finish or cause
+the bounded drain to defer recovery; queued stale power requests are canceled.
+
+### end_stream_hotkey_modifiers
+
+Modifiers for `end_stream_hotkey`. Default: `ctrl+alt+shift`. Accepts `ctrl` /
+`control`, `alt`, `shift`, and `win` / `windows` / `meta`, joined with `+`, `|`,
+commas or spaces. An empty or `none` modifier disables the end-stream shortcut.
+These settings are host-wide and are not application runtime overrides.
 
 ### dd_use_sunshine_virtual_display_driver
 
@@ -2413,6 +2707,40 @@ this option to replace the running app immediately. The default is `true`.
     </tr>
 </table>
 
+### control_peer_timeout
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Host-side timeout thresholds, in milliseconds, for unacknowledged reliable control traffic.
+            `0` leaves the ENet defaults unchanged (minimum 5000 ms, maximum 30000 ms).
+            A positive value sets both thresholds for each new control peer. Accepted decimal values are
+            0 through 86399999; higher values exceed ENet's timestamp comparison window.
+            Each configuration apply starts from defaults: a missing, empty, malformed, negative or
+            out-of-range value uses `0`, including when reloading a previously valid positive value.
+            New peers take one snapshot of the last timeout published after successful configuration
+            parsing. During a reload they can use the preceding value; a parsing failure does not publish
+            a new timeout. Existing peers keep their connection-time thresholds.
+            To tolerate short network drops, also raise `ping_timeout` and use a client with a matching
+            retry window. The ping deadline or the client's own timeout can still end the stream earlier.
+            This option does not delay explicit session termination or change session resume behavior.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            0
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            control_peer_timeout = 60000
+            @endcode</td>
+    </tr>
+</table>
+
 ### video_max_batch_size_kb
 
 <table>
@@ -2440,6 +2768,66 @@ this option to replace the running app immediately. The default is `true`.
         <td>Example</td>
         <td colspan="2">@code{}
             video_max_batch_size_kb = 32
+            @endcode</td>
+    </tr>
+</table>
+
+### pacing_batch_demand_limit
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Experimental opt-in for ordinary video streams. Vibeshine derives a sender pacing quantum from the negotiated bitrate,
+            frame demand, and FEC-expanded packet count, then uses it for the pacing group and per-call batch limit.
+            This may split a frame across more send calls and increase host-side send work.
+            It does not guarantee a wire-level burst limit or establish the cause of a reported streaming failure.
+            PyroWave keeps its existing adaptive pacing behavior.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}false@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            pacing_batch_demand_limit = true
+            @endcode</td>
+    </tr>
+</table>
+
+### host_adaptive_pacing
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Experimental opt-in for ordinary H.264, HEVC and AV1 streams. Vibeshine spaces video packets using a rate that
+            starts at twice the encoder bitrate or 1.25 times the stream's packetized wire demand (including FEC), whichever
+            is higher, within the usual 800 Mbps ceiling. It then probes upward by up to 12.5% at most every half second,
+            but only while video is busy, recent standard client pings arrive and the control stream's round trip time is
+            stable and nonzero. Loss reported by the client during a probe restores the previous rate and extends the
+            recovery hold (8 seconds, up to a minute). Outside probes, the rate is halved only after two distinct failed
+            frames, or several recovered frames missing at least 2% of the packets sent, in a half-second sample.
+            The rate never drops below 1.25 times the current wire demand. Encoder bitrate and frame rate never change.
+            <br><br>
+            Loss reports (<code>SS_FRAME_FEC_STATUS</code>) come from Moonlight clients that send them to Sunshine-family
+            hosts. Clients that do not send them cannot trigger a cut or reject a probe, so
+            such a stream keeps its conservative starting rate or probes without loss feedback. Startup adds transmission time, mostly to a large first
+            keyframe. Batches hold at most about one millisecond of traffic at the selected rate.
+            This does not guarantee a wire-level burst limit or establish the cause of a reported streaming failure.
+            PyroWave streams are unaffected. Rate changes are logged at info level.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}false@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            host_adaptive_pacing = true
             @endcode</td>
     </tr>
 </table>
@@ -2948,7 +3336,9 @@ this option to replace the running app immediately. The default is `true`.
     <tr>
         <td>wlr</td>
         <td>Capture for wlroots based Wayland compositors via wlr-screencopy-unstable-v1. It is possible to capture
-            virtual displays in e.g. Hyprland using this method.
+            virtual displays in e.g. Hyprland using this method in a user-session host.
+            The experimental Hyprland machine-service subset uses physical KMS capture;
+            see <a href="linux/hyprland.md">its supported contract</a>.
             @note{Applies to Linux only.}</td>
     </tr>
     <tr>
@@ -3060,8 +3450,8 @@ this option to replace the running app immediately. The default is `true`.
     </tr>
     <tr>
         <td>amdvce_ffmpeg</td>
-        <td>For AMD graphics cards. This is the supported FFmpeg-based AMF encoder and the
-            implementation used by automatic selection on Windows.
+        <td>Legacy FFmpeg-based AMD AMF encoder. Select this explicitly to preserve legacy
+            encoding. Automatic selection prefers native AMF on Windows.
             @note{Existing configurations using @code{}amdvce_legacy@endcode are accepted as
             a compatibility alias for @code{}amdvce_ffmpeg@endcode. The former native
             @code{}amdvce@endcode value is accepted as an alias for
@@ -3069,9 +3459,14 @@ this option to replace the running app immediately. The default is `true`.
     </tr>
     <tr>
         <td>amdvce_experimental</td>
-        <td>Experimental native AMD AMF encoder. It is not selected automatically, has limited
-            hardware test coverage, and may not work with older GPUs or driver versions. Explicit
-            selection fails closed instead of silently changing encoder implementations.
+        <td>Native AMD AMF encoder, preferred by automatic selection on Windows. The historical
+            name remains compatible with existing settings. Explicit selection fails closed.
+            With automatic selection, a confirmed encoder creation or initialization failure
+            permits one FFmpeg AMF rollback per stream after native cleanup completes. Codec,
+            bit depth, chroma and HDR remain unchanged. Unsupported requested formats, explicit
+            native options, intra refresh, unsupported decoder reference limits, capture/conversion errors, cancellation, contention
+            and unsafe driver timeouts do not trigger rollback. The next stream retries native
+            initialization; a failed rollback ends the stream.
             @note{Applies to Windows only.}</td>
     </tr>
     <tr>
@@ -3317,7 +3712,10 @@ are detected during the stream. The host log reports hook readiness or failure.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Full path to the RTSS install directory. If empty, Sunshine will attempt to auto-detect it.
+            Full path to the RTSS install directory under Program Files. If empty, Sunshine will
+            attempt to auto-detect it. Paths outside Program Files and paths containing reparse
+            points are ignored because the Windows service loads signed RTSS integration code in
+            its privileged host process; Vibeshine falls back to the default Program Files location.
         </td>
     </tr>
     <tr>
@@ -4036,6 +4434,7 @@ runtime version is written to the log on every AMD HDR HEVC attempt (search for
         <td>Description</td>
         <td colspan="2">
             The quality profile controls the tradeoff between speed and quality of encoding.
+            Speed is the default to prioritize low latency. Existing explicit selections are preserved.
             `auto` leaves the quality property unset so the selected AMF usage preset can choose it.
             @note{This option applies to the AMD [encoders](#encoder).}
         </td>
@@ -4043,13 +4442,13 @@ runtime version is written to the log on every AMD HDR HEVC attempt (search for
     <tr>
         <td>Default</td>
         <td colspan="2">@code{}
-            balanced
+            speed
             @endcode</td>
     </tr>
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            amd_quality = balanced
+            amd_quality = speed
             @endcode</td>
     </tr>
     <tr>
@@ -4211,6 +4610,29 @@ runtime version is written to the log on every AMD HDR HEVC attempt (search for
         <td>force screen-content tools off</td>
     </tr>
 </table>
+
+### amd_av1_tiles
+
+Experimental AV1 tile-count override for the native `amdvce_experimental` encoder only. Set this in `sunshine.conf`.
+
+| Value | Behavior |
+| --- | --- |
+| `0` (default) | Preserve the client's tile/slice request and the usage-preset default. |
+| `1`, `2`, `4` | Request this many AV1 tiles, overriding the client request. |
+
+Example: `amd_av1_tiles = 2`. Reconnect the stream after changing this setting.
+Invalid values fall back to `0`. This does not affect H.264, HEVC or `amdvce_ffmpeg`.
+
+AMF may adjust the requested tile count for its supported layout. The session log reports the request and
+the driver-reported count **after encoder initialization**; these are not a bitstream inspection or proof
+of multi-engine split-frame encoding. The split-frame hint is likewise only a driver recommendation.
+More tiles are not guaranteed to improve latency and can trade compression efficiency for parallelism.
+See [AMD's AV1 tile documentation](https://github.com/GPUOpen-LibrariesAndSDKs/AMF/blob/master/amf/doc/AMF_Video_Encode_AV1_API.md)
+and [AMD's split-frame explanation](https://github.com/GPUOpen-LibrariesAndSDKs/AMF/issues/585#issuecomment-3755732553).
+
+For a controlled comparison, repeat the same scene with `1`, `2` and `4` at identical resolution, FPS,
+bitrate and HDR settings. Check the reported tile count, image quality, dropped frames and latency
+distribution, not only a single maximum. Restore `0` if there is no repeatable benefit.
 
 ### amd_av1_latency_mode
 
@@ -4839,7 +5261,7 @@ Sets the number of long-term reference frames used by the experimental native AM
 
 ### amd_input_queue_size
 
-Sets the experimental native AMD encoder input queue depth. A positive explicit value overrides automatic low-latency queue selection.
+Sets the experimental native AMD encoder's driver input capacity. This is not the number of frames Vibeshine permits to accumulate: the native encoder independently keeps the smallest pipeline depth demonstrated by the runtime and drops a newer stale capture rather than growing that backlog. Leave this at `0` for the driver default unless hardware testing shows a benefit. A positive explicit value overrides VRR low-latency queue selection; values as small as `1` can starve drivers that retain several startup surfaces, while `4` is the safer low-latency tuning point.
 
 ### amd_smart_access_video
 
@@ -4933,6 +5355,10 @@ Enables KDE Plasma Wayland HDR environment compatibility for games launched duri
 
 Enables WGC pacing smoothing so capture re-anchors to the pacing grid instead of raw frame-arrival timing.
 
+### wgc_direct_encoder_input
+
+Lets GPU encoders read each Windows Graphics Capture frame directly from the capture helper's shared texture instead of from a host-side snapshot copy. This removes one full-frame GPU copy and one hand-off between the capture and encoder devices per frame, which shortens and steadies host processing latency. Defaults to `enabled`; set `disabled` to restore the previous copy path. Software encoding and DXGI capture are unaffected; `wgcc` (constant) capture and PyroWave always use the copy path.
+
 <div class="section_buttons">
 
 | Previous          |                            Next |
@@ -4953,8 +5379,13 @@ uses foreground window activation, Linux uses the selected KDE/KWin desktop
 session for both native Wayland and Xwayland games, and macOS activates the
 running game application. Manual applications and Desktop launches do not
 start automatic focus. A pending focus session is cancelled when its game
-session ends. Missing windows are retried until the timeout; only confirmed
-foreground activations consume the focus count.
+session ends. Window discovery lasts at most the greater of 180 seconds and
+`app_focus_timeout_secs`. Each newly eligible game window opens a focus window
+of the configured duration, capped by that discovery limit. A repeated window
+observation does not extend it. After a focus window expires, discovery can wait
+for a replacement window without activating the stale window. Only confirmed
+foreground activations consume the focus count; new windows never replenish it.
+`app_focus_exit_on_first` and an exhausted count still stop focus immediately.
 
 ### app_focus_attempts
 
@@ -4963,8 +5394,10 @@ Number of confirmed focus applications after launch, from 0 to 100. Default:
 
 ### app_focus_timeout_secs
 
-Total launch-time focus window in seconds, from 0 to 300. Default: `15`. Set to
-`0` to disable automatic focus.
+Focus window in seconds after a newly eligible game window appears, from 0 to
+300. Default: `15`. Set to `0` to disable automatic focus. The total discovery
+limit is the greater of 180 seconds and this value; a window appearing near that
+limit receives only the remaining time.
 
 ### app_focus_exit_on_first
 
@@ -4974,3 +5407,11 @@ The previous `playnite_focus_attempts`, `playnite_focus_timeout_secs` and
 `playnite_focus_exit_on_first` keys remain readable aliases. Explicit shared
 keys take precedence. The web interface removes the corresponding old key
 when saving a shared focus setting, including resetting it to its default.
+
+### hardware_metrics
+
+Allow enabled paired streaming clients to request hardware metrics v1 during their own running video stream. Default: `disabled`. This disclosure setting is independent of admin realtime stats. Requires a client that implements the overlay protocol; the host does not render an overlay. See [Hardware metrics](hardware-metrics.md).
+
+### hardware_metrics_interval
+
+Minimum time between completed client hardware samples in milliseconds. Default: `1000`; range: `500`–`10000`. Samples are collected on request and shared between clients. Enabling the setting alone does not poll hardware.

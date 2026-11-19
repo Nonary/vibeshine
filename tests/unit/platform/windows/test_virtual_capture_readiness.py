@@ -20,7 +20,9 @@ if not match:
 function = match.group().replace("std::chrono::steady_clock", "TestClock")
 shutdown_match = re.search(
     r"    std::size_t display_retry_failures = 0;\n"
-    r"    while \(encode_session_ctx_queue.running\(\)\) \{\n([\s\S]*?)^#ifdef _WIN32",
+    r"    while \(encode_session_ctx_queue.running\(\)\) \{\n"
+    r"([\s\S]*?^      if \(synced_session_ctxs.empty\(\)\) \{\n"
+    r"        return encode_e::ok;\n      \})",
     source.read_text(), re.M,
 )
 # Old revisions have no readiness-loop shutdown handling: tests still exercise

@@ -38,7 +38,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
+          ref: ${{ inputs.release_commit }}
           submodules: recursive
+
+      - name: Detect actual build budget
+        run: |
+          python3 tests/unit/test_linux_build_budget.py
+          python3 scripts/linux-build-budget.py
 
       - name: Setup Dependencies Linux
         timeout-minutes: 5
@@ -72,7 +78,7 @@ jobs:
             --enable-glx \
             --enable-wayland \
             --without-legacy
-          make -j "$(nproc)"
+          make -j "$BUILD_JOBS"
           sudo make install
           cd .. && rm -rf libva-*
 
@@ -98,7 +104,7 @@ jobs:
         working-directory: build
         run: |
           # install sunshine to the DESTDIR
-          DESTDIR=AppDir ninja install
+          DESTDIR=AppDir ninja -j "$BUILD_JOBS" install
 
           # custom AppRun file
           cp -f ../packaging/linux/AppImage/AppRun ./AppDir/

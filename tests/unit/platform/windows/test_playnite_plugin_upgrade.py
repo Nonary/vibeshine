@@ -7,6 +7,12 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 repo = Path(__file__).resolve().parents[4]
+project = ET.parse(repo / "plugins/playnite/SunshinePlaynite/SunshinePlaynite.csproj")
+packaged_version = project.findtext(".//Version")
+manifest_version = next(line.split(":", 1)[1].strip() for line in
+                        (repo / "plugins/playnite/SunshinePlaynite/extension.yaml").read_text().splitlines()
+                        if line.startswith("Version:"))
+assert packaged_version == manifest_version, "Connector package and manifest versions must agree"
 source = (repo / "cmake/targets/windows.cmake").read_text()
 begin = source.index("if(DEFINED SUNSHINE_DOTNET_EXECUTABLE")
 end = source.index("endif()", source.index("if(NOT SUNSHINE_DOTNET_EXECUTABLE)", begin)) + len("endif()")
@@ -29,9 +35,17 @@ with tempfile.TemporaryDirectory(prefix="playnite-upgrade-") as temporary:
         ("explicit", f'set(SUNSHINE_DOTNET_EXECUTABLE "{dotnet.as_posix()}" CACHE FILEPATH "SDK")\n'),
     ]:
         script = directory / (case + ".cmake")
-        script.write_text(prefix + discovery + f'\nif(NOT SUNSHINE_DOTNET_EXECUTABLE STREQUAL "{dotnet.as_posix()}")\nmessage(FATAL_ERROR "SDK discovery failed")\nendif()\n')
-        subprocess.run([cmake, "-P", str(script)], check=True,
-                       env=dict(os.environ, PATH=str(sdk), DOTNET_ROOT="", ProgramFiles=""))
+        # Clear discovery hints in CMake too: Windows child-process environments
+        # may retain the well-known ProgramFiles value despite an empty override.
+        fixture_env = 'set(ENV{DOTNET_ROOT} "")\nset(ENV{ProgramFiles} "")\n'
+        script.write_text(fixture_env + prefix + discovery + f'\nif(NOT SUNSHINE_DOTNET_EXECUTABLE STREQUAL "{dotnet.as_posix()}")\nmessage(FATAL_ERROR "SDK discovery failed: expected [{dotnet.as_posix()}], found [${{SUNSHINE_DOTNET_EXECUTABLE}}]")\nendif()\n')
+        # Windows environment names are case-insensitive, but a plain dict can
+        # contain both PROGRAMFILES and ProgramFiles. Remove inherited spellings
+        # before overriding hints so an installed SDK cannot mask the PATH case.
+        discovery_env = {key: value for key, value in os.environ.items()
+                         if key.casefold() not in {"path", "dotnet_root", "programfiles"}}
+        discovery_env.update(PATH=str(sdk), DOTNET_ROOT="", ProgramFiles="")
+        subprocess.run([cmake, "-P", str(script)], check=True, env=discovery_env)
         print("PASS: SDK discovery", case)
 
     # Compile the production response calculation with a minimal JSON boolean
@@ -46,8 +60,8 @@ with tempfile.TemporaryDirectory(prefix="playnite-upgrade-") as temporary:
 #include <stdexcept>
 struct Value { bool value; bool is_boolean() { return true; } template<class T> T get() { return value; } };
 struct Output { Value installed; Value &operator[](const char *) { return installed; } };
-bool update(bool legacy, bool installed, bool known, std::string installed_ver, std::string packaged_ver) {
-  struct { bool legacy_plugin; } install_state{legacy};
+bool update(bool legacy, bool installed, bool known, std::string installed_ver, std::string packaged_ver, bool pending = false) {
+  struct { bool legacy_plugin; bool migration_pending; } install_state{legacy, pending};
   Output out{{installed}};
   bool have_installed = known, have_packaged = known;
 ''' + helpers + policy + '''return update_available;
@@ -60,6 +74,8 @@ int main() {
   if (update(false, true, true, "0.5.0", "0.5.0")) return 5;
   if (update(false, false, true, "", "0.5.0")) return 6;
   if (update(false, true, false, "", "")) return 7;
+  if (!update(false, true, true, "0.5.2", "''' + packaged_version + '''")) return 8;
+  if (!update(false, true, true, "''' + packaged_version + '''", "''' + packaged_version + '''", true)) return 9;
 }
 ''')
     executable = directory / ("policy.exe" if os.name == "nt" else "policy")
@@ -74,12 +90,13 @@ int main() {
     query = status[status.index("  struct playnite_install_state_t"):status.index("  // Enhance app JSON")]
     installer = (repo / "src/platform/windows/playnite_integration.cpp").read_text()
     cleanup_start = installer.index("      if (deployed)", installer.index("      cleanup_guard.disable();"))
-    cleanup = installer[cleanup_start:installer.index("      if (!deployed)", cleanup_start)]
+    cleanup = installer[cleanup_start:installer.index("      if (deployed && manage_migration)", cleanup_start)]
     cpp.write_text('''#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <string>
 #include <vector>
+#include "src/platform/windows/playnite_plugin_migration.h"
 std::string target;
 bool resolved = true;
 namespace platf::playnite {
@@ -107,11 +124,16 @@ int main(int argc, char **argv) {
   std::ofstream(dir / current) << "current module";
   std::ofstream(dir / "SunshinePlaynite.psm1") << "legacy script";
   if (!remove_legacy(dir) || !std::filesystem::exists(dir / current) || std::filesystem::exists(dir / "SunshinePlaynite.psm1")) return 2;
+  std::string error;
+  if (!platf::playnite::migration::begin_migration(dir, error)) return 5;
+  if (!query_plugin_install_state(false).migration_pending) return 6;
+  if (!platf::playnite::migration::complete_migration(dir, error)) return 7;
+  if (query_plugin_install_state(false).migration_pending) return 8;
   resolved = false;
   if (query_plugin_install_state(false).installed.has_value()) return 3;
   if (query_plugin_install_state(true).installed != true) return 4;
 }
 ''')
-    subprocess.run([compiler, "-std=c++20", str(cpp), "-o", str(executable)], check=True)
+    subprocess.run([compiler, "-std=c++20", "-I", str(repo), str(cpp), "-o", str(executable)], check=True)
     subprocess.run([str(executable), str(directory / "extension")], check=True, timeout=5)
     print("PASS: installed module classification and cleanup preserve current DLL")

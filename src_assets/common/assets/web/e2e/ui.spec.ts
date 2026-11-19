@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 async function host(
   page: Page,
@@ -30,6 +31,7 @@ async function host(
     } else if (path === '/api/metadata')
       body = {
         platform,
+        architecture: 'x86_64',
         version: '1.0.0',
         encoder_status: { state: 'ready', h264: true },
         virtual_display: {
@@ -391,6 +393,52 @@ test('bulk unpair requires a confirmation and calls the existing endpoint', asyn
   await expect.poll(() => calls).toBe(1);
 });
 
+test('Windows maintenance uses server-directed download markup', async ({ page }) => {
+  await host(page, 'windows');
+  await page.goto('/v2/maintenance');
+  const link = page.getByRole('link', { name: 'Download logs bundle' });
+  await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute('href', '/api/logs/export');
+  // Structural guard only; the download cases below exercise response behavior.
+  // Match Logs navigation: do not supply a client-side download filename hint.
+  await expect(link).not.toHaveAttribute('download');
+});
+
+for (const entryPoint of ['maintenance', 'logs']) {
+  test(`Windows ${entryPoint} downloads the server-named log bundle`, async ({ page, context }) => {
+    await host(page, 'windows');
+    // A valid empty ZIP, served with the Windows endpoint's response headers.
+    const archive = Buffer.from('504b0506000000000000000000000000000000000000', 'hex');
+    const filename = 'vibeshine_logs-20261022-123456.zip';
+    const requests: { method: string; cookie: string | null }[] = [];
+    await context.addCookies([
+      { name: 'session', value: 'log-bundle-test', url: 'http://127.0.0.1:5173' },
+    ]);
+    await page.route('**/api/logs/export', async (route) => {
+      requests.push({
+        method: route.request().method(),
+        cookie: await route.request().headerValue('cookie'),
+      });
+      await route.fulfill({
+        contentType: 'application/zip',
+        headers: { 'Content-Disposition': `attachment; filename="${filename}"` },
+        body: archive,
+      });
+    });
+    await page.goto(`/v2/${entryPoint}`);
+    const downloadStarted = page.waitForEvent('download');
+    await page
+      .getByRole(entryPoint === 'maintenance' ? 'link' : 'button', { name: 'Download logs bundle' })
+      .click();
+    const download = await downloadStarted;
+    expect(download.suggestedFilename()).toBe(filename);
+    expect(await download.failure()).toBeNull();
+    expect(await readFile((await download.path())!)).toEqual(archive);
+    expect(requests).toEqual([{ method: 'GET', cookie: 'session=log-bundle-test' }]);
+    await expect(page).toHaveURL(`/v2/${entryPoint}`);
+  });
+}
+
 test('Linux maintenance offers logs and display setup', async ({ page }) => {
   await host(page);
   await page.goto('/v2/maintenance');
@@ -712,6 +760,47 @@ async function libraryWithMissingCovers(page: Page) {
     }),
   );
   await page.route('**/api/apps/*/cover', (route) => route.fulfill({ status: 404, body: '' }));
+}
+
+for (const available of [false, true]) {
+  test(`application cover explains Moonlight availability (${available})`, async ({
+    page,
+  }, testInfo) => {
+    await host(page, 'windows');
+    await page.route('**/api/apps', (route) =>
+      route.fulfill({
+        json: {
+          apps: [
+            { uuid: '11111111-2222-4333-8444-555555555555', name: 'Custom desktop', 'image-path': 'C:/covers/custom.png' },
+          ],
+        },
+      }),
+    );
+    await page.route('**/api/apps/11111111-2222-4333-8444-555555555555/cover*', (route) =>
+      available
+        ? route.fulfill({
+            contentType: 'image/png',
+            body: Buffer.from(
+              'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQI12P4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==',
+              'base64',
+            ),
+          })
+        : route.fulfill({ status: 404, json: { error: 'Configured cover unavailable' } }),
+    );
+    await page.goto('/v2/library/11111111-2222-4333-8444-555555555555');
+    await expect(page.locator('#app-image-path')).toHaveValue('C:/covers/custom.png');
+    await expect(
+      page.getByText(/Custom Moonlight covers need a readable PNG file no larger than 16 MiB/),
+    ).toBeVisible();
+    if (available) {
+      await expect(page.locator('.editor-artwork img')).toBeVisible();
+      await expect(page.getByText('Configured cover unavailable', { exact: true })).toHaveCount(0);
+    } else {
+      await expect(page.locator('.editor-artwork img')).toHaveCount(0);
+      await expect(page.getByText('Configured cover unavailable', { exact: true })).toBeVisible();
+    }
+    await page.screenshot({ path: testInfo.outputPath('cover.png'), fullPage: true });
+  });
 }
 
 test('library placeholders preserve search, keyboard selection, and list preferences', async ({
@@ -1166,7 +1255,7 @@ test('Linux shows an automatic update notice across pages and retries failed che
 }) => {
   await host(page);
   let unavailable = true;
-  await page.route('https://api.github.com/repos/Nonary/vibeshine/releases', async (route) => {
+  await page.route('https://api.github.com/repos/Nonary/vibeshine/releases?**', async (route) => {
     await route.fulfill(
       unavailable
         ? { status: 403, json: { message: 'API rate limit exceeded' } }
@@ -1174,7 +1263,9 @@ test('Linux shows an automatic update notice across pages and retries failed che
             json: [
               {
                 tag_name: 'v1.1.0',
+                draft: false,
                 prerelease: false,
+                assets: [{ name: 'Vibeshine-x86_64.AppImage', state: 'uploaded', size: 100 }],
                 html_url: 'https://github.com/Nonary/vibeshine/releases/tag/v1.1.0',
               },
             ],
@@ -1197,13 +1288,90 @@ test('Linux shows an automatic update notice across pages and retries failed che
   await expect(notice.getByText('Vibeshine 1.1.0 is available')).toBeVisible();
 });
 
-test('Linux stable install does not advertise a prerelease without opt-in', async ({ page }) => {
-  await host(page);
-  await page.route('https://api.github.com/repos/Nonary/vibeshine/releases', async (route) => {
-    await route.fulfill({ json: [{ tag_name: 'v2.0.0-beta.1', prerelease: true }] });
+test('Linux stable install respects an explicit prerelease opt-out', async ({ page }) => {
+  await host(page, 'linux', { notify_pre_releases: false });
+  await page.route('https://api.github.com/repos/Nonary/vibeshine/releases?**', async (route) => {
+    await route.fulfill({ json: [{ tag_name: 'v2.0.0-beta.1', draft: false, prerelease: true, assets: [{ name: 'Vibeshine-x86_64.AppImage', state: 'uploaded', size: 100 }] }] });
   });
-  const response = page.waitForResponse('https://api.github.com/repos/Nonary/vibeshine/releases');
+  const response = page.waitForResponse((response) => response.url().startsWith('https://api.github.com/repos/Nonary/vibeshine/releases?'));
   await page.goto('/v2/');
   await response;
   await expect(page.locator('.update-notice')).toHaveCount(0);
+});
+
+test('Windows default nightly notification validates metadata and dismissal survives reload', async ({
+  page,
+}) => {
+  await host(page, 'windows', {}, true, { version: '1.9.0' });
+  const tag = 'daily-2026-10-11';
+  const metadata = {
+    schema_version: 1, channel: 'nightly', tag,
+    version: '2.0.0-daily.d20261011+aaaaaaaaaaaa',
+    source_commit: 'a'.repeat(40), nightly_sequence: 20261011,
+  };
+  const assetRequests: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/api/updates/nightly-metadata') || request.url().includes('/releases/download/'))
+      assetRequests.push(request.url());
+  });
+  await page.route('https://api.github.com/repos/Nonary/vibeshine/releases?**', (route) =>
+    route.fulfill({
+      json: [
+        {
+          tag_name: tag,
+          body: `<!-- nightly-identity: ${JSON.stringify(metadata)} -->\n`,
+          draft: false,
+          prerelease: true,
+          html_url: `https://github.com/Nonary/vibeshine/releases/tag/${tag}`,
+          assets: ['VibeshineSetup.exe', 'nightly-metadata.json', 'SHA256SUMS'].map((name) => ({
+            name,
+            state: 'uploaded',
+            size: 100,
+          })),
+        },
+      ],
+    }),
+  );
+  await page.goto('/v2/');
+  const notice = page.locator('.update-notice');
+  await expect(notice.getByText(`Vibeshine ${tag} is available`)).toBeVisible();
+  await notice.getByRole('button', { name: 'Dismiss this update' }).click();
+  await expect(notice).toHaveCount(0);
+  await page.reload();
+  await expect(notice).toHaveCount(0);
+  expect(assetRequests).toEqual([]);
+});
+
+test('Windows prerelease install opts out persistently and still receives a stable update', async ({
+  page,
+}) => {
+  await host(page, 'windows', { notify_pre_releases: 'disabled' }, true, {
+    version: '2.0.0-beta.1',
+  });
+  await page.route('https://api.github.com/repos/Nonary/vibeshine/releases?**', (route) =>
+    route.fulfill({
+      json: [
+        {
+          tag_name: '3.0.0-beta.1',
+          draft: false,
+          prerelease: true,
+          assets: [{ name: 'VibeshineSetup.exe', state: 'uploaded', size: 100 }],
+        },
+        {
+          tag_name: '2.0.0',
+          draft: false,
+          prerelease: false,
+          assets: [{ name: 'VibeshineSetup.exe', state: 'uploaded', size: 100 }],
+        },
+      ],
+    }),
+  );
+  await page.goto('/v2/');
+  await expect(
+    page.locator('.update-notice').getByText('Vibeshine 2.0.0 is available'),
+  ).toBeVisible();
+  await page.reload();
+  await expect(
+    page.locator('.update-notice').getByText('Vibeshine 2.0.0 is available'),
+  ).toBeVisible();
 });

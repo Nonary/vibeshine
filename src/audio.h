@@ -5,11 +5,14 @@
 #pragma once
 
 // local includes
+#include "audio_context.h"
+#include "audio_display_transition.h"
 #include "platform/common.h"
 #include "thread_safe.h"
 #include "utility.h"
 
 #include <bitset>
+#include <string_view>
 
 namespace audio {
   enum stream_config_e : int {
@@ -57,21 +60,14 @@ namespace audio {
     stream_params_t customStreamParams;
 
     std::bitset<MAX_FLAGS> flags;
-  };
 
-  struct audio_ctx_t {
-    // We want to change the sink for the first stream only
-    std::unique_ptr<std::atomic_bool> sink_flag;
-
-    std::unique_ptr<platf::audio_control_t> control;
-
-    bool restore_sink;
-    platf::sink_t sink;
+    bool use_ac3 {false};  ///< Encode audio as AC-3 instead of Opus for this streaming session.
+    bool use_eac3 {false};  ///< Encode audio as E-AC-3 instead of Opus for this streaming session.
+    bool high_quality_dolby {false};  ///< Higher bitrate for Dolby only; ignored for Opus.
   };
 
   using buffer_t = util::buffer_t<std::uint8_t>;
   using packet_t = std::pair<void *, buffer_t>;
-  using audio_ctx_ref_t = safe::shared_t<audio_ctx_t>::ptr_t;
 
   void capture(safe::mail_t mail, config_t config, void *channel_data);
 
@@ -86,6 +82,14 @@ namespace audio {
    * @examples_end
    */
   audio_ctx_ref_t get_audio_ctx_ref();
+
+  /**
+   * @brief Hold the shared audio snapshot before Windows display changes.
+   * @note Transfer the hold from pending launch to capture; display-recovery
+   *       snapshots must not retain it after capture ends. This does not route
+   *       audio or publish a capture owner, and returns empty on other platforms.
+   */
+  std::shared_ptr<void> capture_before_display_change();
 
   /** @brief Mark the current app as terminal and restore retained audio state. */
   void app_termination_requested();
@@ -114,4 +118,26 @@ namespace audio {
    * @examples_end
    */
   bool is_audio_ctx_sink_available(const audio_ctx_t &ctx);
+
+  /** @brief Check whether the linked FFmpeg build provides the AC-3 encoder. */
+  bool ac3_available();
+  /** @brief Check whether the linked FFmpeg build provides the E-AC-3 encoder. */
+  bool eac3_available();
+
+  enum class dolby_codec_e { opus, ac3, eac3 };
+
+  /** @brief Configure Dolby only after an exact offer/accept match; otherwise retain Opus. */
+  dolby_codec_e configure_dolby_audio(
+    config_t &config,
+    std::string_view offered,
+    std::string_view accepted,
+    bool ac3_encoder_available,
+    bool eac3_encoder_available,
+    bool high_quality
+  );
+
+  /** @brief Return the encoded format's RTSP response-header label. */
+  std::string_view dolby_codec_name(dolby_codec_e codec);
+  /** @brief Choose the AC-3/E-AC-3 bitrate for stereo or 5.1. */
+  int dolby_bitrate_kbps(bool eac3, bool high_quality, int channels);
 }  // namespace audio

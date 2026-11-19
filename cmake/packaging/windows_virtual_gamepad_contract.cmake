@@ -1,5 +1,18 @@
 include_guard(GLOBAL)
 
+function(sunshine_vhf_prepare_package_stage output_variable local_test source_dir binary_dir)
+    if(local_test)
+        # A local test driver must not replace the checked-in release payload.
+        set(_stage "${binary_dir}/local-vhf-gamepad")
+        file(MAKE_DIRECTORY "${_stage}")
+        configure_file("${source_dir}/install.ps1" "${_stage}/install.ps1" COPYONLY)
+        configure_file("${source_dir}/cleanup.ps1" "${_stage}/cleanup.ps1" COPYONLY)
+    else()
+        set(_stage "${source_dir}")
+    endif()
+    set(${output_variable} "${_stage}" PARENT_SCOPE)
+endfunction()
+
 function(sunshine_vhf_is_fixed_length_hex output_variable value expected_length)
     if(NOT expected_length MATCHES "^[0-9]+$" OR expected_length LESS 1)
         message(FATAL_ERROR "VHF hexadecimal validation requires a positive expected length.")
@@ -44,15 +57,15 @@ set(SUNSHINE_VHF_GAMEPAD_REQUIRED_FILES
     release-lock.json)
 set(SUNSHINE_VHF_GAMEPAD_DRIVER_DESTINATION "drivers/vhf-gamepad")
 set(SUNSHINE_VHF_GAMEPAD_REPOSITORY "Nonary/libvirtualgamepad")
-set(SUNSHINE_VHF_GAMEPAD_RELEASE_TAG "v0.1.0-beta.7" CACHE STRING
+set(SUNSHINE_VHF_GAMEPAD_RELEASE_TAG "v0.1.0-beta.10" CACHE STRING
     "Pinned immutable libvirtualgamepad release tag.")
 set(SUNSHINE_VHF_GAMEPAD_RELEASE_ASSET_SHA256
-    "56e57fc70b9c3fdc5dfd0f44f01255275c114711b46521224204a385cde3a6e2" CACHE STRING
+    "650cf8281d95d1fb9388f8117cadeab195727e3dcb4105607df45080b15d312c" CACHE STRING
     "SHA-256 of the pinned libvirtualgamepad Windows x64 release archive.")
 set(SUNSHINE_VHF_GAMEPAD_SOURCE_REVISION
-    "9edbce11ad71e9455867c356c8368a6b39fa2242" CACHE STRING
+    "5a3e4d222dd0b87556d4c564eb58b450ab579fb0" CACHE STRING
     "Commit targeted by the pinned lightweight libvirtualgamepad release tag.")
-set(SUNSHINE_VHF_GAMEPAD_DRIVER_VER "10/04/2026,0.1.0.48" CACHE STRING
+set(SUNSHINE_VHF_GAMEPAD_DRIVER_VER "10/29/2026,0.1.0.92" CACHE STRING
     "DriverVer recorded by the pinned libvirtualgamepad release.")
 set(SUNSHINE_VHF_GAMEPAD_PROTOCOL_VERSION 2 CACHE STRING
     "Protocol version recorded by the pinned libvirtualgamepad release.")

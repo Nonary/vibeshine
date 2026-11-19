@@ -10,6 +10,16 @@ import { NButton } from 'naive-ui';
 const store = useConfigStore();
 const { config, metadata } = storeToRefs(store);
 const platform = computed(() => metadata.value?.platform || '');
+const machineHostTrayUnavailable = computed(
+  () => platform.value === 'linux' && metadata.value.linux?.machine_host === true,
+);
+// Display the effective policy without changing the saved preference.
+const systemTray = computed({
+  get: () => (machineHostTrayUnavailable.value ? false : config.value.system_tray),
+  set: (value) => {
+    if (!machineHostTrayUnavailable.value) config.value.system_tray = value;
+  },
+});
 
 function addCmd() {
   const template = {
@@ -150,7 +160,14 @@ function removeCmd(index: number) {
       class="mb-3"
     />
 
-    <ConfigFieldRenderer v-model="config.system_tray" setting-key="system_tray" class="mb-3" />
+    <ConfigFieldRenderer
+      v-model="systemTray"
+      setting-key="system_tray"
+      class="mb-3"
+      :disabled="machineHostTrayUnavailable"
+      :default-value="machineHostTrayUnavailable ? false : undefined"
+      :desc="machineHostTrayUnavailable ? $t('config.system_tray_desc_machine_host') : undefined"
+    />
   </div>
 </template>
 

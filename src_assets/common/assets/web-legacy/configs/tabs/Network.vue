@@ -183,6 +183,7 @@ const effectivePort = computed(() => Number(config.port ?? defaultMoonlightPort)
     />
 
     <ConfigFieldRenderer setting-key="ping_timeout" v-model="config.ping_timeout" class="mb-6" />
+    <ConfigFieldRenderer setting-key="control_peer_timeout" v-model="config.control_peer_timeout" class="mb-6" />
 
     <ConfigFieldRenderer
       setting-key="video_max_batch_size_kb"

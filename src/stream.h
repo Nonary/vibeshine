@@ -21,6 +21,7 @@
 // local includes
 #include "audio.h"
 #include "crypto.h"
+#include "input_session_config.h"
 #include "thread_safe.h"
 #include "video.h"
 #include "stream_protocol.h"
@@ -67,6 +68,7 @@ namespace stream {
 
     std::optional<int> gcmap;
     bool gcpersist = false;
+    input::guide_button_config_t guide_button;
     bool gen1_framegen_fix;
     bool gen2_framegen_fix;
     bool frame_generation_enabled;
@@ -132,8 +134,10 @@ namespace stream {
     void mark_client_disconnected(session_t &session);
     int start(session_t &session, const std::string &addr_string);
     void stop(session_t &session);
+    void graceful_stop(session_t &session);
     void join(session_t &session, bool lifecycle_lock_held = false);
     state_e state(session_t &session);
+    bool has_running_video(const session_t &session);
     const std::string &client_cert(session_t &session);
   }  // namespace session
 

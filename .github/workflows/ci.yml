@@ -5,6 +5,14 @@ permissions: {}
 on:
   workflow_dispatch:
     inputs:
+      validate_hosted_linux:
+        description: Build only this exact source on hosted Linux, without signing or installation
+        type: boolean
+        default: false
+      linux_cache_namespace:
+        description: Fresh value for a cold run; repeat unchanged for warm comparison
+        type: string
+        default: host-linux-v1
       use_self_hosted:
         description: Use the local Windows and Linux release runners
         type: boolean
@@ -16,9 +24,9 @@ on:
       - '*'
   pull_request:
     branches:
-      - vibe
       - main
       - master
+      - canary
 
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
@@ -27,6 +35,7 @@ concurrency:
 jobs:
   release-candidate:
     name: Release candidate
+    if: github.event_name != 'workflow_dispatch' || inputs.validate_hosted_linux != true
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -208,18 +217,20 @@ jobs:
       - release-candidate
     # Branch pushes only select candidates. Build release artifacts once, on the tag push.
     if: >-
-      ${{ github.event_name != 'push' ||
-          (github.ref_type == 'tag' && needs.release-candidate.outputs.should_release == 'true') }}
+      ${{ (github.event_name != 'workflow_dispatch' || inputs.validate_hosted_linux != true) &&
+          (github.event_name != 'push' ||
+           (github.ref_type == 'tag' && needs.release-candidate.outputs.should_release == 'true')) }}
     permissions:
       actions: read
       contents: read
     uses: ./.github/workflows/ci-windows.yml
     with:
       use_self_hosted: ${{ github.event_name == 'workflow_dispatch' && inputs.use_self_hosted }}
-      build_only: ${{ needs.release-candidate.outputs.should_release == 'true' }}
-      build_tests: false
+      # CI validates MSI packaging; consumer setup EXEs belong to release workflows.
+      build_only: true
+      build_tests: ${{ needs.release-candidate.outputs.should_release == 'true' }}
       release_commit: ${{ needs.release-candidate.outputs.release_commit || github.sha }}
-      release_version: ${{ needs.release-candidate.outputs.release_version || '0.0.0' }}
+      release_version: ${{ needs.release-candidate.outputs.release_version || '2.0.0-pr-validation' }}
       release_tag: ${{ needs.release-candidate.outputs.tag_name }}
       release_artifact_retention_days: ${{ needs.release-candidate.outputs.should_release == 'true' && 14 || 1 }}
       symbol_product_name: Vibeshine
@@ -237,20 +248,22 @@ jobs:
       - release-candidate
     # Match Windows: release preparation must not build packages before the tag push.
     if: >-
-      ${{ github.event_name != 'push' ||
-          (github.ref_type == 'tag' && needs.release-candidate.outputs.should_release == 'true') }}
+      ${{ (github.event_name != 'workflow_dispatch' || inputs.validate_hosted_linux != true) &&
+          (github.event_name != 'push' ||
+           (github.ref_type == 'tag' && needs.release-candidate.outputs.should_release == 'true')) }}
     permissions:
       contents: read
     uses: ./.github/workflows/ci-archlinux.yml
     with:
-      use_self_hosted: ${{ needs.release-candidate.outputs.should_release == 'true' || (github.event_name == 'workflow_dispatch' && inputs.use_self_hosted) }}
+      build_tests: ${{ needs.release-candidate.outputs.should_release == 'true' }}
+      use_self_hosted: ${{ github.event_name == 'workflow_dispatch' && inputs.use_self_hosted }}
       artifact_retention_days: ${{ needs.release-candidate.outputs.should_release == 'true' && 14 || 1 }}
       release_commit: ${{ needs.release-candidate.outputs.release_commit || github.sha }}
-      release_version: ${{ needs.release-candidate.outputs.release_version || '0.0.0' }}
+      release_version: ${{ needs.release-candidate.outputs.release_version || '2.0.0-pr-validation' }}
 
   awaiting-signing:
     name: Awaiting manual signing
-    if: needs.release-candidate.outputs.should_release == 'true'
+    if: (github.event_name != 'workflow_dispatch' || inputs.validate_hosted_linux != true) && needs.release-candidate.outputs.should_release == 'true'
     needs:
       - release-candidate
       - build-archlinux
@@ -274,3 +287,18 @@ jobs:
             echo
             echo "Leave \`build_run_id\` empty; it is an optional recovery override. The signing workflow automatically selects the newest valid successful CI tag build for this exact tag and commit, then verifies its retained artifacts before submitting either signing request."
           } >> "${GITHUB_STEP_SUMMARY}"
+
+  validate-hosted-linux:
+    name: Hosted Linux artifact validation
+    if: github.event_name == 'workflow_dispatch' && inputs.validate_hosted_linux == true
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-archlinux.yml
+    with:
+      release_commit: ${{ github.sha }}
+      release_version: 2.0.0-linux-validation
+      use_self_hosted: false
+      validation_only: true
+      build_tests: true
+      artifact_retention_days: 1
+      cache_namespace: ${{ inputs.linux_cache_namespace }}

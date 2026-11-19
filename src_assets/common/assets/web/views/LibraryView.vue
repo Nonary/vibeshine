@@ -45,6 +45,19 @@ const router = useRouter();
 const { locale, t } = useI18n();
 const system = useSystemStore();
 const apps = ref<AppRecord[]>([]);
+const restorableSystemApps = ref<{ id: string; name: string }[]>([]);
+const restoringSystemApp = ref('');
+async function restoreSystemApp(id: string): Promise<void> {
+  restoringSystemApp.value = id;
+  try {
+    await apiPost(`/api/apps/system/${encodeURIComponent(id)}/restore`, {});
+    await load();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : 'Could not restore the system app.';
+  } finally {
+    restoringSystemApp.value = '';
+  }
+}
 const loading = ref(true);
 const error = ref('');
 const search = ref(queryValue(route.query.q));
@@ -66,6 +79,7 @@ const deleteError = ref('');
 const purgePlayniteOpen = ref(false);
 const purgePlayniteBusy = ref(false);
 const purgePlayniteError = ref('');
+const purgePlayniteRemoved = ref<number | null>(null);
 let queryTimer: number | undefined;
 let observer: IntersectionObserver | undefined;
 
@@ -139,7 +153,7 @@ function isPlayniteEntry(app: AppRecord): boolean {
 }
 
 const purgeablePlayniteEntries = computed(() =>
-  apps.value.filter((app) => isPlayniteEntry(app) && Boolean(appUuid(app))),
+  apps.value.filter((app) => isPlayniteEntry(app) && app['remote-monitor-profile'] !== true && Boolean(appUuid(app))),
 );
 
 function providerLabel(app: AppRecord): string {
@@ -256,7 +270,12 @@ async function load(silent = false): Promise<void> {
   if (!silent) loading.value = true;
   error.value = '';
   try {
-    apps.value = await fetchApps();
+    const [loadedApps, systemApps] = await Promise.all([
+      fetchApps(),
+      apiGet<{ 'restorable-system-apps'?: { id: string; name: string }[] }>('/api/apps'),
+    ]);
+    apps.value = loadedApps;
+    restorableSystemApps.value = systemApps['restorable-system-apps'] ?? [];
     failedCovers.value = new Set();
     const liveIds = new Set(apps.value.map(appUuid).filter(Boolean));
     selectedUuids.value = new Set([...selectedUuids.value].filter((uuid) => liveIds.has(uuid)));
@@ -462,6 +481,7 @@ async function confirmDelete(): Promise<void> {
 function requestPurgePlaynite(): void {
   if (!isWindows.value || purgePlayniteBusy.value || !purgeablePlayniteEntries.value.length) return;
   purgePlayniteError.value = '';
+  purgePlayniteRemoved.value = null;
   purgePlayniteOpen.value = true;
 }
 
@@ -475,11 +495,16 @@ async function confirmPurgePlaynite(): Promise<void> {
   purgePlayniteBusy.value = true;
   purgePlayniteError.value = '';
   try {
+    let removed = 0;
     for (const app of targets) {
-      const result = await deleteApp(appUuid(app));
-      if (result.status === false) throw new Error(t('ui.library.purgePlaynite.failed'));
+      const result = await deleteApp(appUuid(app), { providerMaintenance: true });
+      if (result.status === false || !Number.isInteger(result.removed) || result.removed! < 0) {
+        throw new Error(t('ui.library.purgePlaynite.failed'));
+      }
+      removed += result.removed!;
     }
     purgePlayniteOpen.value = false;
+    purgePlayniteRemoved.value = removed;
     await load();
   } catch (cause) {
     purgePlayniteError.value = serviceError(cause, 'ui.library.purgePlaynite.failed');
@@ -596,6 +621,18 @@ function libraryRequest(
       </template>
     </PageHeader>
 
+    <section v-if="restorableSystemApps.length" aria-label="Restore system apps" class="system-app-restore">
+      <span>Restore system apps:</span>
+      <AppButton v-for="app in restorableSystemApps" :key="app.id" size="compact"
+        :label="`Restore ${app.name}`" :disabled="Boolean(restoringSystemApp)"
+        @click="restoreSystemApp(app.id)" />
+    </section>
+
+    <InlineAlert
+      v-if="purgePlayniteRemoved !== null"
+      tone="success"
+      :title="t('playnite.apps_purged', { count: purgePlayniteRemoved })"
+    />
     <InlineAlert
       v-if="error"
       tone="danger"
@@ -864,7 +901,6 @@ function libraryRequest(
               @click="openApp(app)"
             />
             <AppButton
-              v-if="!isRemoteSessionApp(app)"
               role="menuitem"
               size="compact"
               variant="tertiary"
@@ -951,6 +987,8 @@ function libraryRequest(
 </template>
 
 <style scoped>
+.system-app-restore { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-block: 1rem; }
+
 .library-page {
   display: grid;
   gap: var(--vs-space-20);

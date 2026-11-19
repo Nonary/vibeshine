@@ -13,6 +13,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 // local includes
@@ -75,6 +76,34 @@ namespace safe {
       _generation.fetch_add(1, std::memory_order_release);
 
       _cv.notify_all();
+    }
+
+    // Publish a replaceable snapshot without allowing a late producer with an
+    // older version to overwrite a newer one. Unlike a queue, an event keeps
+    // only its latest payload, so ordering must be enforced under the same
+    // mutex that updates the payload. `is_older` compares the candidate with
+    // the greatest version ever published through this method since reset,
+    // even if a consumer has already popped that payload.
+    template<class IsOlder>
+    bool raise_monotonic(T value, IsOlder &&is_older) {
+      std::lock_guard lg {_lock};
+      if (!_poll_state.running()) {
+        return false;
+      }
+      if (_last_monotonic_raise && std::invoke(is_older, value, *_last_monotonic_raise)) {
+        return false;
+      }
+
+      _last_monotonic_raise = value;
+      if constexpr (std::is_same_v<std::optional<T>, status_t>) {
+        _status = std::make_optional<T>(std::move(value));
+      } else {
+        _status = status_t {std::move(value)};
+      }
+      _poll_state.set_ready((bool) _status);
+      _generation.fetch_add(1, std::memory_order_release);
+      _cv.notify_all();
+      return true;
     }
 
     // pop and view should not be used interchangeably
@@ -209,6 +238,7 @@ namespace safe {
       std::lock_guard lg {_lock};
 
       _status = util::false_v<status_t>;
+      _last_monotonic_raise.reset();
       _poll_state.set_ready(false);
     }
 
@@ -219,6 +249,7 @@ namespace safe {
   private:
     detail::poll_state_t _poll_state;
     status_t _status {util::false_v<status_t>};
+    std::optional<T> _last_monotonic_raise;
     std::atomic<std::uint64_t> _generation {};
 
     std::condition_variable _cv;
@@ -331,8 +362,9 @@ namespace safe {
   public:
     using status_t = util::optional_t<T>;
 
-    queue_t(std::uint32_t max_elements = 32):
-        _max_elements {max_elements} {
+    queue_t(std::uint32_t max_elements = 32, bool clear_on_overflow = true):
+        _max_elements {max_elements},
+        _clear_on_overflow {clear_on_overflow} {
     }
 
     /// Replace a matching pending item in place, preserving other producers'
@@ -358,6 +390,49 @@ namespace safe {
       return true;
     }
 
+    /// Coalesce obsolete snapshots at the tail (the newest value replaces every
+    /// pending match and lands behind the events queued since), with three classes:
+    ///   * priority values (`priority`) are never evicted and may evict an ordinary
+    ///     item on overflow; callers supply a bounded key space and enough capacity
+    ///     for every distinct priority key;
+    ///   * reserved events (`reserved`) have their own bound (`reserved_limit`) and
+    ///     cannot be evicted by ordinary events;
+    ///   * ordinary events are bounded by `event_limit` and evict their oldest sibling.
+    /// At total capacity, priority/reserved arrivals evict an ordinary event first,
+    /// then a reserved one; priority snapshots remain protected.
+    template<class Predicate, class Priority, class Reserved>
+    bool raise_latest_classed(T value, Predicate matches, Priority priority,
+        std::uint32_t event_limit, Reserved reserved, std::uint32_t reserved_limit) {
+      std::lock_guard ul {_lock};
+      if (!_poll_state.running()) return false;
+      _queue.erase(std::remove_if(_queue.begin(), _queue.end(), matches), _queue.end());
+      const bool important = priority(value);
+      const bool is_reserved = !important && reserved(value);
+      const auto class_limit = is_reserved ? reserved_limit : event_limit;
+      const auto same_class = [&](const T &pending) {
+        return !priority(pending) && reserved(pending) == is_reserved;
+      };
+      const auto ordinary = [&](const T &pending) { return !priority(pending) && !reserved(pending); };
+      const bool events_full = !important && class_limit != UINT32_MAX &&
+          std::count_if(_queue.begin(), _queue.end(), same_class) >= class_limit;
+      if (_queue.size() >= _max_elements || events_full) {
+        if (!important && class_limit == UINT32_MAX) return false;
+        auto victim = events_full ? std::find_if(_queue.begin(), _queue.end(), same_class) :
+            std::find_if(_queue.begin(), _queue.end(), ordinary);
+        if (victim == _queue.end() && !events_full && (important || is_reserved)) {
+          victim = std::find_if(_queue.begin(), _queue.end(), [&](const T &pending) {
+            return !priority(pending) && reserved(pending);
+          });
+        }
+        if (victim == _queue.end()) return false;
+        _queue.erase(victim);
+      }
+      _queue.emplace_back(std::move(value));
+      _poll_state.set_ready(true);
+      _cv.notify_all();
+      return true;
+    }
+
     template<class... Args>
     void raise(Args &&...args) {
       std::lock_guard ul {_lock};
@@ -367,6 +442,9 @@ namespace safe {
       }
 
       if (_queue.size() == _max_elements) {
+        // A bounded queue of independent messages (gamepad feedback) drops the
+        // newest instead of flushing every other producer's pending output.
+        if (!_clear_on_overflow) return;
         _queue.clear();
         _poll_state.set_ready(false);
       }
@@ -451,6 +529,41 @@ namespace safe {
       return val;
     }
 
+    // Atomically remove the currently queued values. Unlike pop(0ms), this
+    // waits for the queue lock so callers that must close an admission window
+    // can drain every producer that completed before the lock was acquired.
+    std::vector<T> drain() {
+      std::lock_guard lg {_lock};
+      std::vector<T> values;
+      if (!_poll_state.running()) {
+        return values;
+      }
+      values.reserve(_queue.size());
+      for (auto &value : _queue) {
+        values.emplace_back(std::move(value));
+      }
+      _queue.clear();
+      _poll_state.set_ready(false);
+      return values;
+    }
+
+    // Remove the front value if one is queued, without waiting. Unlike
+    // pop(0ms) this takes the queue lock, and unlike peek() followed by pop()
+    // it cannot be left waiting on a value another thread removed in between
+    // (discard_if() erases without waking consumers).
+    status_t try_pop() {
+      std::lock_guard lg {_lock};
+      if (!_poll_state.running() || _queue.empty()) {
+        return util::false_v<status_t>;
+      }
+
+      auto val = std::move(_queue.front());
+      _queue.erase(std::begin(_queue));
+      _poll_state.set_ready(!_queue.empty());
+
+      return val;
+    }
+
     status_t pop() {
       std::unique_lock ul {_lock};
 
@@ -499,6 +612,7 @@ namespace safe {
   private:
     detail::poll_state_t _poll_state;
     std::uint32_t _max_elements;
+    bool _clear_on_overflow;
 
     std::mutex _lock;
     std::condition_variable _cv;
@@ -611,13 +725,25 @@ namespace safe {
       return ptr_t {this};
     }
 
+    // Acquire an existing object without constructing one when it is idle.
+    // Like ref(), this serializes with construction and teardown.
+    [[nodiscard]] ptr_t try_ref() {
+      std::lock_guard lg {_lock};
+      if (!_count) {
+        return ptr_t {nullptr};
+      }
+
+      ++_count;
+      return ptr_t {this};
+    }
+
   private:
     construct_f _construct;
     destruct_f _destruct;
 
     std::array<std::uint8_t, sizeof(element_type)> _object_buf;
 
-    std::uint32_t _count;
+    std::uint32_t _count {};
     std::mutex _lock;
   };
 
@@ -685,7 +811,7 @@ namespace safe {
     }
 
     template<class T>
-    queue_t<T> queue(const std::string_view &id) {
+    queue_t<T> queue(const std::string_view &id, std::uint32_t capacity = 32, bool clear_on_overflow = true) {
       std::lock_guard lg {mutex};
 
       auto it = id_to_post.find(id);
@@ -697,7 +823,7 @@ namespace safe {
         id_to_post.erase(it);
       }
 
-      auto post = std::make_shared<typename queue_t<T>::element_type>(shared_from_this(), 32);
+      auto post = std::make_shared<typename queue_t<T>::element_type>(shared_from_this(), capacity, clear_on_overflow);
       id_to_post.emplace(std::pair<std::string, std::weak_ptr<void>> {std::string {id}, post});
 
       return post;

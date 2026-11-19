@@ -19,6 +19,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <sstream>
 #include <stdexcept>
 #include <system_error>
 #include <thread>
@@ -29,6 +30,7 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/endian/arithmetic.hpp>
 #include <openssl/err.h>
+#include <enet/time.h>
 
 extern "C" {
   // clang-format off
@@ -39,15 +41,18 @@ extern "C" {
 
 // local includes
 #include "config.h"
+#include "control_peer_timeout.h"
 #include "deferred_stream_start_policy.h"
 #include "display_helper_integration.h"
 #include "globals.h"
+#include "hardware_metrics_session.h"
 #include "host_stats.h"
 #include "haptics_gain.h"
 #include "input.h"
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
+#include "host_stream_control.h"
 #include "platform/common.h"
 #include "process.h"
 #include "pyrowave_policy.h"
@@ -56,8 +61,11 @@ extern "C" {
 #include "remote_display_topology.h"
 #include "rtsp.h"
 #include "rtsp_pending_policy.h"
+#include "send_result_observation.h"
 #include "session_history.h"
+#include "steam_controller_protocol.h"
 #include "stream.h"
+#include "stream_broadcast_runtime.h"
 #include "sync.h"
 #include "system_tray.h"
 #include "thread_safe.h"
@@ -65,6 +73,9 @@ extern "C" {
 #include "utility.h"
 #include "uuid.h"
 #include "video_send.h"
+#include "video_adaptive_pacing.h"
+#include "video_fec_status.h"
+#include "video_pacing_policy.h"
 #include "webrtc_stream.h"
 #ifdef _WIN32
   #include "platform/windows/frame_limiter.h"
@@ -99,6 +110,8 @@ extern "C" {
 #define IDX_SET_MOTION_EVENT 13
 #define IDX_SET_RGB_LED 14
 #define IDX_SET_ADAPTIVE_TRIGGERS 15
+#define IDX_STEAM_HAPTIC 16
+#define IDX_STEAM_SETTINGS 17
 
 static const short packetTypes[] = {
   0x0305,  // Start A
@@ -117,6 +130,8 @@ static const short packetTypes[] = {
   0x5501,  // Set motion event (Sunshine protocol extension)
   0x5502,  // Set RGB LED (Sunshine protocol extension)
   0x5503,  // Set Adaptive triggers (Sunshine protocol extension)
+  STEAM_HAPTIC_PACKET_TYPE,  // 0x5504: Steam Controller haptic report (Vibeshine protocol extension)
+  STEAM_SETTINGS_PACKET_TYPE,  // 0x5505: Steam Controller settings write (Vibeshine protocol extension)
 };
 
 namespace asio = boost::asio;
@@ -256,8 +271,11 @@ namespace stream {
       std::optional<std::array<std::uint8_t, 16>> virtual_display_guid_bytes = std::nullopt
     ) {
       const auto generation = g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
-      std::thread([timeout, generation, reason = std::move(reason), enforce_display_restore, virtual_display_guid_bytes]() {
+      const auto ticket = host_stream_control::request_ticket();
+      std::thread([timeout, generation, ticket, reason = std::move(reason), enforce_display_restore, virtual_display_guid_bytes]() {
         std::this_thread::sleep_for(timeout);
+        host_stream_control::start_guard_t activity {ticket};
+        if (!activity) return;
         session::cleanup_reservation_t cleanup_reservation;
         std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
 
@@ -294,6 +312,7 @@ namespace stream {
   void cancel_paused_display_cleanup() {
 #ifdef _WIN32
     g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel);
+    display_helper_integration::cancel_final_restore_display_removal();
 #elif defined(__linux__)
     platf::linux_display::backend().cancel_scheduled_revert();
 #endif
@@ -437,6 +456,32 @@ namespace stream {
     std::uint8_t right[DS_EFFECT_PAYLOAD_SIZE];
   };
 
+  /**
+   * A Steam Controller (2026) haptic output report for a client with the real pads
+   * (LI_CCAP_STEAM_HAPTIC): `report` holds it as the host wrote it, id first, `length` bytes.
+   */
+  struct control_steam_haptic_t {
+    control_header_v2 header;
+
+    std::uint16_t id;
+    std::uint8_t length;
+    std::uint8_t report[STEAM_HAPTIC_REPORT_MAX];
+  };
+
+  /**
+   * A Steam Controller (2026) settings write for a client that drives the real controller
+   * (LI_CCAP_STEAM_SETTINGS): `command` 0x87 with `count` (id, lo, hi) triples, or 0x8E with none.
+   * Fixed size; the client reads the whole triple array and trusts `count`.
+   */
+  struct control_steam_settings_t {
+    control_header_v2 header;
+
+    std::uint16_t id;
+    std::uint8_t command;
+    std::uint8_t count;
+    std::uint8_t triples[STEAM_SETTINGS_PAYLOAD_SIZE];
+  };
+
   struct control_hdr_mode_t {
     control_header_v2 header;
 
@@ -471,7 +516,7 @@ namespace stream {
     return ((size + 15) / 16) * 16;
   }
 
-  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = 1400;
+  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = 4096;
 
   using audio_aes_t = std::array<char, round_to_pkcs7_padded(MAX_AUDIO_PACKET_SIZE)>;
 
@@ -581,15 +626,25 @@ namespace stream {
     control_server_t control_server;
   };
 
+  enum class stop_reason_e {
+    none,
+    abrupt,
+    graceful,
+  };
+
   struct session_t {
     std::shared_ptr<void> display_power_guard;
+    std::shared_ptr<void> audio_context_guard;
     std::shared_ptr<void> normal_display_capture;
+    std::optional<display_target::descriptor_t> exact_monitor_target;
+    std::shared_ptr<void> exact_target_hold;
     config_t config;
     int stream_fps = 0;
     std::uint32_t client_display_refresh_millihz = 0;
     bool secondary_game_client = false;
     remote_session::role_e remote_role {remote_session::role_e::game};
     std::uint64_t remote_role_generation {};
+    std::string monitor_profile_uuid;
     bool input_only {};
     bool audio_disabled {};
     std::atomic_bool client_disconnected {false};
@@ -619,6 +674,19 @@ namespace stream {
       safe::mail_raw_t::event_t<bool> idr_events;
       safe::mail_raw_t::event_t<std::pair<int64_t, int64_t>> invalidate_ref_frames_events;
       safe::mail_raw_t::event_t<int> bitrate_events;
+      // The HTTP bitrate control path runs concurrently with the UDP sender.
+      // Keep its per-frame pacing input atomic instead of racing on monitor config.
+      std::atomic<int> pacing_bitrate_kbps {0};
+
+      // Experimental loss-responsive spacing (host_adaptive_pacing, ordinary video
+      // only). The control thread feeds pings, FEC reports and ticks; the sender
+      // asks for the rate once per frame. The mutex is held only for those short
+      // calls, never across a send or a pacing sleep.
+      bool adaptive_pacing_enabled {false};
+      std::mutex adaptive_pacing_mutex;
+      pacing::adaptive_pacing_t adaptive_pacing;
+      // Control thread only: validates and de-duplicates client FEC block reports.
+      pacing::fec_report_tracker_t fec_reports;
 
       std::unique_ptr<platf::deinit_t> qos;
     } video;
@@ -658,6 +726,11 @@ namespace stream {
 
       platf::feedback_queue_t feedback_queue;
       std::array<haptics_gain_t, platf::MAX_GAMEPADS> haptics_gains;
+      std::atomic_bool pcm_negotiation_warning_logged {false};
+      std::array<std::atomic_bool, platf::MAX_GAMEPADS> pcm_send_success_logged {};
+      std::array<std::atomic_bool, platf::MAX_GAMEPADS> pcm_send_failure_logged {};
+      std::array<std::atomic_bool, platf::MAX_GAMEPADS> vigem_rumble_send_success_logged {};
+      std::array<std::atomic_bool, platf::MAX_GAMEPADS> vigem_rumble_send_failure_logged {};
       safe::mail_raw_t::event_t<video::hdr_info_t> hdr_queue;
     } control;
 
@@ -676,6 +749,7 @@ namespace stream {
     safe::signal_t controlEnd;
 
     std::atomic<session::state_e> state;
+    std::atomic<stop_reason_e> stop_reason {stop_reason_e::none};
 
     // Real-time performance counters (updated by broadcast/control threads)
     struct {
@@ -687,6 +761,11 @@ namespace stream {
       std::atomic<std::int64_t> client_reported_losses {0};
       std::atomic<std::uint16_t> last_encode_latency_us10 {0};  // in 1/10 ms units
       std::atomic<std::int64_t> last_frame_index {0};
+      /// Index of the newest frame whose send began, or -1 before the first one.
+      /// Written only with host_adaptive_pacing, which fences client reports on it.
+      std::atomic<std::int64_t> wire_frame_index {-1};
+      /// Frames abandoned by a socket send failure; adaptive pacing treats a rise as loss.
+      std::atomic<std::uint64_t> video_send_failures {0};
       std::chrono::steady_clock::time_point start_time {std::chrono::steady_clock::now()};
     } stats;
 
@@ -760,45 +839,28 @@ namespace stream {
 
   static auto broadcast = safe::make_shared<broadcast_ctx_t>(start_broadcast, end_broadcast);
 
-  void request_idr_for_all_sessions() {
-    auto ref = broadcast.ref();
-    if (!ref) {
-      return;
-    }
-    auto lg = ref->control_server._sessions.lock();
-    for (auto *session : *ref->control_server._sessions) {
-      if (!session || !session->video.idr_events) {
-        continue;
+  static broadcast_runtime::controls_t<broadcast_ctx_t> broadcast_controls {
+    broadcast,
+    [](broadcast_ctx_t &ctx, const broadcast_runtime::session_action_t &action) {
+      auto lg = ctx.control_server._sessions.lock();
+      std::vector<broadcast_runtime::session_control_t> sessions;
+      sessions.reserve(ctx.control_server._sessions->size());
+      for (auto *session : *ctx.control_server._sessions) {
+        if (session) {
+          sessions.push_back({session->device_uuid, session->config.monitor.bitrate, session->config.monitor.client_requested_bitrate,
+                              session->video.pacing_bitrate_kbps, session->video.idr_events, session->video.bitrate_events});
+        }
       }
-      session->video.idr_events->raise(true);
+      return action(sessions);
     }
+  };
+
+  void request_idr_for_all_sessions() {
+    broadcast_controls.request_idr_for_all_sessions();
   }
 
   int set_bitrate_for_sessions(const std::string &client_uuid, int bitrate_kbps) {
-    if (bitrate_kbps <= 0) {
-      return 0;
-    }
-    auto ref = broadcast.ref();
-    if (!ref) {
-      return 0;
-    }
-    int updated = 0;
-    auto lg = ref->control_server._sessions.lock();
-    for (auto *session : *ref->control_server._sessions) {
-      if (!session || !session->video.bitrate_events) {
-        continue;
-      }
-      if (!client_uuid.empty() && session->device_uuid != client_uuid) {
-        continue;
-      }
-      // Keep the session metadata (runtime sessions API, history, stats) in sync with the
-      // value the encoder thread will adopt from the event below.
-      session->config.monitor.bitrate = bitrate_kbps;
-      session->config.monitor.client_requested_bitrate = bitrate_kbps;
-      session->video.bitrate_events->raise(bitrate_kbps);
-      ++updated;
-    }
-    return updated;
+    return broadcast_controls.set_bitrate_for_sessions(client_uuid, bitrate_kbps);
   }
 
   static const char *state_name(session::state_e st) {
@@ -1083,6 +1145,14 @@ namespace stream {
           break;
         case ENET_EVENT_TYPE_CONNECT:
           BOOST_LOG(info) << "CLIENT CONNECTED"sv;
+          // Match the contributor's opt-in retry window for each accepted peer.
+          // The separate ping deadline and explicit stop path retain ownership.
+          static_assert(config::max_control_peer_timeout.count() < ENET_TIME_OVERFLOW);
+          if (const auto timeout = config::get_control_peer_timeout(); timeout.count() > 0) {
+            const auto timeout_ms = static_cast<enet_uint32>(timeout.count());
+            enet_peer_timeout(event.peer, ENET_PEER_TIMEOUT_LIMIT, timeout_ms, timeout_ms);
+            BOOST_LOG(info) << "Control peer timeout set to "sv << timeout_ms << " ms"sv;
+          }
           break;
         case ENET_EVENT_TYPE_DISCONNECT:
           BOOST_LOG(info) << "CLIENT DISCONNECTED"sv;
@@ -1246,8 +1316,22 @@ namespace stream {
     }
 
     std::string payload;
-    if (msg.type == platf::gamepad_feedback_e::haptics_pcm) {
-      if (!(session->config.mlFeatureFlags & ML_FF_HAPTICS_PCM)) return 0;
+    if (msg.type == platf::gamepad_feedback_e::speaker_pcm) {
+      const auto plaintext = controller_speaker_pcm::encode(session->config.mlFeatureFlags, session->config.controlProtocolType, msg.id, msg.data.speaker, msg.speaker_epoch);
+      if (!plaintext) {
+        return 0;
+      }
+      std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(controller_speaker_pcm::payload_size + 4) + crypto::cipher::tag_size> encrypted_payload;
+      payload = encode_control(session, std::string_view(reinterpret_cast<const char *>(plaintext->data()), plaintext->size()), encrypted_payload);
+    } else if (msg.type == platf::gamepad_feedback_e::haptics_pcm) {
+      if (!(session->config.mlFeatureFlags & ML_FF_HAPTICS_PCM)) {
+        // PCM arrives in frequent chunks; report missing negotiation once per session.
+        if (!session->control.pcm_negotiation_warning_logged.exchange(true, std::memory_order_relaxed)) {
+          BOOST_LOG(warning) << "Dropping waveform haptics because the client session did not negotiate PCM feedback support; mlFeatureFlags="
+                             << session->config.mlFeatureFlags;
+        }
+        return 0;
+      }
       std::array<std::uint8_t, sizeof(control_header_v2) + ML_HAPTICS_MAX_PAYLOAD> plaintext {};
       auto *bytes = plaintext.data();
       MlHapticsWrite16(bytes, ML_HAPTICS_PACKET_TYPE);
@@ -1350,12 +1434,85 @@ namespace stream {
         encrypted_payload;
 
       payload = encode_control(session, util::view(plaintext), encrypted_payload);
+    } else if (msg.type == platf::gamepad_feedback_e::steam_haptic) {
+      control_steam_haptic_t plaintext {};
+      plaintext.header.type = packetTypes[IDX_STEAM_HAPTIC];
+      plaintext.header.payloadLength = sizeof(plaintext) - sizeof(control_header_v2);
+
+      plaintext.id = util::endian::little(msg.id);
+      plaintext.length = msg.data.steam_haptic.length;
+      std::ranges::copy(msg.data.steam_haptic.report, plaintext.report);
+
+      std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
+        encrypted_payload;
+
+      payload = encode_control(session, util::view(plaintext), encrypted_payload);
+    } else if (msg.type == platf::gamepad_feedback_e::steam_settings) {
+      control_steam_settings_t plaintext {};
+      plaintext.header.type = packetTypes[IDX_STEAM_SETTINGS];
+      plaintext.header.payloadLength = sizeof(plaintext) - sizeof(control_header_v2);
+
+      plaintext.id = util::endian::little(msg.id);
+      plaintext.command = msg.data.steam_settings.command;
+      plaintext.count = msg.data.steam_settings.count;
+      std::ranges::copy(msg.data.steam_settings.triples, plaintext.triples);
+
+      std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
+        encrypted_payload;
+
+      payload = encode_control(session, util::view(plaintext), encrypted_payload);
     } else {
       BOOST_LOG(error) << "Unknown gamepad feedback message type"sv;
       return -1;
     }
 
-    if (session->broadcast_ref->control_server.send(payload, session->control.peer, msg.type == platf::gamepad_feedback_e::haptics_pcm)) {
+    const auto send_result = detail::send_and_observe_result(
+      [&] {
+        if (msg.type == platf::gamepad_feedback_e::speaker_pcm) {
+          // Encryption is complete. Serialize only ENet queue admission with
+          // epoch reset, not network flushing or the producer slot mutex.
+          return controller_speaker_pcm::enqueue_if_current(msg.speaker_epoch, msg.data.speaker.generation, [&] {
+            return session->broadcast_ref->control_server.send(payload, session->control.peer, true);
+          });
+        }
+        return session->broadcast_ref->control_server.send(payload, session->control.peer, msg.type == platf::gamepad_feedback_e::haptics_pcm);
+      },
+      [&](const int result) {
+        if (msg.type == platf::gamepad_feedback_e::haptics_pcm &&
+            msg.id < session->control.pcm_send_success_logged.size() &&
+            detail::claim_first_send_result_log(result,
+              session->control.pcm_send_success_logged[msg.id],
+              session->control.pcm_send_failure_logged[msg.id])) {
+          BOOST_LOG(debug) << "Waveform haptics ENet queue " << (result == 0 ? "accepted" : "rejected")
+                           << " frame; client-relative controller index=" << msg.id
+                           << "; mlFeatureFlags=" << session->config.mlFeatureFlags
+                           << "; peer channels=" << session->control.peer->channelCount
+                           << "; result=" << result;
+        }
+        if (!msg.from_vigem ||
+            msg.type != platf::gamepad_feedback_e::rumble ||
+            msg.id >= session->control.vigem_rumble_send_success_logged.size()) {
+          return;
+        }
+
+        if (!detail::claim_first_send_result_log(
+              result,
+              session->control.vigem_rumble_send_success_logged[msg.id],
+              session->control.vigem_rumble_send_failure_logged[msg.id]
+            )) {
+          return;
+        }
+
+        if (result == 0) {
+          BOOST_LOG(info) << "control_server.send() returned success after ENet accepted the packet into its outgoing queue for sending; ViGEm "sv
+                          << detail::format_client_relative_controller_index_field(msg.id);
+        } else {
+          BOOST_LOG(warning) << "control_server.send() returned failure for ViGEm rumble feedback; ENet queue acceptance was not reported; result="sv
+                             << result << "; "sv << detail::format_client_relative_controller_index_field(msg.id);
+        }
+      }
+    );
+    if (send_result) {
       TUPLE_2D(port, addr, platf::from_sockaddr_ex((sockaddr *) &session->control.peer->address.address));
       BOOST_LOG(warning) << "Couldn't send gamepad feedback to ["sv << addr << ':' << port << ']';
 
@@ -1394,9 +1551,127 @@ namespace stream {
     return 0;
   }
 
+  /**
+   * @brief Log adaptive pacing decisions. Called only when something changed, never per frame.
+   * @param events What the controller reports since its last call.
+   * @param snapshot The controller state after the change.
+   * @param old_bps The rate before the change, or zero if unknown.
+   */
+  static void log_adaptive_pacing(const pacing::adaptive_pacing_events_t &events, const pacing::adaptive_pacing_snapshot_t &snapshot, std::uint64_t old_bps) {
+    const auto mbps = [](std::uint64_t kbps) {
+      return kbps / 1000.0;
+    };
+    const auto summary = [&]() {
+      std::ostringstream out;
+      out << mbps(snapshot.current_kbps) << " Mbps (wire floor "sv << mbps(snapshot.wire_floor_kbps)
+          << ", ceiling "sv << mbps(snapshot.ceiling_kbps) << ')';
+      return out.str();
+    };
+    if (events.started) {
+      BOOST_LOG(info) << "Adaptive video pacing: start rate "sv << summary();
+    }
+    if (events.cut) {
+      BOOST_LOG(info) << "Adaptive video pacing: cut from "sv << old_bps / 1'000'000.0 << " to "sv << summary()
+                      << (events.cut_by_failed_frames ? " after repeated failed frames"sv :
+                                                        " after recovered frames missing at least 2% of packets"sv)
+                      << "; encoder bitrate unchanged"sv;
+    }
+    if (events.probe_rejected) {
+      BOOST_LOG(info) << "Adaptive video pacing: probe rejected after reported loss, restored "sv << summary()
+                      << ", next probe after "sv << snapshot.recovery_hold_seconds << " s"sv;
+    }
+    if (events.probe_retracted) {
+      BOOST_LOG(info) << "Adaptive video pacing: probe withdrawn after the wire budget changed, holding "sv << summary();
+    }
+    if (events.probe_accepted) {
+      BOOST_LOG(info) << "Adaptive video pacing: probe accepted at "sv << summary();
+    }
+    if (events.ceiling_confirmed) {
+      BOOST_LOG(info) << "Adaptive video pacing: ceiling confirmed, no further limit below "sv << mbps(snapshot.ceiling_kbps) << " Mbps"sv;
+    }
+    if (events.probe_started) {
+      BOOST_LOG(debug) << "Adaptive video pacing: probing "sv << summary();
+    }
+  }
+
+  /// Index of the newest frame whose send began, or nothing before the first one.
+  static std::optional<std::uint32_t> last_sent_frame(const session_t *session) {
+    const auto index = session->stats.wire_frame_index.load(std::memory_order_relaxed);
+    if (index < 0) {
+      return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(index);
+  }
+
+  /**
+   * @brief Sample the adaptive pacing controller from the control loop.
+   * @note Runs on the control thread, which also receives the pings and FEC reports.
+   */
+  static void tick_adaptive_pacing(session_t *session, std::chrono::steady_clock::time_point now) {
+    if (!session->video.adaptive_pacing_enabled || !session->control.peer) {
+      return;
+    }
+    const auto last_sent = last_sent_frame(session);
+    const pacing::traffic_t traffic {
+      session->stats.frames_sent.load(std::memory_order_relaxed),
+      session->stats.bytes_sent.load(std::memory_order_relaxed),
+      session->stats.packets_sent.load(std::memory_order_relaxed),
+      session->stats.video_send_failures.load(std::memory_order_relaxed),
+    };
+    const auto framerate = std::max(session->config.monitor.framerate, 1);
+    const auto period = std::chrono::nanoseconds {1'000'000'000 / framerate};
+    const auto encoder_kbps = static_cast<std::uint32_t>(std::max(session->video.pacing_bitrate_kbps.load(std::memory_order_relaxed), 0));
+    const auto rtt = std::chrono::milliseconds {session->control.peer->roundTripTime};
+
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> change;
+    pacing::adaptive_pacing_events_t events;
+    pacing::adaptive_pacing_snapshot_t snapshot;
+    {
+      std::lock_guard lg {session->video.adaptive_pacing_mutex};
+      change = session->video.adaptive_pacing.tick(now, traffic, last_sent, period, encoder_kbps, rtt);
+      events = session->video.adaptive_pacing.take_events();
+      snapshot = session->video.adaptive_pacing.snapshot();
+    }
+    // A cut that left the rate unchanged (already at the floor) is not news.
+    auto shown = events;
+    shown.cut = events.cut && change.has_value();
+    if (shown.any()) {
+      log_adaptive_pacing(shown, snapshot, change ? change->first : 0);
+    }
+  }
+
   void controlBroadcastThread(control_server_t *server) {
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
+      if (session->video.adaptive_pacing_enabled) {
+        // Standard pings show the client is alive and sending control traffic.
+        std::lock_guard lg {session->video.adaptive_pacing_mutex};
+        session->video.adaptive_pacing.on_ping(std::chrono::steady_clock::now(), payload);
+      }
+    });
+
+    // Client to host SS_FRAME_FEC_STATUS: one report per FEC block that needed
+    // recovery or was dropped. (Host to client, the same number is Set RGB LED.)
+    server->map(pacing::fec_status_packet_type, [](session_t *session, const std::string_view &payload) {
+      if (!session->video.adaptive_pacing_enabled) {
+        // Off: behave as before this type had a handler.
+        BOOST_LOG(debug)
+          << "type [Unknown] { "sv << util::hex(pacing::fec_status_packet_type).to_string_view() << " }"sv << std::endl
+          << "---data---"sv << std::endl
+          << util::hex_vec(payload) << std::endl
+          << "---end data---"sv;
+        return;
+      }
+      const auto last_sent = last_sent_frame(session);
+      const auto report = session->video.fec_reports.record(payload, last_sent);
+      if (!report) {
+        return;
+      }
+      // record() accepted it, so `last_sent` is set.
+      const auto framerate = std::max(session->config.monitor.framerate, 1);
+      const auto period = std::chrono::nanoseconds {1'000'000'000 / framerate};
+      std::lock_guard lg {session->video.adaptive_pacing_mutex};
+      session->video.adaptive_pacing.on_block(report->frame, *last_sent, period, report->block);
     });
 
     server->map(packetTypes[IDX_START_A], [&](session_t *session, const std::string_view &payload) {
@@ -1668,7 +1943,7 @@ namespace stream {
         return;
       }
       auto payload = encode_control(session, util::view(termination_plaintext), termination_encrypted_payload);
-      if (server->send(payload, session->control.peer)) {
+      if (payload.empty() || server->send(payload, session->control.peer)) {
         TUPLE_2D(port, addr, platf::from_sockaddr_ex((sockaddr *) &session->control.peer->address.address));
         BOOST_LOG(warning) << "Couldn't send termination code to ["sv << addr << ':' << port << ']';
       }
@@ -1702,7 +1977,11 @@ namespace stream {
           }
 
           auto session = *pos;
-          haptics_client |= (session->config.mlFeatureFlags & ML_FF_HAPTICS_PCM) != 0;
+          // The gamepad feedback queues below are drained only by this loop, so a
+          // session with a controller attached needs the short wait too: a Steam
+          // haptic click or a rumble stop must not sit for up to 150 ms.
+          haptics_client |= (session->config.mlFeatureFlags & ML_FF_HAPTICS_PCM) != 0 ||
+                            input::has_gamepad(session->input);
 
           if (now > session->pingTimeout) {
             auto address = session->control.peer ? platf::from_sockaddr((sockaddr *) &session->control.peer->address.address) : session->control.expected_peer_address;
@@ -1730,12 +2009,20 @@ namespace stream {
             pos = server->_sessions->erase(pos);
 
             if (session->control.peer) {
+              // The control owner alone touches the peer and encryption state.
+              // ENet's disconnect_now clears queued packets, so flush the
+              // graceful reason before detaching the peer.
+              if (session->stop_reason.load(std::memory_order_relaxed) == stop_reason_e::graceful) {
+                send_termination(session);
+                server->flush();
+              }
               {
                 auto ptslg = server->_peer_to_session.lock();
                 server->_peer_to_session->erase(session->control.peer);
               }
 
               enet_peer_disconnect_now(session->control.peer, 0);
+              session->control.peer = nullptr;
             }
 
             session->controlEnd.raise(true);
@@ -1780,9 +2067,12 @@ namespace stream {
               has_processless_live_session = true;
             }
             auto &feedback_queue = session->control.feedback_queue;
-            while (feedback_queue->peek()) {
-              auto feedback_msg = feedback_queue->pop();
-
+            // A retiring controller discards its queued output from another
+            // thread without waking consumers, so a peek() followed by a
+            // blocking pop() could wait forever on an item that is gone.
+            // Dequeue atomically instead; the loop ends when the mailbox is
+            // empty or stopped.
+            while (auto feedback_msg = feedback_queue->try_pop()) {
               send_feedback_msg(session, *feedback_msg);
             }
 
@@ -1792,6 +2082,9 @@ namespace stream {
 
               send_hdr_mode(session, std::move(hdr_info));
             }
+
+            // The sample period (500 ms) is longer than this loop's ENet wait.
+            tick_adaptive_pacing(session, now);
           }
 
           ++pos;
@@ -1817,7 +2110,8 @@ namespace stream {
         break;
       }
 
-      // Haptic samples must keep flowing even when the player is not moving.
+      // Haptic samples and gamepad feedback must keep flowing even when the player
+      // is not moving.
       server->iterate(haptics_client ? 5ms : 150ms);
     }
 
@@ -1850,7 +2144,9 @@ namespace stream {
 
     auto &io = ctx.io_context;
 
-    udp::endpoint peer;
+    // Each outstanding receive writes its sender endpoint. Give the video and
+    // audio sockets separate storage so one cannot replace the other's peer.
+    std::array<udp::endpoint, 2> peers;
 
     std::array<char, 2048> buf[2];
     std::function<void(const boost::system::error_code, size_t)> recv_func[2];
@@ -1883,8 +2179,10 @@ namespace stream {
 
     auto recv_func_init = [&](udp::socket &sock, int buf_elem, std::map<av_session_id_t, message_queue_t> &peer_to_session) {
       recv_func[buf_elem] = [&, buf_elem](const boost::system::error_code &ec, size_t bytes) {
+        // Snapshot this sender before rearming the socket's receive.
+        const auto peer = peers[buf_elem];
         auto fg = util::fail_guard([&]() {
-          sock.async_receive_from(asio::buffer(buf[buf_elem]), peer, 0, recv_func[buf_elem]);
+          sock.async_receive_from(asio::buffer(buf[buf_elem]), peers[buf_elem], 0, recv_func[buf_elem]);
         });
 
         auto type_str = buf_elem ? "AUDIO"sv : "VIDEO"sv;
@@ -1925,8 +2223,8 @@ namespace stream {
     recv_func_init(video_sock, 0, peer_to_video_session);
     recv_func_init(audio_sock, 1, peer_to_audio_session);
 
-    video_sock.async_receive_from(asio::buffer(buf[0]), peer, 0, recv_func[0]);
-    audio_sock.async_receive_from(asio::buffer(buf[1]), peer, 0, recv_func[1]);
+    video_sock.async_receive_from(asio::buffer(buf[0]), peers[0], 0, recv_func[0]);
+    audio_sock.async_receive_from(asio::buffer(buf[1]), peers[1], 0, recv_func[1]);
 
     while (!broadcast_shutdown_event->peek()) {
       io.run();
@@ -2090,6 +2388,9 @@ namespace stream {
       // may also protect detail, bounded by unused bitrate and FEC block capacity.
       const bool pyrowave_session = session->config.monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT;
       auto fecPercentage = pyrowave_session ? 0 : config::stream.fec_percentage;
+      if (session->video.adaptive_pacing_enabled) {
+        session->stats.wire_frame_index.store(packet->frame_index(), std::memory_order_relaxed);
+      }
 
       // Insert space for packet headers
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
@@ -2197,6 +2498,17 @@ namespace stream {
         }
       }
 
+      // Pace standard video against the actual FEC-expanded packet count. The
+      // PyroWave path keeps its protocol-specific frame accounting below.
+      std::size_t pacing_frame_packets = total_shards;
+      if (!pyrowave_session && config::stream.pacing_batch_demand_limit) {
+        pacing_frame_packets = 0;
+        for (std::size_t x = 0; x < fec_blocks_needed; ++x) {
+          const auto data_shards = (fec_blocks[x].size() + blocksize - 1) / blocksize;
+          pacing_frame_packets += pacing::fec_expanded_packets(data_shards, fec_block_percentages[x], min_parity_shards);
+        }
+      }
+
       decltype(fec_blocks)::iterator
         fec_blocks_begin = std::begin(fec_blocks),
         fec_blocks_end = std::begin(fec_blocks) + fec_blocks_needed;
@@ -2213,8 +2525,9 @@ namespace stream {
       });
 
       try {
-        // Use around 80% of 1Gbps          1Gbps            percent    ms     packet      byte
-        size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
+        std::size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
+        // Host adaptive pacing replaces this with its exact rate below.
+        std::optional<pacing::packet_pace_t> adaptive_pace;
         if (pyrowave_session) {
           // Refresh the actual route periodically. Socket/interface discovery and
           // sysfs reads must not block the send path on every frame.
@@ -2252,7 +2565,7 @@ namespace stream {
             wire_timeline_state.cached_link_bps, session->config.monitor.pyrowave_peer_link_bps);
           const auto link_interface_id = wire_timeline_state.cached_interface_id;
           const auto &monitor = session->config.monitor;
-          const auto stream_kbps = monitor.client_requested_bitrate > 0 ? monitor.client_requested_bitrate : monitor.bitrate;
+          const auto stream_kbps = session->video.pacing_bitrate_kbps.load(std::memory_order_relaxed);
           // Ethernet header/FCS/preamble/interpacket gap, IP header, UDP header,
           // plus the optional encrypted-video prefix all occupy link time.
           const auto ip_header_bytes = session->video.peer.address().is_v6() ? 40u : 20u;
@@ -2280,7 +2593,62 @@ namespace stream {
                                   "client-calibrated " + std::to_string(monitor.pyrowave_peer_pace_bps / 1'000'000) + " Mbps" :
                                   std::string("default 80% of link"));
           }
+        } else if (session->video.adaptive_pacing_enabled) {
+          // The ceiling is today's fixed pace, so a stream that settles at it
+          // behaves exactly as with the option off.
+          const auto &monitor = session->config.monitor;
+          const auto stream_kbps = session->video.pacing_bitrate_kbps.load(std::memory_order_relaxed);
+          const auto ip_header_bytes = session->video.peer.address().is_v6() ? 40u : 20u;
+          const auto wire_bytes = blocksize + 38 + ip_header_bytes + 8 +
+                                  (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
+          const std::uint64_t ceiling_bps = std::uint64_t(ratecontrol_packets_in_1ms) * wire_bytes * 8000;
+          const auto needed_bps = pacing::nominal_wire_demand_bps(
+            stream_kbps,
+            monitor.framerate,
+            sizeof(frame_header),
+            payload_blocksize,
+            wire_bytes,
+            // The configured value: oversized frames zero fecPercentage for
+            // themselves only and must not move the controller's wire floor.
+            config::stream.fec_percentage,
+            min_parity_shards
+          );
+          pacing::adaptive_pacing_events_t events;
+          pacing::adaptive_pacing_snapshot_t snapshot;
+          std::uint64_t rate_bps;
+          {
+            std::lock_guard lg {session->video.adaptive_pacing_mutex};
+            rate_bps = session->video.adaptive_pacing.rate(ceiling_bps, needed_bps, std::uint32_t(std::max(stream_kbps, 0)));
+            events = session->video.adaptive_pacing.take_events();
+            if (events.any()) {
+              snapshot = session->video.adaptive_pacing.snapshot();
+            }
+          }
+          if (events.any()) {
+            log_adaptive_pacing(events, snapshot, 0);
+          }
+          // Deadlines follow the exact rate; whole packets per millisecond
+          // only bound the burst between waits.
+          adaptive_pace = pacing::packet_pace_t::at_rate(rate_bps, wire_bytes);
+          ratecontrol_packets_in_1ms = adaptive_pace->packets_per_ms;
+        } else if (config::stream.pacing_batch_demand_limit) {
+          const auto &monitor = session->config.monitor;
+          const auto stream_kbps = session->video.pacing_bitrate_kbps.load(std::memory_order_relaxed);
+          const auto ip_header_bytes = session->video.peer.address().is_v6() ? 40u : 20u;
+          const auto wire_bytes = blocksize + 38 + ip_header_bytes + 8 +
+                                  (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
+          ratecontrol_packets_in_1ms = pacing::packets_per_ms(
+            0,
+            stream_kbps,
+            payload_blocksize,
+            wire_bytes,
+            pacing_frame_packets,
+            monitor.framerate,
+            0
+          );
         }
+
+        const auto ratecontrol_pace = adaptive_pace.value_or(pacing::packet_pace_t::fixed(ratecontrol_packets_in_1ms));
 
         // Send less than 64K in a single batch.
         // On Windows, batches above 64K seem to bypass SO_SNDBUF regardless of its size,
@@ -2289,9 +2657,15 @@ namespace stream {
         size_t max_batch_size_bytes = 64 * 1024;
         const auto prefix_size = session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0;
         const auto datagram_size = blocksize + prefix_size;
-        max_batch_size_bytes = pyrowave_session ?
-                                 std::min(max_batch_size_bytes, ratecontrol_packets_in_1ms * datagram_size) :
-                                 std::min<size_t>(max_batch_size_bytes, (size_t) config::stream.video_max_batch_size_kb * 1024);
+        if (!pyrowave_session) {
+          max_batch_size_bytes = std::min<size_t>(max_batch_size_bytes, (size_t) config::stream.video_max_batch_size_kb * 1024);
+        }
+        // The optional ordinary-stream demand bound (also used by host adaptive
+        // pacing) applies to one send call; it does not cap aggregate sends
+        // before the next pacing wait.
+        if (pyrowave_session || config::stream.pacing_batch_demand_limit || session->video.adaptive_pacing_enabled) {
+          max_batch_size_bytes = pacing::max_batch_bytes(max_batch_size_bytes, ratecontrol_packets_in_1ms, datagram_size);
+        }
 
         // Encryption adds a prefix to every datagram. Omitting it here lets a
         // nominally 64 KiB batch cross the Windows buffering threshold.
@@ -2437,9 +2811,7 @@ namespace stream {
               // to account for the last send_batch() of the previous frame.
               if (ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms ||
                   ratecontrol_frame_packets_sent == 0) {
-                auto due = ratecontrol_frame_start +
-                           std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                             ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+                auto due = ratecontrol_frame_start + ratecontrol_pace.offset(ratecontrol_frame_packets_sent);
 
                 auto now = std::chrono::steady_clock::now();
                 if (now < due) {
@@ -2493,9 +2865,7 @@ namespace stream {
               ratecontrol_frame_packets_sent += send_result.packets_accepted;
               // Keep pacing debt from accepted batches even if this block or
               // frame aborts before its final shard.
-              ratecontrol_next_frame_start = ratecontrol_frame_start +
-                                             std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                                               ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+              ratecontrol_next_frame_start = ratecontrol_frame_start + ratecontrol_pace.offset(ratecontrol_frame_packets_sent);
               if (!send_result.sent) {
                 throw video_send_failed_t {send_result.cancelled, unsigned(blockIndex), send_result.packets_accepted};
               }
@@ -2510,9 +2880,7 @@ namespace stream {
           }
 
           // remember this in case the next frame comes immediately
-          ratecontrol_next_frame_start = ratecontrol_frame_start +
-                                         std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                                           ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+          ratecontrol_next_frame_start = ratecontrol_frame_start + ratecontrol_pace.offset(ratecontrol_frame_packets_sent);
           ratecontrol_frame_packets_logger.collect_and_log((double) ratecontrol_frame_packets_sent);
 
           frame_network_latency_logger.second_point_now_and_log();
@@ -2540,11 +2908,17 @@ namespace stream {
             const auto now = std::chrono::steady_clock::now();
             if (now >= next_burst_detail_log) {
               next_burst_detail_log = now + 1s;
+              // Under adaptive pacing the packets/ms quantum only bounds bursts;
+              // the deadlines follow the applied rate.
+              const auto pacing_detail = adaptive_pace ?
+                                           std::to_string(ratecontrol_pace.applied_bps() / 1'000) + " kbps, bursts up to " +
+                                             std::to_string(ratecontrol_packets_in_1ms) + " packets" :
+                                           std::to_string(ratecontrol_packets_in_1ms) + " packets/ms";
               BOOST_LOG(debug) << "Network: frame "sv << packet->frame_index() << " send burst "sv << burst_ms << " ms for "sv
                                << ratecontrol_frame_packets_sent << " packets ("sv << burst_bytes << " UDP payload bytes, "sv
                                << burst_mbps << " Mbps); paced sleep "sv << burst_sleep_ms << " ms, in send_batch() "sv
                                << burst_send_ms << " ms (longest "sv << burst_max_send_ms << " ms), fallback batches "sv
-                               << burst_fallback_batches << ", pacing "sv << ratecontrol_packets_in_1ms << " packets/ms"sv;
+                               << burst_fallback_batches << ", pacing "sv << pacing_detail;
             }
           }
         }
@@ -2689,6 +3063,7 @@ namespace stream {
         // sequence reservation, omit frame-success counters and avoid the generic
         // exception path's 100 ms sleep for temporary socket pressure.
         if (!e.cancelled) {
+          session->stats.video_send_failures.fetch_add(1, std::memory_order_relaxed);
           ++failed_video_frames;
           const auto now = std::chrono::steady_clock::now();
           if (now >= next_send_failure_log) {
@@ -2817,18 +3192,18 @@ namespace stream {
     shutdown_event->raise(true);
   }
 
-  int start_broadcast(broadcast_ctx_t &ctx) {
-    // Reset the shutdown event to ensure it's cleared even if something
-    // raised it between the last end_broadcast and now.
-    auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
-    broadcast_shutdown_event->reset();
+  auto broadcast_packet_queues() {
+    return broadcast_runtime::packet_queues<video::packet_t, audio::packet_t>(
+      mail::man,
+      mail::broadcast_shutdown,
+      mail::video_packets,
+      mail::audio_packets
+    );
+  }
 
-    // Reset the packet queues which were stopped in end_broadcast.
-    // If not reset, the broadcast threads will exit immediately when pop() returns null.
-    auto video_packets = mail::man->queue<video::packet_t>(mail::video_packets);
-    auto audio_packets = mail::man->queue<audio::packet_t>(mail::audio_packets);
-    video_packets->reset();
-    audio_packets->reset();
+  int start_broadcast(broadcast_ctx_t &ctx) {
+    // Keep the reset queues and shutdown post alive through worker startup.
+    auto packet_queues = broadcast_packet_queues().reset_for_start();
 
     auto address_family = net::af_from_enum_string(config::sunshine.address_family);
     auto control_port = net::map_port(CONTROL_PORT);
@@ -2924,37 +3299,47 @@ namespace stream {
   }
 
   void end_broadcast(broadcast_ctx_t &ctx) {
-    auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
+    struct transport_t final: broadcast_runtime::transport_t {
+      broadcast_ctx_t &ctx;
 
-    broadcast_shutdown_event->raise(true);
+      explicit transport_t(broadcast_ctx_t &ctx):
+          ctx {ctx} {
+      }
 
-    auto video_packets = mail::man->queue<video::packet_t>(mail::video_packets);
-    auto audio_packets = mail::man->queue<audio::packet_t>(mail::audio_packets);
+      void stop_receiving() override {
+        ctx.message_queue_queue->stop();
+        ctx.io_context.stop();
+      }
 
-    // Minimize delay stopping video/audio threads
-    video_packets->stop();
-    audio_packets->stop();
+      void close_sockets() override {
+        ctx.video_sock.close();
+        ctx.audio_sock.close();
+      }
 
-    ctx.message_queue_queue->stop();
-    ctx.io_context.stop();
+      void join(broadcast_runtime::worker_e worker) override {
+        switch (worker) {
+          case broadcast_runtime::worker_e::receive:
+            BOOST_LOG(debug) << "Waiting for main listening thread to end..."sv;
+            ctx.recv_thread.join();
+            break;
+          case broadcast_runtime::worker_e::video:
+            BOOST_LOG(debug) << "Waiting for main video thread to end..."sv;
+            ctx.video_thread.join();
+            break;
+          case broadcast_runtime::worker_e::audio:
+            BOOST_LOG(debug) << "Waiting for main audio thread to end..."sv;
+            ctx.audio_thread.join();
+            break;
+          case broadcast_runtime::worker_e::control:
+            BOOST_LOG(debug) << "Waiting for main control thread to end..."sv;
+            ctx.control_thread.join();
+            break;
+        }
+      }
+    } transport {ctx};
 
-    ctx.video_sock.close();
-    ctx.audio_sock.close();
-
-    video_packets.reset();
-    audio_packets.reset();
-
-    BOOST_LOG(debug) << "Waiting for main listening thread to end..."sv;
-    ctx.recv_thread.join();
-    BOOST_LOG(debug) << "Waiting for main video thread to end..."sv;
-    ctx.video_thread.join();
-    BOOST_LOG(debug) << "Waiting for main audio thread to end..."sv;
-    ctx.audio_thread.join();
-    BOOST_LOG(debug) << "Waiting for main control thread to end..."sv;
-    ctx.control_thread.join();
+    broadcast_packet_queues().stop_and_join(transport);
     BOOST_LOG(debug) << "All broadcasting threads ended"sv;
-
-    broadcast_shutdown_event->reset();
   }
 
   int recv_ping(session_t *session, decltype(broadcast)::ptr_t ref, socket_e type, std::string_view expected_payload, udp::endpoint &peer, std::chrono::milliseconds timeout) {
@@ -3078,6 +3463,7 @@ namespace stream {
     bool shared_platform_started;
     bool shared_runtime_cleanup_armed;
     bool shared_runtime_force_display_revert_when_idle;
+    bool shared_runtime_paused_restore_dispatched;
     std::optional<std::array<std::uint8_t, 16>> shared_runtime_virtual_display_guid_bytes;
 
     cleanup_reservation_t::cleanup_reservation_t() {
@@ -3106,7 +3492,7 @@ namespace stream {
     }
 
     bool has_shared_runtime_owner(const shared_runtime_finalize_context_t &context) {
-      return has_capture_runtime_owner(context) ||
+      return display_target::leases().protected_output() || has_capture_runtime_owner(context) ||
 #ifdef __linux__
              remote_display_topology::instance().has_live_managed_client_identity();
 #else
@@ -3167,7 +3553,11 @@ namespace stream {
     }
 
     void start_shared_platform_if_needed() {
+#ifdef _WIN32
+      display_helper_integration::cancel_final_restore_display_removal();
+#endif
       arm_shared_runtime_cleanup();
+      shared_runtime_paused_restore_dispatched = false;
       if (shared_platform_started) {
         return;
       }
@@ -3222,7 +3612,21 @@ namespace stream {
       }
 #endif
 
-      if (capture_runtime_owned || topology.managed_client_identity_count() != 0) {
+      if (display_target::leases().protected_output() || capture_runtime_owned || topology.managed_client_identity_count() != 0) {
+#ifdef _WIN32
+        // A normal game's reservation survives pause for Resume. Restoring the
+        // physical desktop must not release that reservation or finalize its
+        // platform lifetime. Remote Monitors (even on the same identity) and
+        // every live/startup/teardown capture owner remain protected.
+        if (!capture_runtime_owned && !shared_runtime_paused_restore_dispatched &&
+            proc::proc.current_app_id() > 0 && config::video.dd.config_revert_on_disconnect &&
+            topology.physical_display_restore_allowed()) {
+          shared_runtime_paused_restore_dispatched = display_helper_integration::revert(
+            true, false, false, nullptr,
+            display_helper_integration::RevertOwnershipPolicy::RetainPausedNormalGame
+          );
+        }
+#endif
         return false;
       }
 
@@ -3280,7 +3684,13 @@ namespace stream {
                             "(config_revert_on_disconnect=false, paused timeout disabled).";
       } else if (display_restore_requested) {
         BOOST_LOG(info) << "Display restore: final stream ended; dispatching restore while keeping virtual display alive.";
-        if (!display_helper_integration::revert(true)) {
+        const auto retention_policy = !is_paused && config::video.dd.remove_virtual_display_after_restore ?
+          display_helper_integration::FinalRestoreDisplayPolicy::RemoveAfterRestore :
+          display_helper_integration::FinalRestoreDisplayPolicy::Retain;
+        if (!display_helper_integration::revert(
+              true, false, false, nullptr,
+              display_helper_integration::RevertOwnershipPolicy::AllOwnersMustRelease,
+              retention_policy)) {
           BOOST_LOG(debug) << "Display helper: restore dispatch failed after final stream; virtual display remains active.";
         }
       } else {
@@ -3346,6 +3756,7 @@ namespace stream {
         config::maybe_apply_deferred();
       }
       shared_runtime_cleanup_armed = false;
+      shared_runtime_paused_restore_dispatched = false;
       shared_runtime_force_display_revert_when_idle = false;
       shared_runtime_virtual_display_guid_bytes.reset();
       return true;
@@ -3353,6 +3764,10 @@ namespace stream {
 
     state_e state(session_t &session) {
       return session.state.load(std::memory_order_relaxed);
+    }
+
+    bool has_running_video(const session_t &session) {
+      return hardware_metrics::running_video(session.state.load(std::memory_order_relaxed) == state_e::RUNNING, session.input_only);
     }
 
     std::string uuid(const session_t &session) {
@@ -3371,16 +3786,29 @@ namespace stream {
       session.client_disconnected.store(true, std::memory_order_release);
     }
 
-    void stop(session_t &session) {
+    static void request_stop(session_t &session, const stop_reason_e reason) {
       while_starting_do_nothing(session.state);
-      auto expected = state_e::RUNNING;
-      auto already_stopping = !session.state.compare_exchange_strong(expected, state_e::STOPPING);
-      if (already_stopping) {
+      if (session.state.load(std::memory_order_acquire) != state_e::RUNNING) {
+        return;
+      }
+      auto expected = stop_reason_e::none;
+      if (!session.stop_reason.compare_exchange_strong(expected, reason)) {
         return;
       }
 
+      // Publish shutdown effects before STOPPING lets the control owner detach
+      // this session. The first cancellation keeps its original reason.
       input::reset(session.input);
       session.shutdown_event->raise(true);
+      session.state.store(state_e::STOPPING, std::memory_order_release);
+    }
+
+    void stop(session_t &session) {
+      request_stop(session, stop_reason_e::abrupt);
+    }
+
+    void graceful_stop(session_t &session) {
+      request_stop(session, stop_reason_e::graceful);
     }
 
     void join(session_t &session, const bool lifecycle_lock_held) {
@@ -3401,21 +3829,18 @@ namespace stream {
       // The alternative is that Sunshine can never start another session until it's manually restarted.
       // Name the join stage for the watchdog so a crash bundle says outright what hung
       // (e.g. vibeshine#187 took dump archaeology to learn it was the video thread).
-      {
-        auto hung_stage = std::make_shared<std::atomic<const char *>>("video thread");
-        join_deadline_t join_deadline {hung_stage};
-
-        BOOST_LOG(debug) << "Waiting for video to end..."sv;
-        session.videoThread.join();
-        hung_stage->store("audio thread");
-        BOOST_LOG(debug) << "Waiting for audio to end..."sv;
-        if (session.audioThread.joinable()) {
-          session.audioThread.join();
+      auto hung_stage = std::make_shared<std::atomic<const char *>>("video thread");
+      audio::join_rtsp_capture(
+        session.audio_context_guard, session.videoThread, session.audioThread,
+        [&] { session.controlEnd.view(); },
+        [hung_stage]() -> std::shared_ptr<void> { return std::make_shared<join_deadline_t>(hung_stage); },
+        [hung_stage](audio::join_stage_e stage) {
+          const char *name = stage == audio::join_stage_e::video ? "video thread" :
+                             stage == audio::join_stage_e::audio ? "audio thread" : "control end";
+          hung_stage->store(name);
+          BOOST_LOG(debug) << "Waiting for " << name << " to end...";
         }
-        hung_stage->store("control end");
-        BOOST_LOG(debug) << "Waiting for control to end..."sv;
-        session.controlEnd.view();
-      }
+      );
       // Watchdog coverage ends with the thread joins, which are the unbounded and
       // unrecoverable part. Everything below waits on the process-wide lifecycle
       // gate, which other threads legitimately hold for much longer than
@@ -3437,6 +3862,8 @@ namespace stream {
       // The app may already have exited, but its output must survive until
       // this capture has joined and released every encoder/conversion import.
       session.normal_display_capture.reset();
+      session.config.monitor.capture_target_valid = {};
+      session.exact_target_hold.reset();
       remote_display_topology::instance().release_drained_normal_game_identities();
       nvhttp::reconcile_remote_monitor_owners();
 
@@ -3544,7 +3971,19 @@ namespace stream {
     }
 
     int start(session_t &session, const std::string &addr_string) {
-      session.input = input::alloc(session.mail, session.config.gcpersist);
+      session.input = input::alloc(session.mail, session.config.guide_button, session.config.gcpersist);
+
+      // Preserve each protocol's original startup bitrate choice. Runtime
+      // bitrate changes update this atomic alongside the monitor metadata.
+      const auto &monitor = session.config.monitor;
+      const bool pyrowave_session = monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT;
+      const auto pacing_bitrate_kbps = pyrowave_session ?
+                                         (monitor.client_requested_bitrate > 0 ? monitor.client_requested_bitrate : monitor.bitrate) :
+                                         (monitor.bitrate > 0 ? monitor.bitrate : monitor.client_requested_bitrate);
+      session.video.pacing_bitrate_kbps.store(pacing_bitrate_kbps, std::memory_order_relaxed);
+      // PyroWave keeps its own pacing; the controller only serves ordinary video.
+      session.video.adaptive_pacing_enabled = config::stream.host_adaptive_pacing && !pyrowave_session;
+      session.video.adaptive_pacing = pacing::adaptive_pacing_t {session.video.adaptive_pacing_enabled};
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
@@ -3762,6 +4201,7 @@ namespace stream {
       session->shutdown_event = mail->event<bool>(mail::shutdown);
       session->launch_session_id = launch_session.id;
       session->display_power_guard = launch_session.display_power_guard;
+      session->audio_context_guard = std::move(launch_session.audio_context_guard);
       session->device_name = launch_session.device_name;
       session->device_uuid = !launch_session.client_uuid.empty() ? launch_session.client_uuid : launch_session.unique_id;
       // Fresh history identifier per stream so each start/stop cycle produces
@@ -3770,11 +4210,20 @@ namespace stream {
 
       session->config = config;
       session->config.gcpersist = launch_session.gcpersist;
+      session->config.guide_button = launch_session.guide_button;
       session->stream_fps = session->config.monitor.framerate;
       session->client_display_refresh_millihz = launch_session.client_display_refresh_millihz;
       session->secondary_game_client = launch_session.secondary_game_client;
       session->remote_role = launch_session.role;
       session->remote_role_generation = launch_session.role_generation;
+      session->monitor_profile_uuid = launch_session.monitor_profile_uuid;
+      session->exact_monitor_target = launch_session.exact_monitor_target;
+      session->exact_target_hold = launch_session.exact_target_hold;
+      if (session->exact_target_hold) {
+        if (!remote_session::exact_target_still_valid(session->exact_target_hold)) throw std::runtime_error("The retained exact target is missing or its mode changed");
+        session->config.monitor.capture_target_valid = [hold = session->exact_target_hold] { return remote_session::exact_target_still_valid(hold); };
+      }
+      if (session->exact_monitor_target && !session->exact_target_hold) return nullptr;
 #if defined(_WIN32) || defined(__linux__)
       if (launch_session.role == remote_session::role_e::game) {
         const auto app = proc::proc.active_session_guard();
@@ -3832,7 +4281,7 @@ namespace stream {
 #endif
 
       session->control.connect_data = launch_session.control_connect_data;
-      session->control.feedback_queue = mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback);
+      session->control.feedback_queue = mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback, platf::GAMEPAD_FEEDBACK_QUEUE_CAPACITY, false);
       session->control.hdr_queue = mail->event<video::hdr_info_t>(mail::hdr);
       session->control.legacy_input_enc_iv = launch_session.iv;
       session->control.cipher = crypto::cipher::gcm_t {
@@ -3855,7 +4304,7 @@ namespace stream {
       }
 
       if (!session->audio_disabled) {
-        constexpr auto max_block_size = crypto::cipher::round_to_pkcs7_padded(2048);
+        constexpr auto max_block_size = crypto::cipher::round_to_pkcs7_padded(MAX_AUDIO_PACKET_SIZE);
         util::buffer_t<char> shards {RTPA_TOTAL_SHARDS * max_block_size};
         util::buffer_t<uint8_t *> shards_p {RTPA_TOTAL_SHARDS};
         for (auto x = 0; x < RTPA_TOTAL_SHARDS; ++x) shards_p[x] = (uint8_t *) &shards[x * max_block_size];

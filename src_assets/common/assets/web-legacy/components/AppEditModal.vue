@@ -112,18 +112,7 @@
               {{ t('_common.elevated') }}
             </n-checkbox>
             <n-checkbox
-              v-if="isWindows"
-              v-model:checked="form.dualsenseHaptics"
-              size="small"
-              class="md:col-span-2"
-            >
-              <div class="flex flex-col">
-                <span>{{ t('apps.dualsense_haptics') }}</span>
-                <span class="text-[11px] opacity-60">{{ t('apps.dualsense_haptics_desc') }}</span>
-              </div>
-            </n-checkbox>
-            <n-checkbox
-              v-if="isWindows"
+              v-if="isWindows && !isRemoteMonitor"
               v-model:checked="displayOverrideEnabled"
               size="small"
               class="md:col-span-2"
@@ -138,7 +127,20 @@
           </div>
 
           <div
-            v-if="isWindows && displayOverrideEnabled"
+            v-if="isRemoteMonitor"
+            class="space-y-2 rounded-xl border border-primary/20 bg-primary/5 p-4"
+            role="note"
+          >
+            <h3 class="font-semibold">{{ t('config.remote_monitor_display_title') }}</h3>
+            <p>{{ t('config.remote_monitor_display_description') }}</p>
+            <p>{{ t('config.remote_monitor_display_limits') }}</p>
+            <a href="/v2/devices" class="text-primary underline">
+              {{ t('config.remote_monitor_display_layout_action') }}
+            </a>
+          </div>
+
+          <div
+            v-if="isWindows && !isRemoteMonitor && displayOverrideEnabled"
             class="space-y-5 rounded-xl border border-dark/10 dark:border-light/10 bg-light/60 dark:bg-dark/40 p-4"
           >
             <div class="space-y-2">
@@ -231,7 +233,7 @@
               </div>
             </div>
 
-            <div v-if="displaySelection === 'physical'" class="space-y-3">
+            <div class="space-y-3">
               <div class="flex items-center justify-between gap-3">
                 <span class="text-xs font-semibold uppercase tracking-wide opacity-70">
                   {{ t('config.dd_config_label') }}
@@ -246,6 +248,23 @@
                 </n-button>
               </div>
               <p class="text-[11px] opacity-70">{{ t('config.dd_config_hint') }}</p>
+              <p v-if="displaySelection === 'virtual'" class="text-[11px] opacity-70">
+                {{ t('config.app_virtual_display_layout_action_hint') }}
+              </p>
+              <p v-if="displaySelection === 'virtual' && effectiveAppDisplayAction === 'verify_only'">
+                {{ t('config.app_virtual_display_verify_override') }}
+              </p>
+              <div
+                v-if="virtualDisplayLayoutBlocked"
+                role="alert"
+                data-testid="app-display-layout-conflict"
+                class="space-y-2 rounded-md border border-amber-500 p-3"
+              >
+                <p>{{ t('config.app_virtual_display_layout_blocked') }}</p>
+                <n-button size="small" @click="form.ddConfigurationOption = 'ensure_active'">
+                  {{ t('config.app_virtual_display_layout_enable') }}
+                </n-button>
+              </div>
               <n-radio-group v-model:value="form.ddConfigurationOption" class="grid gap-2">
                 <n-radio
                   v-for="opt in appDdConfigurationOptions"
@@ -316,9 +335,7 @@
               </div>
               <n-radio-group
                 :value="resolvedVirtualDisplayLayout"
-                @update:value="
-                  (v) => (form.virtualDisplayLayout = v === globalVirtualDisplayLayout ? null : v)
-                "
+                @update:value="selectVirtualDisplayLayout"
                 class="space-y-4"
               >
                 <div
@@ -331,7 +348,7 @@
                   tabindex="0"
                 >
                   <div class="flex items-center gap-3">
-                    <n-radio :value="option.value" />
+                    <n-radio :value="option.value" :aria-label="option.label" />
                     <span class="text-sm font-semibold">{{ option.label }}</span>
                   </div>
                   <span class="text-[11px] opacity-70 leading-snug ml-6">{{
@@ -359,7 +376,7 @@
           </div>
 
           <AppEditRtxHdrSection
-            v-if="isWindows && hasNvidia"
+            v-if="(isWindows || isLinux) && hasNvidia && (!isLinux || rtxHdrSupported)"
             v-model:form="form"
             :live-status="liveRtxHdrStatus"
             :live-error="liveRtxHdrError"
@@ -464,6 +481,11 @@
 
 <script setup lang="ts">
 import { groupLibraryGames, providerLabels, type GameProvider } from '../utils/libraryGames';
+import {
+  isRemoteMonitorApplication,
+  preserveRemoteMonitorRouting,
+} from '../utils/remoteMonitorPolicy';
+import { preservePlayniteFullscreen } from '../utils/playniteFullscreenPolicy';
 import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { useMessage } from 'naive-ui';
 import { http } from '@/http';
@@ -539,6 +561,7 @@ const emit = defineEmits<{
   (e: 'deleted'): void;
 }>();
 const open = computed<boolean>(() => !!props.modelValue);
+const isRemoteMonitor = computed(() => isRemoteMonitorApplication(props.app));
 const message = useMessage();
 const { t } = useI18n();
 function fresh(): AppForm {
@@ -553,7 +576,6 @@ function fresh(): AppForm {
     excludeGlobalPrepCmd: false,
     configOverrides: {},
     elevated: false,
-    dualsenseHaptics: false,
     autoDetach: true,
     waitAll: true,
     frameGenLimiterFix: false,
@@ -879,7 +901,6 @@ function fromServerApp(src?: ServerApp | null): AppForm {
     excludeGlobalPrepCmd: !!src['exclude-global-prep-cmd'],
     configOverrides: rtxHdrOverrides.rest,
     elevated: !!src.elevated,
-    dualsenseHaptics: !!src['dualsense-haptics'],
     autoDetach: src['auto-detach'] !== undefined ? !!src['auto-detach'] : base.autoDetach,
     waitAll: src['wait-all'] !== undefined ? !!src['wait-all'] : base.waitAll,
     frameGenLimiterFix:
@@ -934,7 +955,6 @@ function toServerPayload(f: AppForm): Record<string, any> {
       ? { 'config-overrides': configOverridesPayload }
       : {}),
     elevated: !!f.elevated,
-    'dualsense-haptics': !!f.dualsenseHaptics,
     'auto-detach': !!f.autoDetach,
     'wait-all': !!f.waitAll,
     'gen1-framegen-fix': false,
@@ -946,19 +966,15 @@ function toServerPayload(f: AppForm): Record<string, any> {
       ...(isWindows.value ? { elevated: !!p.elevated } : {}),
     })),
     detached: Array.isArray(f.detached) ? f.detached : [],
-    // Leave 'virtual-screen' to be persisted only if explicitly different from the global setting.
   };
   if (f.prefer10BitSdr !== null) {
     payload['prefer-10bit-sdr'] = f.prefer10BitSdr;
   }
-  // Only persist virtual display mode/layout if explicitly set and different from global defaults
-  const _globalVDMode = globalVirtualDisplayMode.value;
-  const _globalVDLayout = globalVirtualDisplayLayout.value;
-  const _globalOutput = globalOutputName.value;
-  if (f.virtualDisplayMode !== null && f.virtualDisplayMode !== _globalVDMode) {
+  // Explicit per-game choices must survive later changes to the host defaults.
+  if (f.virtualDisplayMode !== null) {
     payload['virtual-display-mode'] = f.virtualDisplayMode;
   }
-  if (f.virtualDisplayLayout !== null && f.virtualDisplayLayout !== _globalVDLayout) {
+  if (f.virtualDisplayLayout !== null) {
     payload['virtual-display-layout'] = f.virtualDisplayLayout;
   }
   Object.assign(payload, f.providerFields ?? {});
@@ -1034,14 +1050,14 @@ function toServerPayload(f: AppForm): Record<string, any> {
     payload['display-output'] = typeof f.output === 'string' ? f.output.trim() : '';
   }
 
-  // Only persist virtual-screen if it differs from the global virtual output flag.
-  const globalIsVirtual = _globalOutput === VIRTUAL_DISPLAY_SELECTION;
-  if (!!f.virtualScreen !== globalIsVirtual) {
-    payload['virtual-screen'] = !!f.virtualScreen;
+  if (selection !== 'global') {
+    payload['virtual-screen'] = selection === 'virtual';
   }
   if (f.ddConfigurationOption) {
     payload['dd-configuration-option'] = f.ddConfigurationOption;
   }
+  preserveRemoteMonitorRouting(props.app, payload);
+  preservePlayniteFullscreen(props.app, payload);
   return payload;
 }
 let liveRtxHdrSuppress = false;
@@ -1904,6 +1920,8 @@ const configStore = useConfigStore();
 const isWindows = computed(
   () => (configStore.metadata?.platform || '').toLowerCase() === 'windows',
 );
+const isLinux = computed(() => configStore.metadata?.platform?.toLowerCase() === 'linux');
+const rtxHdrSupported = computed(() => (configStore.metadata as any)?.rtx_hdr_supported === true);
 const gpuList = computed(() => {
   const raw = (configStore.metadata as any)?.gpus;
   return Array.isArray(raw) ? raw : [];
@@ -1971,10 +1989,33 @@ const appDdConfigurationOptions = computed(() => [
   { label: t('config.dd_config_ensure_only_display') as string, value: 'ensure_only_display' },
 ]);
 
+const effectiveAppDisplayAction = computed(() =>
+  form.value.ddConfigurationOption ||
+  form.value.configOverrides?.dd_configuration_option ||
+  (configStore.config as any)?.dd_configuration_option ||
+  'verify_only',
+);
+
+const virtualDisplayLayoutBlocked = computed(() => {
+  const action = effectiveAppDisplayAction.value;
+  return (
+    displaySelection.value === 'virtual' &&
+    resolvedVirtualDisplayLayout.value !== 'exclusive' &&
+    action === 'disabled'
+  );
+});
+
 function selectVirtualDisplayLayout(v: unknown) {
   const sv = String(v).trim().toLowerCase();
   if (APP_VIRTUAL_DISPLAY_LAYOUTS.includes(sv as AppVirtualDisplayLayout)) {
     form.value.virtualDisplayLayout = sv as AppVirtualDisplayLayout;
+    // Only a user layout selection enables preparation; hydration preserves saved policy.
+    if (
+      !form.value.ddConfigurationOption ||
+      ['verify_only', 'disabled'].includes(form.value.ddConfigurationOption)
+    ) {
+      form.value.ddConfigurationOption = 'ensure_active';
+    }
   }
 }
 const lastPhysicalOutput = ref('');
@@ -1982,7 +2023,6 @@ const lastVirtualDisplayMode = ref<AppVirtualDisplayMode | null>(null);
 const displaySelection = computed<DisplaySelection>({
   get: () => {
     const currentOutput = typeof form.value.output === 'string' ? form.value.output.trim() : '';
-    const globalMode = globalVirtualDisplayMode.value;
     const appMode = form.value.virtualDisplayMode;
     if (form.value.virtualScreen || form.value.output === VIRTUAL_DISPLAY_SELECTION) {
       return 'virtual';
@@ -1993,7 +2033,7 @@ const displaySelection = computed<DisplaySelection>({
     if (appMode === 'disabled') {
       return 'physical';
     }
-    if (appMode !== null && appMode !== globalMode) {
+    if (appMode !== null) {
       return 'virtual';
     }
     return 'global';
@@ -2002,11 +2042,9 @@ const displaySelection = computed<DisplaySelection>({
     if (selection === 'virtual') {
       form.value.virtualScreen = true;
       if (form.value.virtualDisplayMode === 'disabled') {
-        form.value.virtualDisplayMode =
-          lastVirtualDisplayMode.value ?? globalVirtualDisplayMode.value ?? null;
+        form.value.virtualDisplayMode = lastVirtualDisplayMode.value ?? 'per_client';
       }
       form.value.output = '';
-      form.value.ddConfigurationOption = null;
     } else if (selection === 'physical') {
       if (form.value.virtualDisplayMode && form.value.virtualDisplayMode !== 'disabled') {
         lastVirtualDisplayMode.value = form.value.virtualDisplayMode;

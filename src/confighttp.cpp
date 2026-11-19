@@ -22,6 +22,7 @@
 #include <set>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <variant>
 
@@ -42,12 +43,17 @@
 #endif
 // local includes
 #include "config.h"
+#include "config_http_log_policy.h"
+#include "config_http_login_limiter.h"
+#include "host_stream_control.h"
+#include "update.h"
 #include "confighttp.h"
 #include "crypto.h"
 #include "file_handler.h"
 #include "globals.h"
 #include "http_auth.h"
 #include "httpcommon.h"
+#include "https_listener_diagnostics.h"
 #include "platform/common.h"
 #ifdef _WIN32
   #include "src/platform/windows/image_convert.h"
@@ -59,6 +65,7 @@
 #include "nvhttp.h"
 #include "remote_display_topology.h"
 #include "remote_session.h"
+#include "remote_monitor_profile_policy.h"
 #include "platform/common.h"
 #include "rtsp.h"
 #include "session_history.h"
@@ -144,13 +151,14 @@ namespace confighttp {
     } catch (...) {}
   }
 
-  std::optional<size_t> find_app_index_by_uuid(const nlohmann::json &apps_node, const std::string &uuid) {
+  std::optional<size_t> find_app_index_by_uuid(const nlohmann::json &apps_node, const std::string &uuid, bool include_marked_profiles = true) {
     if (uuid.empty() || !apps_node.is_array()) {
       return std::nullopt;
     }
     for (size_t i = 0; i < apps_node.size(); ++i) {
       const auto &app = apps_node[i];
-      if (app.is_object() && app.contains("uuid") && app["uuid"].is_string() && app["uuid"].get<std::string>() == uuid) {
+      if (app.is_object() && (include_marked_profiles || !remote_session::marked_monitor_profile(app)) &&
+          app.contains("uuid") && app["uuid"].is_string() && app["uuid"].get<std::string>() == uuid) {
         return i;
       }
     }
@@ -172,6 +180,9 @@ namespace confighttp {
     bool changed = false;
     for (const auto control : {remote_session::control_e::input, remote_session::control_e::monitor}) {
       const auto synthetic = remote_session::synthetic(control);
+      const auto key = control == remote_session::control_e::input ? "input" : "monitor";
+      if (file_tree.contains("removed-system-apps") && file_tree["removed-system-apps"].is_object() &&
+          file_tree["removed-system-apps"].contains(key)) continue;
       const auto artwork = remote_session::synthetic_artwork_filename(control);
       if (!artwork) {
         continue;
@@ -179,7 +190,7 @@ namespace confighttp {
 
       const auto default_image = std::string {"remote-session/"} + std::string {*artwork};
       const auto configured_name = control == remote_session::control_e::input ? "Remote Input" : "Remote Monitor";
-      const auto index = find_app_index_by_uuid(file_tree["apps"], synthetic.uuid);
+      const auto index = find_app_index_by_uuid(file_tree["apps"], synthetic.uuid, false);
       if (!index) {
         file_tree["apps"].push_back({
           {"name", configured_name},
@@ -229,6 +240,19 @@ namespace confighttp {
 
   bool refresh_client_apps_cache(nlohmann::json &file_tree) {
     std::lock_guard lock {apps_file_mutex()};
+    // Validate the exact normalized output against the original file order.
+    // Provider sync must not newly invalidate a retained Monitor profile.
+    if (file_tree.contains("apps") && file_tree["apps"].is_array() &&
+        std::any_of(file_tree["apps"].begin(), file_tree["apps"].end(), remote_session::marked_monitor_profile)) {
+      auto published = file_tree;
+      sort_apps_by_name(published);
+      const auto previous_file = file_handler::read_file(config::stream.file_apps.c_str());
+      const auto previous = nlohmann::json::parse(previous_file);
+      if (const auto error = proc::monitor_profile_changes_error(previous, published, previous_file); !error.empty()) {
+        BOOST_LOG(warning) << "refresh_client_apps_cache: " << error;
+        throw std::invalid_argument(std::string {error});
+      }
+    }
     try {
       sort_apps_by_name(file_tree);
       file_handler::write_file(config::stream.file_apps.c_str(), file_tree.dump(4));
@@ -243,6 +267,78 @@ namespace confighttp {
   }
   namespace fs = std::filesystem;
   using enum confighttp::StatusCode;
+
+  static std::optional<proc::ctx_t> resolve_cover_app_for_uuid(const std::string &uuid) {
+    if (uuid.empty()) return std::nullopt;
+    try {
+      return proc::proc.resolve_app("", uuid);
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "resolve_cover_app_for_uuid: failed for uuid '" << uuid << "': " << e.what();
+    } catch (...) {
+      BOOST_LOG(warning) << "resolve_cover_app_for_uuid: failed for uuid '" << uuid << "': unknown error";
+    }
+    return std::nullopt;
+  }
+
+  static void attach_configured_cover_versions(nlohmann::json &apps) {
+    const auto snapshot = proc::proc.get_apps();
+    std::unordered_map<std::string, const proc::ctx_t *> by_uuid;
+    for (const auto &app : snapshot) by_uuid.emplace(app.uuid, &app);
+    for (auto &app : apps) {
+      if (!app.is_object()) continue;
+      app.erase("image-version");
+      if (!app.contains("uuid") || !app["uuid"].is_string()) continue;
+      const auto found = by_uuid.find(app["uuid"].get<std::string>());
+      if (found != by_uuid.end()) {
+        try {
+          app["image-version"] = proc::configured_app_image_version(*found->second);
+        } catch (const std::exception &) {
+          // Artwork metadata is best-effort; preserve the rest of the app list.
+        }
+      }
+    }
+  }
+
+  struct configured_cover_reply_t {
+    SimpleWeb::StatusCode code;
+    std::string body;
+    SimpleWeb::CaseInsensitiveMultimap headers;
+  };
+
+  // Authentication and UUID syntax checks stay at the route boundary. This
+  // operation owns the response/cache decision for one copied runtime app.
+  static configured_cover_reply_t configured_cover_reply(const std::string &uuid, const std::string &expected_version) {
+    configured_cover_reply_t reply {SimpleWeb::StatusCode::client_error_not_found, {}, {
+      {"Cache-Control", "private, no-store"},
+      {"X-Frame-Options", "DENY"},
+      {"Content-Security-Policy", "frame-ancestors 'none';"}}};
+    const auto fail = [&](SimpleWeb::StatusCode code, const std::string &message) {
+      reply.code = code;
+      reply.headers.emplace("Content-Type", "application/json");
+      reply.body = nlohmann::json {{"status_code", code}, {"error", message}}.dump();
+      return reply;
+    };
+    try {
+      const auto app = resolve_cover_app_for_uuid(uuid);
+      if (!app) return fail(SimpleWeb::StatusCode::client_error_not_found, "Configured cover unavailable. Moonlight may use its default image.");
+      const auto version = proc::configured_app_image_version(*app);
+      if (!expected_version.empty() && expected_version != version) {
+        return fail(SimpleWeb::StatusCode::client_error_conflict, "Cover changed. Refresh the application list and try again.");
+      }
+      const auto image = proc::read_configured_app_image(app->image_path);
+      if (!image) return fail(SimpleWeb::StatusCode::client_error_not_found, "Configured cover unavailable. Moonlight may use its default image. Use a readable PNG file no larger than 16 MiB.");
+      if (proc::configured_app_image_version(*app) != version) {
+        return fail(SimpleWeb::StatusCode::client_error_conflict, "Cover changed. Refresh the application list and try again.");
+      }
+      reply.code = SimpleWeb::StatusCode::success_ok;
+      reply.body = *image;
+      reply.headers.emplace("Content-Type", "image/png");
+      return reply;
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Configured cover read failed: " << e.what();
+      return fail(SimpleWeb::StatusCode::client_error_not_found, "Configured cover unavailable. Moonlight may use its default image.");
+    }
+  }
 
   using https_server_t = SimpleWeb::Server<SimpleWeb::HTTPS>;
 
@@ -298,7 +394,7 @@ namespace confighttp {
              key == "rtx_hdr_peak_brightness";
     }
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
     std::string encode_config_override_value(const nlohmann::json &value) {
       if (value.is_string()) {
         return value.get<std::string>();
@@ -369,7 +465,7 @@ namespace confighttp {
           continue;
         }
 
-        if (key.rfind("realtime_stats_", 0) == 0) {
+        if (key == "hardware_metrics" || key == "hardware_metrics_interval" || key.rfind("realtime_stats_", 0) == 0) {
           continue;
         }
 
@@ -469,13 +565,18 @@ namespace confighttp {
    * @param request The HTTP request object.
    */
   void print_req(const req_https_t &request) {
-    BOOST_LOG(debug) << "HTTP "sv << request->method << ' ' << request->path;
+    // Keep routine read polling available at Verbose. In particular, opening
+    // the logs page should not continually add Debug lines to the file it reads.
+    const bool polling = request->method == "GET" &&
+                         (request->path == "/api/logs" || request->path == "/api/configLocale");
+    auto &logger = polling ? verbose : debug;
+    BOOST_LOG(logger) << "HTTP "sv << request->method << ' ' << request->path;
 
     if (!request->header.empty()) {
       BOOST_LOG(verbose) << "Headers:"sv;
       for (auto &[name, val] : request->header) {
         BOOST_LOG(verbose) << name << " -- "
-                           << (name == "Authorization" ? "CREDENTIALS REDACTED" : val);
+                           << (policy::is_sensitive_http_field(name) ? "CREDENTIALS REDACTED" : val);
       }
     }
 
@@ -483,7 +584,8 @@ namespace confighttp {
     if (!query.empty()) {
       BOOST_LOG(verbose) << "Query Params:"sv;
       for (auto &[name, val] : query) {
-        BOOST_LOG(verbose) << name << " -- " << val;
+        BOOST_LOG(verbose) << name << " -- "
+                           << (policy::is_sensitive_http_field(name) ? "CREDENTIALS REDACTED" : val);
       }
     }
   }
@@ -885,6 +987,15 @@ namespace confighttp {
       } else {
         response->write(result.code);
       }
+      return false;
+    }
+    return true;
+  }
+
+  bool authorize_remote(resp_https_t response, const req_https_t &request) {
+    const auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    if (auto result = check_remote_access(address); !result.ok) {
+      response->write(result.code, result.body, result.headers);
       return false;
     }
     return true;
@@ -1477,6 +1588,7 @@ namespace confighttp {
       std::lock_guard apps_lock {apps_file_mutex()};
       std::string content = file_handler::read_file(config::stream.file_apps.c_str());
       nlohmann::json file_tree = nlohmann::json::parse(content);
+      const auto original_file_tree = file_tree;
 
 #ifdef _WIN32
       // No auto-insert here; controlled by config 'playnite_fullscreen_entry_enabled'.
@@ -1493,7 +1605,6 @@ namespace confighttp {
         "gen1-framegen-fix",
         "gen2-framegen-fix",
         "dlss-framegen-capture-fix",  // backward compatibility
-        "dualsense-haptics",
         "lossless-scaling-enabled",
         "lossless-scaling-framegen",
         "lossless-scaling-legacy-auto-detect"
@@ -1563,6 +1674,11 @@ namespace confighttp {
       };
       // Walk fileTree and convert true/false strings to boolean or integer values
       for (auto &app : file_tree["apps"]) {
+        // Keep invalid marked records exactly as loaded so GET can expose them
+        // for explicit repair without rewriting their identity or legacy fields.
+        if (!proc::configured_monitor_profile_error_from_file(app, original_file_tree, content).empty()) {
+          continue;
+        }
         for (const auto &key : boolean_keys) {
           if (app.contains(key) && app[key].is_string()) {
             app[key] = app[key] == "true";
@@ -1590,28 +1706,19 @@ namespace confighttp {
           }
         }
         // Ensure each app has a UUID (auto-insert if missing/empty)
-        if (!app.contains("uuid") || app["uuid"].is_null() || (app["uuid"].is_string() && app["uuid"].get<std::string>().empty())) {
+        if (!remote_session::marked_monitor_profile(app) &&
+            (!app.contains("uuid") || app["uuid"].is_null() || (app["uuid"].is_string() && app["uuid"].get<std::string>().empty()))) {
           app["uuid"] = uuid_util::uuid_t::generate().string();
           mutated = true;
         }
       }
 
-      // Add computed app ids for UI clients (best-effort, do not persist).
-      if (file_tree.contains("apps") && file_tree["apps"].is_array()) {
-        try {
-          const auto apps_snapshot = proc::proc.get_apps();
-          const auto count = std::min(file_tree["apps"].size(), apps_snapshot.size());
-          for (size_t idx = 0; idx < count; ++idx) {
-            auto &app = file_tree["apps"][idx];
-            app["id"] = apps_snapshot[idx].id;
-            app["index"] = static_cast<int>(idx);
-          }
-        } catch (...) {
-        }
-      }
-
       // If any normalization occurred, persist back to disk
       if (mutated) {
+        if (const auto error = proc::monitor_profile_changes_error(original_file_tree, file_tree, content); !error.empty()) {
+          bad_request(response, request, std::string {error});
+          return;
+        }
         try {
           file_handler::write_file(config::stream.file_apps.c_str(), file_tree.dump(4));
           proc::refresh(config::stream.file_apps);
@@ -1620,10 +1727,31 @@ namespace confighttp {
         }
       }
 
+      // Add computed app ids for UI clients (best-effort, do not persist).
+      if (file_tree.contains("apps") && file_tree["apps"].is_array()) {
+        try {
+          const auto apps_snapshot = proc::proc.get_apps();
+          for (size_t idx = 0; idx < file_tree["apps"].size(); ++idx) {
+            auto &app = file_tree["apps"][idx];
+            app["index"] = static_cast<int>(idx);
+            app.erase("id");
+            if (!proc::configured_monitor_profile_error_from_file(app, original_file_tree, content).empty()) continue;
+            const auto runtime = std::find_if(apps_snapshot.begin(), apps_snapshot.end(), [&](const auto &configured) {
+              return configured.configured_index == idx &&
+                     (!remote_session::marked_monitor_profile(app) ||
+                      (configured.remote_monitor_profile && configured.uuid == app.value("uuid", std::string {})));
+            });
+            if (runtime != apps_snapshot.end()) app["id"] = runtime->id;
+          }
+        } catch (...) {
+        }
+      }
+
       // Attach cache-busting stamps for artwork so the UI re-fetches when an icon/cover is
       // regenerated (the icon/cover URLs are otherwise stable and get cached by the browser).
       // Added after persistence so these transient fields never get written to apps.json.
       if (file_tree.contains("apps") && file_tree["apps"].is_array()) {
+        attach_configured_cover_versions(file_tree["apps"]);
         auto art_stamp = [](const std::string &path) -> long long {
           std::error_code ec;
           auto t = fs::last_write_time(fs::path(path), ec);
@@ -1640,12 +1768,6 @@ namespace confighttp {
                 app["playnite-icon-version"] = v;
               }
             }
-            if (app.contains("image-path") && app["image-path"].is_string()) {
-              const auto v = art_stamp(app["image-path"].get<std::string>());
-              if (v) {
-                app["image-version"] = v;
-              }
-            }
             const auto control = configurable_remote_session(app.value("uuid", ""));
             if (control != remote_session::control_e::none) {
               app["remote-session"] = control == remote_session::control_e::input ? "input" : "monitor";
@@ -1655,7 +1777,19 @@ namespace confighttp {
         }
       }
 
-      send_response(response, file_tree);
+      nlohmann::json restorable = nlohmann::json::array();
+      const auto &apps = file_tree["apps"];
+      for (const auto &[key, name] : std::array<std::pair<const char *, const char *>, 3> {{{"desktop", "Desktop"}, {"monitor", "Remote Monitor"}, {"input", "Remote Input"}}}) {
+        bool present = std::any_of(apps.begin(), apps.end(), [&](const auto &app) {
+          if (!app.is_object()) return false;
+          if (std::string_view {key} == "desktop") return app.value("name", std::string {}) == "Desktop";
+          const auto control = std::string_view {key} == "input" ? remote_session::control_e::input : remote_session::control_e::monitor;
+          return app.value("uuid", std::string {}) == remote_session::synthetic_uuid(control);
+        });
+        if (!present) restorable.push_back({{"id", key}, {"name", name}});
+      }
+      file_tree["restorable-system-apps"] = std::move(restorable);
+      send_response(response, file_tree, "no-store");
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "GetApps: "sv << e.what();
       bad_request(response, request, e.what());
@@ -1663,8 +1797,7 @@ namespace confighttp {
   }
 
   /**
-   * @brief Serve a specific application's cover image by UUID.
-   *        Looks for files named @c uuid with a supported image extension in the covers directory.
+   * @brief Preview the configured artwork that Moonlight can receive.
    * @api_examples{/api/apps/@c uuid/cover| GET| null}
    */
   void getAppCover(resp_https_t response, req_https_t request) {
@@ -1672,146 +1805,19 @@ namespace confighttp {
       return;
     }
 
-    std::string uuid;
-    if (request->path_match.size() > 1) {
-      uuid = request->path_match[1];
-    }
+    const std::string uuid = request->path_match.size() > 1 ? request->path_match[1].str() : "";
     if (uuid.empty()) {
       bad_request(response, request, "Missing application uuid");
       return;
     }
 
-    const fs::path cover_dir = platf::appdata() / "covers";
-    const std::vector<std::string> extensions = {".png", ".jpg", ".jpeg"};
-    fs::path cover_path;
-    for (const auto &ext : extensions) {
-      fs::path candidate = cover_dir / (uuid + ext);
-      if (fs::exists(candidate)) {
-        cover_path = std::move(candidate);
-        break;
-      }
+    const auto query = request->parse_query_string();
+    const auto version = query.find("v");
+    auto reply = configured_cover_reply(uuid, version == query.end() ? "" : version->second);
+    if (reply.code != SimpleWeb::StatusCode::success_ok) {
+      reply.headers.emplace("Access-Control-Allow-Origin", get_cors_origin());
     }
-
-    if (cover_path.empty()) {
-      // Fallback to image-path from apps config if present
-      try {
-        std::string content = file_handler::read_file(config::stream.file_apps.c_str());
-        nlohmann::json file_tree = nlohmann::json::parse(content);
-        if (file_tree.contains("apps") && file_tree["apps"].is_array()) {
-          for (const auto &app : file_tree["apps"]) {
-            if (!app.contains("uuid") || !app["uuid"].is_string()) {
-              continue;
-            }
-            if (app["uuid"].get<std::string>() != uuid) {
-              continue;
-            }
-            if (app.contains("image-path") && app["image-path"].is_string()) {
-              std::string raw_path = app["image-path"].get<std::string>();
-              boost::algorithm::trim(raw_path);
-              if (!raw_path.empty() && raw_path.front() == '"' && raw_path.back() == '"') {
-                raw_path = raw_path.substr(1, raw_path.size() - 2);
-              }
-              constexpr std::string_view file_prefix = "file://";
-              if (raw_path.rfind(file_prefix, 0) == 0) {
-                raw_path.erase(0, file_prefix.size());
-                if (!raw_path.empty() && raw_path.front() == '/') {
-                  raw_path.erase(0, 1);
-                }
-              }
-#ifdef _WIN32
-              const char *appdata = std::getenv("APPDATA");
-              if (appdata) {
-                const std::string key = "%APPDATA%";
-                auto pos = raw_path.find(key);
-                if (pos != std::string::npos) {
-                  raw_path.replace(pos, key.size(), appdata);
-                }
-              }
-              const char *userprofile = std::getenv("USERPROFILE");
-              if (userprofile) {
-                const std::string key = "%USERPROFILE%";
-                auto pos = raw_path.find(key);
-                if (pos != std::string::npos) {
-                  raw_path.replace(pos, key.size(), userprofile);
-                }
-              }
-#endif
-              fs::path candidate = raw_path;
-              if (candidate.is_relative()) {
-                bool resolved = false;
-                if (app.contains("working-dir") && app["working-dir"].is_string()) {
-                  fs::path working_dir = app["working-dir"].get<std::string>();
-                  fs::path from_working = working_dir / candidate;
-                  if (fs::exists(from_working)) {
-                    candidate = std::move(from_working);
-                    resolved = true;
-                  }
-                }
-                if (!resolved) {
-                  fs::path rel_candidate = candidate;
-                  auto rel_string = rel_candidate.generic_string();
-                  if (rel_string.rfind("./assets/", 0) == 0) {
-                    rel_string.erase(0, std::string("./assets/").size());
-                  } else if (rel_string.rfind("assets/", 0) == 0) {
-                    rel_string.erase(0, std::string("assets/").size());
-                  }
-                  fs::path from_assets = fs::path(SUNSHINE_ASSETS_DIR) / rel_string;
-                  if (fs::exists(from_assets)) {
-                    candidate = std::move(from_assets);
-                    resolved = true;
-                  }
-                }
-                if (!resolved) {
-                  candidate = cover_dir / candidate;
-                }
-              }
-              if (!candidate.has_extension()) {
-                auto with_png = candidate;
-                with_png += ".png";
-                if (fs::exists(with_png)) {
-                  cover_path = std::move(with_png);
-                  break;
-                }
-              }
-              if (fs::exists(candidate)) {
-                cover_path = std::move(candidate);
-                break;
-              }
-            }
-            break;
-          }
-        }
-      } catch (...) {
-      }
-    }
-
-    if (cover_path.empty()) {
-      not_found(response, request);
-      return;
-    }
-
-    auto ext = cover_path.extension().string();
-    if (!ext.empty() && ext.front() == '.') {
-      ext.erase(0, 1);
-    }
-    boost::algorithm::to_lower(ext);
-
-    auto mimeType = mime_types.find(ext);
-    if (mimeType == mime_types.end()) {
-      bad_request(response, request);
-      return;
-    }
-
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", mimeType->second);
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    std::ifstream in(cover_path.string(), std::ios::binary);
-    if (!in) {
-      not_found(response, request);
-      return;
-    }
-    response->write(success_ok, in, headers);
+    response->write(reply.code, reply.body, reply.headers);
   }
 
   /**
@@ -1932,6 +1938,13 @@ namespace confighttp {
       BOOST_LOG(info) << file;
       nlohmann::json file_tree = nlohmann::json::parse(file);
 
+      const auto original_file_tree = file_tree;
+
+      if (const auto error = proc::configured_monitor_profile_error(input_tree, file_tree); !error.empty()) {
+        bad_request(response, request, std::string {error});
+        return;
+      }
+
       if (input_tree["prep-cmd"].empty()) {
         input_tree.erase("prep-cmd");
       }
@@ -1954,7 +1967,9 @@ namespace confighttp {
       enhance_app_with_playnite_cover(input_tree);
       enhance_app_with_playnite_icon(input_tree);
       try {
-        if (input_tree.contains("playnite-id") && input_tree["playnite-id"].is_string()) {
+        // A marked profile owns its literal identity even with Playnite metadata.
+        if (!remote_session::marked_monitor_profile(input_tree) &&
+            input_tree.contains("playnite-id") && input_tree["playnite-id"].is_string()) {
           const auto playnite_id = input_tree["playnite-id"].get<std::string>();
           if (!playnite_id.empty()) {
             input_tree["uuid"] = platf::playnite::sync::policy::canonical_playnite_app_uuid(playnite_id);
@@ -1995,7 +2010,7 @@ namespace confighttp {
       input_tree.erase("index");
       const auto input_uuid = input_tree.value("uuid", ""s);
 
-      if (auto uuid_index = find_app_index_by_uuid(apps_node, input_uuid)) {
+      if (auto uuid_index = find_app_index_by_uuid(apps_node, input_uuid, remote_control == remote_session::control_e::none)) {
         index = static_cast<int>(*uuid_index);
       }
 
@@ -2024,9 +2039,19 @@ namespace confighttp {
         file_tree["apps"] = newApps;
       }
 
+      if (const auto error = proc::configured_monitor_profile_error(input_tree, file_tree); !error.empty()) {
+        bad_request(response, request, std::string {error});
+        return;
+      }
+
+      if (const auto error = proc::monitor_profile_changes_error(original_file_tree, file_tree, file); !error.empty()) {
+        bad_request(response, request, std::string {error});
+        return;
+      }
+
       // Update apps file and refresh client cache
       confighttp::refresh_client_apps_cache(file_tree);
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
       const auto edited_uuid = input_tree.value("uuid", ""s);
       if (!edited_uuid.empty()) {
         (void) proc::proc.update_active_app_live_rtx_hdr_overrides(edited_uuid);
@@ -2041,7 +2066,7 @@ namespace confighttp {
     }
   }
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
   void updateAppRtxHdrLive(resp_https_t response, req_https_t request) {
     if (!check_content_type(response, request, "application/json")) {
       return;
@@ -2134,13 +2159,16 @@ namespace confighttp {
 
   /**
    * @brief Delete an application.
+   * @details Optional JSON boolean provider-maintenance selects ordinary current
+   * rows with the literal UUID, retains every marked Monitor profile, and returns
+   * the actual removed count. Empty or false requests keep deliberate deletion.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    *
    * @api_examples{/api/apps/@c uuid| DELETE| null}
    */
   void deleteApp(resp_https_t response, req_https_t request) {
-    // Skip check_content_type() for this endpoint since the request body is not used.
+    // Empty-body requests retain deliberate per-row deletion semantics.
 
     if (!authenticate(response, request)) {
       return;
@@ -2149,22 +2177,46 @@ namespace confighttp {
     print_req(request);
 
     try {
+      std::stringstream body_stream;
+      body_stream << request->content.rdbuf();
+      const auto raw_body = body_stream.str();
+      bool provider_maintenance = false;
+      if (!raw_body.empty()) {
+        if (!check_content_type(response, request, "application/json")) return;
+        const auto input_tree = nlohmann::json::parse(raw_body);
+        if (input_tree.contains("provider-maintenance")) {
+          if (!input_tree["provider-maintenance"].is_boolean()) {
+            bad_request(response, request, "provider-maintenance must be a boolean");
+            return;
+          }
+          provider_maintenance = input_tree["provider-maintenance"].get<bool>();
+        }
+      }
       std::lock_guard apps_lock {apps_file_mutex()};
       nlohmann::json output_tree;
       nlohmann::json new_apps = nlohmann::json::array();
       std::string file = file_handler::read_file(config::stream.file_apps.c_str());
       nlohmann::json file_tree = nlohmann::json::parse(file);
+      const auto original_file_tree = file_tree;
       auto &apps_node = file_tree["apps"];
       const std::string target = request->path_match[1];
-      const auto index = resolve_app_index_token(apps_node, target);
-      if (!index) {
+      const auto index = provider_maintenance ? std::optional<size_t> {} : resolve_app_index_token(apps_node, target);
+      if (!provider_maintenance && !index) {
         bad_request(response, request, std::format("Application '{}' not found", target));
         return;
       }
 
-      if (configurable_remote_session(apps_node[*index].value("uuid", "")) != remote_session::control_e::none) {
-        bad_request(response, request, "Remote session applications cannot be deleted");
-        return;
+      if (!provider_maintenance) {
+        const auto &app = apps_node[*index];
+        const auto control = configurable_remote_session(app.value("uuid", std::string {}));
+        const char *key = control == remote_session::control_e::input ? "input" :
+                          control == remote_session::control_e::monitor ? "monitor" :
+                          app.value("name", std::string {}) == "Desktop" ? "desktop" : nullptr;
+        if (key) {
+          if (!file_tree.contains("removed-system-apps") || !file_tree["removed-system-apps"].is_object())
+            file_tree["removed-system-apps"] = nlohmann::json::object();
+          file_tree["removed-system-apps"][key] = app;
+        }
       }
 
 #ifdef _WIN32
@@ -2188,43 +2240,107 @@ namespace confighttp {
       };
 #endif
 
+      if (provider_maintenance && !apps_node.is_array()) {
+        bad_request(response, request, "Apps configuration missing or invalid");
+        return;
+      }
+      std::size_t removed_count = 0;
       bool disabled_fullscreen_flag = false;
+#ifdef _WIN32
+      bool disable_fullscreen = false;
+#endif
       for (size_t i = 0; i < apps_node.size(); ++i) {
-        if (i != *index) {
+        const bool match = provider_maintenance ?
+          (apps_node[i].is_object() && !remote_session::marked_monitor_profile(apps_node[i]) &&
+           apps_node[i].contains("uuid") && apps_node[i]["uuid"].is_string() &&
+           apps_node[i]["uuid"].get<std::string>() == target &&
+           configurable_remote_session(target) == remote_session::control_e::none) : i == *index;
+        if (!match) {
           new_apps.push_back(apps_node[i]);
         } else {
+          ++removed_count;
           // If user deletes the Playnite fullscreen app, turn off the config flag
 #ifdef _WIN32
           try {
             if (is_playnite_fullscreen(apps_node[i])) {
-              auto current_cfg = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
-              current_cfg["playnite_fullscreen_entry_enabled"] = "false";
-              std::stringstream config_stream;
-              for (const auto &kv : current_cfg) {
-                config_stream << kv.first << " = " << kv.second << std::endl;
-              }
-              file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
-              config::apply_config_now();
-              disabled_fullscreen_flag = true;
+              disable_fullscreen = true;
             }
           } catch (...) {
           }
 #endif
         }
       }
+      if (provider_maintenance && removed_count == 0) {
+        send_response(response, nlohmann::json {{"status", true}, {"removed", 0}});
+        return;
+      }
       file_tree["apps"] = new_apps;
+      if (const auto error = proc::monitor_profile_changes_error(original_file_tree, file_tree, file); !error.empty()) {
+        bad_request(response, request, std::string {error});
+        return;
+      }
+#ifdef _WIN32
+      if (disable_fullscreen) {
+        try {
+          auto current_cfg = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
+          current_cfg["playnite_fullscreen_entry_enabled"] = "false";
+          std::stringstream config_stream;
+          for (const auto &kv : current_cfg) {
+            config_stream << kv.first << " = " << kv.second << std::endl;
+          }
+          file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
+          config::apply_config_now();
+          disabled_fullscreen_flag = true;
+        } catch (...) {}
+      }
+#endif
 
       file_handler::write_file(config::stream.file_apps.c_str(), file_tree.dump(4));
       proc::refresh(config::stream.file_apps);
 
       output_tree["status"] = true;
-      output_tree["result"] = std::format("application {} deleted", *index);
+      if (provider_maintenance) output_tree["removed"] = removed_count;
+      else output_tree["result"] = std::format("application {} deleted", *index);
       if (disabled_fullscreen_flag) {
         output_tree["playniteFullscreenDisabled"] = true;
       }
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "DeleteApp: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  void restoreSystemApp(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) return;
+    try {
+      std::lock_guard lock {apps_file_mutex()};
+      const auto key = request->path_match[1].str();
+      auto file_tree = nlohmann::json::parse(file_handler::read_file(config::stream.file_apps.c_str()));
+      auto &apps = file_tree["apps"];
+      if (!apps.is_array()) throw std::invalid_argument("Apps configuration missing or invalid");
+      const auto control = key == "input" ? remote_session::control_e::input : remote_session::control_e::monitor;
+      const auto uuid = key == "desktop" ? std::string {} : remote_session::synthetic_uuid(control);
+      for (const auto &app : apps) {
+        if (app.is_object() && (key == "desktop" ? app.value("name", std::string {}) == "Desktop" : app.value("uuid", std::string {}) == uuid)) {
+          bad_request(response, request, "System application already exists");
+          return;
+        }
+      }
+      nlohmann::json restored;
+      if (file_tree.contains("removed-system-apps") && file_tree["removed-system-apps"].is_object() && file_tree["removed-system-apps"].contains(key)) {
+        restored = file_tree["removed-system-apps"][key];
+        file_tree["removed-system-apps"].erase(key);
+      } else if (key == "desktop") {
+        restored = {{"name", "Desktop"}, {"image-path", "desktop.png"}, {"uuid", uuid_util::uuid_t::generate().string()}};
+      } else {
+        restored = {{"name", key == "input" ? "Remote Input" : "Remote Monitor"}, {"uuid", uuid},
+                    {"image-path", std::string {"remote-session/"} + std::string {*remote_session::synthetic_artwork_filename(control)}}};
+      }
+      apps.push_back(std::move(restored));
+      if (!refresh_client_apps_cache(file_tree)) throw std::runtime_error("Could not restore system application");
+      send_response(response, nlohmann::json {{"status", true}});
+    } catch (const std::exception &e) {
       bad_request(response, request, e.what());
     }
   }
@@ -2256,6 +2372,12 @@ namespace confighttp {
 
   void refresh_remote_display_physical_baseline() {
     try {
+#ifdef _WIN32
+      // An inventory read must not replace a live stream's captured baseline.
+      if (remote_display_topology::instance().managed_client_identity_count() != 0) {
+        return;
+      }
+#endif
       const auto devices = nlohmann::json::parse(display_helper_integration::enumerate_devices_json(display_device::DeviceEnumerationDetail::Full));
       if (!devices.is_array()) return;
       std::vector<remote_display_topology::node_t> nodes;
@@ -2273,11 +2395,33 @@ namespace confighttp {
         node.label = label;
         node.physical = true;
         const auto info = device.value("info", nlohmann::json::object());
+#ifdef _WIN32
+        if (!info.is_object() || !info.value("active", true)) {
+          continue;
+        }
+#endif
         node.active = info.value("active", true);
         node.primary = info.value("primary", false);
+#ifdef _WIN32
+        // The coordinator may later apply this baseline. A missing origin
+        // must never silently become (0,0) for a second physical monitor.
+        if (!info.contains("origin_point") || !info["origin_point"].is_object() || !info["origin_point"].contains("x") || !info["origin_point"].contains("y") || !info["origin_point"]["x"].is_number_integer() || !info["origin_point"]["y"].is_number_integer()) {
+          continue;
+        }
+        node.device_id = id;
+        node.preexisting = true;
+        node.x = info["origin_point"]["x"].get<int>();
+        node.y = info["origin_point"]["y"].get<int>();
+        if (info.contains("resolution") && info["resolution"].is_object()) {
+          node.configured_mode.width = info["resolution"].value("width", node.configured_mode.width);
+          node.configured_mode.height = info["resolution"].value("height", node.configured_mode.height);
+        }
+#endif
         nodes.push_back(std::move(node));
       }
-      remote_display_topology::instance().set_physical_baseline(std::move(nodes));
+      // Recheck ownership under the coordinator lock: a stream may have started
+      // while the Devices page was enumerating displays.
+      remote_display_topology::instance().refresh_idle_physical_baseline(std::move(nodes));
     } catch (const std::exception &e) {
       BOOST_LOG(warning) << "Remote display layout could not refresh physical monitor baseline: " << e.what();
     }
@@ -2459,11 +2603,12 @@ namespace confighttp {
         input_tree.contains("display_mode") ||
         input_tree.contains("output_name_override") ||
         input_tree.contains("always_use_virtual_display") ||
+        input_tree.contains("requested_resolution_only") ||
         input_tree.contains("virtual_display_mode") ||
         input_tree.contains("virtual_display_layout") ||
         input_tree.contains("config_overrides") ||
         input_tree.contains("prefer_10bit_sdr");
-      const bool has_extended_fields = has_device_fields || input_tree.contains("enabled");
+      const bool has_extended_fields = has_device_fields || input_tree.contains("enabled") || input_tree.contains("allow_sleep");
 
       if (!has_extended_fields) {
         output_tree["status"] = nvhttp::set_client_hdr_profile(uuid, hdr_profile.value_or(""));
@@ -2471,10 +2616,28 @@ namespace confighttp {
         return;
       }
 
+      if (input_tree.contains("allow_sleep") && !input_tree["allow_sleep"].is_boolean()) {
+        bad_request(response, request, "allow_sleep must be a boolean");
+        return;
+      }
+      // Apply a requested disable before introducing a separate sleep grant.
       if (input_tree.contains("enabled")) {
         output_tree["enabled_updated"] = nvhttp::set_client_enabled(uuid, input_tree.value("enabled", true));
-        if (!has_device_fields && !hdr_profile.has_value()) {
+        if (!has_device_fields && !hdr_profile.has_value() && !input_tree.contains("allow_sleep")) {
           output_tree["status"] = output_tree["enabled_updated"];
+          send_response(response, output_tree);
+          return;
+        }
+      }
+      if (input_tree.contains("allow_sleep")) {
+        output_tree["allow_sleep_updated"] = nvhttp::set_client_sleep_allowed(uuid, input_tree["allow_sleep"].get<bool>());
+        if (!output_tree["allow_sleep_updated"].get<bool>()) {
+          output_tree["status"] = false;
+          send_response(response, output_tree);
+          return;
+        }
+        if (!has_device_fields && !hdr_profile.has_value()) {
+          output_tree["status"] = !output_tree.contains("enabled_updated") || output_tree["enabled_updated"].get<bool>();
           send_response(response, output_tree);
           return;
         }
@@ -2529,7 +2692,9 @@ namespace confighttp {
         virtual_display_layout,
         std::move(config_overrides),
         prefer_10bit_sdr,
-        hdr_profile
+        hdr_profile,
+        input_tree.contains("requested_resolution_only") ?
+          std::optional<bool> {input_tree.at("requested_resolution_only").get<bool>()} : std::nullopt
       );
       send_response(response, output_tree);
     } catch (std::exception &e) {
@@ -2663,6 +2828,18 @@ namespace confighttp {
    *
    * @api_examples{/api/meta| GET| null}
    */
+  void getNightlyUpdateMetadata(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) return;
+    const auto query = request->parse_query_string();
+    const auto tag = query.find("tag");
+    std::string metadata;
+    if (tag == query.end() || !update::download_nightly_metadata(tag->second, metadata)) {
+      bad_request(response, request, "Nightly metadata unavailable");
+      return;
+    }
+    send_response(response, nlohmann::json::parse(metadata));
+  }
+
   void getMetadata(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
       return;
@@ -2673,6 +2850,13 @@ namespace confighttp {
     nlohmann::json output_tree;
     output_tree["status"] = true;
     output_tree["platform"] = SUNSHINE_PLATFORM;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    output_tree["architecture"] = "aarch64";
+#elif defined(__x86_64__) || defined(_M_X64)
+    output_tree["architecture"] = "x86_64";
+#else
+    output_tree["architecture"] = "unknown";
+#endif
     output_tree["version"] = PROJECT_VERSION;
     output_tree["commit"] = PROJECT_VERSION_COMMIT;
 #ifdef PROJECT_VERSION_PRERELEASE
@@ -2698,8 +2882,33 @@ namespace confighttp {
     };
 #if defined(__linux__)
     const char *session_role = std::getenv("VIBESHINE_SESSION_ROLE");
+    // Read PCI identity without probing encoders or touching the active
+    // compositor. Both interfaces use these flags for hardware visibility.
+    bool has_nvidia = false, has_amd = false, has_intel = false;
+    std::error_code gpu_error;
+    for (const auto &entry : std::filesystem::directory_iterator("/sys/class/drm", gpu_error)) {
+      if (entry.path().filename().string().rfind("renderD", 0) != 0) continue;
+      std::ifstream vendor_file(entry.path() / "device/vendor");
+      unsigned vendor = 0;
+      if (!(vendor_file >> std::hex >> vendor)) continue;
+      has_nvidia |= vendor == 0x10de;
+      has_amd |= vendor == 0x1002 || vendor == 0x1022;
+      has_intel |= vendor == 0x8086;
+    }
+    output_tree["has_nvidia_gpu"] = has_nvidia;
+    output_tree["has_amd_gpu"] = has_amd;
+    output_tree["has_intel_gpu"] = has_intel;
+#ifdef SUNSHINE_ENABLE_NV_TRUEHDR
+    output_tree["rtx_hdr_supported"] = has_nvidia;
+#else
+    output_tree["rtx_hdr_supported"] = false;
+#endif
     const std::string role = session_role ? session_role : "unknown";
     output_tree["linux"] = {{"session_role", role == "desktop" || role == "greeter" ? role : "unknown"}};
+    const char *machine_host = std::getenv("VIBESHINE_MACHINE_HOST");
+    // The machine service forces the tray off outside the desktop session.
+    // Keep its launch policy separate from the saved user preference.
+    output_tree["linux"]["machine_host"] = machine_host && machine_host[0] == '1' && machine_host[1] == '\0';
     const bool managed_active = platf::linux_capture_status::managed_event_capture_active();
     output_tree["capture_status"] = {
       {"configured_backend", config::video.capture},
@@ -4120,7 +4329,7 @@ namespace confighttp {
   }
 
   /**
-   * @brief Purge all auto-synced Playnite applications (playnite-managed == "auto").
+   * @brief Purge ordinary auto-synced Playnite applications; explicit Monitor profiles are retained.
    * @api_examples{/api/apps/purge_autosync| POST| null}
    */
   void purgeAutoSyncedApps(resp_https_t response, req_https_t request) {
@@ -4141,7 +4350,7 @@ namespace confighttp {
       int removed = 0;
       for (auto &app : apps_node) {
         std::string managed = app.contains("playnite-managed") && app["playnite-managed"].is_string() ? app["playnite-managed"].get<std::string>() : std::string();
-        if (managed == "auto") {
+        if (managed == "auto" && !remote_session::marked_monitor_profile(app)) {
           ++removed;
           continue;
         }
@@ -4332,6 +4541,9 @@ namespace confighttp {
    */
   void savePassword(resp_https_t response, req_https_t request) {
     if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authorize_remote(response, request)) {
       return;
     }
     if (!config::sunshine.username.empty() && !authenticate(response, request)) {
@@ -5596,6 +5808,13 @@ namespace confighttp {
     auto address_family = net::af_from_enum_string(config::sunshine.address_family);
 
     https_server_t server(config::nvhttp.cert, config::nvhttp.pkey);
+    configure_https_listener_diagnostics(server, [](std::string_view message) {
+      BOOST_LOG(warning) << message;
+    });
+    // Bound unauthenticated header and body buffering before route dispatch.
+    // Configuration payloads may include base64 artwork, so keep a generous
+    // ceiling while preventing request-driven memory exhaustion.
+    server.config.max_request_streambuf_size = 16U * 1024U * 1024U;
     server.default_resource["DELETE"] = [](resp_https_t response, req_https_t request) {
       bad_request(response, request);
     };
@@ -5619,8 +5838,11 @@ namespace confighttp {
     thread_pool_util::ThreadPool metadata_route_pool;
     metadata_route_pool.start(1);
     clear_token_route_catalog();
-    auto register_api_route = [&](const char *pattern, const char *method, const auto &handler) {
-      server.resource[pattern][method] = [method, handler](resp_https_t response, req_https_t request) {
+    auto register_api_route = [&](const char *pattern, const char *method, const auto &handler, bool stream_start = false) {
+      server.resource[pattern][method] = [method, handler, stream_start](resp_https_t response, req_https_t request) {
+        // Preserve startup intake across every outer authentication/CSRF gate.
+        // Ordinary operations receive no admission fence.
+        const auto ticket = stream_start ? host_stream_control::request_ticket() : host_stream_control::ticket_t {};
         const std::string_view verb {method};
         if (verb == "POST" || verb == "PATCH" || verb == "PUT" || verb == "DELETE") {
           const auto client_id = get_client_id(request);
@@ -5628,19 +5850,27 @@ namespace confighttp {
             return;
           }
         }
-        handler(std::move(response), std::move(request));
+        if constexpr (std::is_invocable_v<decltype(handler), resp_https_t, req_https_t, host_stream_control::ticket_t>) {
+          handler(std::move(response), std::move(request), ticket);
+        } else {
+          handler(std::move(response), std::move(request));
+        }
       };
       record_token_route(normalize_route_pattern(pattern), method);
     };
-    auto register_blocking_api_route = [&](const char *pattern, const char *method, const auto &handler, thread_pool_util::ThreadPool *route_pool = nullptr) {
+    auto register_blocking_api_route = [&](const char *pattern, const char *method, const auto &handler, thread_pool_util::ThreadPool *route_pool = nullptr, bool stream_start = false) {
       auto *worker_pool = route_pool ? route_pool : &blocking_route_pool;
-      register_api_route(pattern, method, [worker_pool, handler](resp_https_t response, req_https_t request) {
+      register_api_route(pattern, method, [worker_pool, handler, stream_start](resp_https_t response, req_https_t request, host_stream_control::ticket_t ticket) {
         if (!authenticate(response, request)) {
           return;
         }
-        worker_pool->push([handler, response = std::move(response), request = std::move(request)]() mutable {
+        auto task = [handler, response, request = std::move(request), ticket]() mutable {
           try {
-            handler(response, request);
+            if constexpr (std::is_invocable_v<decltype(handler), resp_https_t, req_https_t, host_stream_control::ticket_t>) {
+              handler(response, request, ticket);
+            } else {
+              handler(response, request);
+            }
           } catch (const std::exception &e) {
             BOOST_LOG(error) << "Blocking config API handler failed: " << e.what();
             bad_request(response, request, "Internal server error");
@@ -5648,8 +5878,21 @@ namespace confighttp {
             BOOST_LOG(error) << "Blocking config API handler failed with an unknown exception";
             bad_request(response, request, "Internal server error");
           }
-        });
-      });
+        };
+#ifdef _WIN32
+        if (stream_start) {
+          host_stream_control::submit_start(ticket, [worker_pool](auto guarded) {
+            worker_pool->push(std::move(guarded));
+          }, std::move(task), [response] {
+            service_unavailable(response, "Stream request canceled by the host end-stream shortcut. Submit a new request.");
+          });
+          return;
+        }
+#else
+        (void) stream_start;
+#endif
+        worker_pool->push(std::move(task));
+      }, stream_start);
     };
 
     register_api_route("^/api/pin$", "POST", savePin);
@@ -5658,7 +5901,8 @@ namespace confighttp {
     register_api_route("^/api/browse$", "GET", browseDirectory);
     register_api_route("^/api/csrf-token$", "GET", getCSRFToken);
     register_api_route("^/api/apps$", "POST", saveApp);
-#ifdef _WIN32
+    register_api_route("^/api/apps/system/(desktop|monitor|input)/restore$", "POST", restoreSystemApp);
+#if defined(_WIN32) || defined(__linux__)
     register_api_route("^/api/apps/rtx_hdr/live$", "POST", updateAppRtxHdrLive);
 #endif
     register_api_route("^/api/config$", "GET", getConfig);
@@ -5672,6 +5916,7 @@ namespace confighttp {
     // Use a separate worker so a stalled lookup also leaves display recovery
     // and the other blocking management APIs available.
     register_blocking_api_route("^/api/metadata$", "GET", getMetadata, &metadata_route_pool);
+    register_blocking_api_route("^/api/updates/nightly-metadata$", "GET", getNightlyUpdateMetadata);
     register_api_route("^/api/configLocale$", "GET", getLocale);
     register_api_route("^/api/restart$", "POST", restart);
 #ifdef _WIN32
@@ -5720,7 +5965,7 @@ namespace confighttp {
     register_api_route("^/api/history/sessions/active$", "GET", getActiveSessionHistory);
     register_api_route("^/api/history/sessions/([A-Fa-f0-9-]+)$", "GET", getSessionHistoryDetail);
     register_api_route("^/api/history/sessions/([A-Fa-f0-9-]+)$", "DELETE", deleteSessionHistory);
-    register_blocking_api_route("^/api/webrtc/sessions$", "POST", createWebRTCSession);
+    register_blocking_api_route("^/api/webrtc/sessions$", "POST", createWebRTCSession, nullptr, true);
     register_api_route("^/api/webrtc/sessions/([A-Fa-f0-9-]+)$", "GET", getWebRTCSession);
     register_api_route("^/api/webrtc/sessions/([A-Fa-f0-9-]+)$", "DELETE", deleteWebRTCSession);
     register_api_route("^/api/webrtc/sessions/([A-Fa-f0-9-]+)/offer$", "POST", postWebRTCOffer);
@@ -5854,7 +6099,24 @@ namespace confighttp {
    * @api_examples{/api/auth/login| POST| {"username": "admin", "password": "password"}}
    */
   void loginUser(resp_https_t response, req_https_t request) {
+    if (!authorize_remote(response, request)) {
+      return;
+    }
     print_req(request);
+
+    static policy::LoginAttemptLimiter login_attempts;
+    const std::string remote_address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    const auto admission = login_attempts.consume(remote_address);
+    if (!admission.allowed) {
+      nlohmann::json body {{"status", false}, {"error", "Too many login attempts"}};
+      SimpleWeb::CaseInsensitiveMultimap headers {
+        {"Content-Type", "application/json"},
+        {"Retry-After", std::to_string(admission.retry_after.count())},
+      };
+      add_cors_headers(headers);
+      response->write(SimpleWeb::StatusCode::client_error_too_many_requests, body.dump(), headers);
+      return;
+    }
 
     std::stringstream ss;
     ss << request->content.rdbuf();
@@ -5881,9 +6143,10 @@ namespace confighttp {
       if (auto ua = request->header.find("user-agent"); ua != request->header.end()) {
         user_agent = ua->second;
       }
-      std::string remote_address = net::addr_to_normalized_string(request->remote_endpoint().address());
-
       APIResponse api_response = session_token_api.login(username, password, redirect_url, remember_me, user_agent, remote_address);
+      if (api_response.status_code == StatusCode::success_ok) {
+        login_attempts.reset(remote_address);
+      }
       write_api_response(response, api_response);
 
     } catch (const nlohmann::json::exception &e) {

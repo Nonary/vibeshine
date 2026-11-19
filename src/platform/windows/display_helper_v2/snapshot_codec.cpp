@@ -1,7 +1,7 @@
 #include "src/platform/windows/display_helper_v2/snapshot_codec.h"
 #include "src/platform/windows/display_helper_v2/topology_policy.h"
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(SUNSHINE_TEST_PORTABLE_WINDOWS_TYPES)
 
   #include <algorithm>
   #include <cctype>
@@ -410,6 +410,43 @@ namespace display_helper::v2::codec {
     return true;
   }
 
+  // Recovery writes only fields present in the saved snapshot. Unknown HDR,
+  // empty primary, and legacy snapshots without origins are therefore
+  // unrequested fields, while topology and display modes remain exact. An
+  // empty mode map cannot prove a restorable display mode and fails closed.
+  bool recovery_snapshot_matches(const Snapshot &current, const Snapshot &requested) {
+    if (requested.m_modes.empty() ||
+        canonical_topology(current.m_topology) != canonical_topology(requested.m_topology) ||
+        !topology::equal_display_modes(current.m_modes, requested.m_modes)) {
+      return false;
+    }
+
+    if (!requested.m_primary_device.empty() && current.m_primary_device != requested.m_primary_device) {
+      return false;
+    }
+
+    for (const auto &[id, requested_state] : requested.m_hdr_states) {
+      if (!requested_state) {
+        continue;
+      }
+      const auto current_state = current.m_hdr_states.find(id);
+      if (current_state == current.m_hdr_states.end() || !current_state->second ||
+          current_state->second != requested_state) {
+        return false;
+      }
+    }
+
+    for (const auto &[id, requested_origin] : requested.m_origins) {
+      const auto current_origin = current.m_origins.find(id);
+      if (current_origin == current.m_origins.end() ||
+          current_origin->second.m_x != requested_origin.m_x ||
+          current_origin->second.m_y != requested_origin.m_y) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   std::string signature(const Snapshot &snap) {
     // Build a stable textual representation
     std::string s;
@@ -619,11 +656,12 @@ namespace display_helper::v2::codec {
       return std::nullopt;
     }
 
-    // Filter out devices without display_name. These are not safe restore
-    // targets and are intentionally excluded from persisted snapshots.
+    // Enumerate restore-capable physical paths. Every non-excluded physical
+    // path in the captured topology must remain present in this set.
     std::set<std::string> valid_device_ids;
     std::vector<std::string> enumerated_devices;
     std::vector<std::string> virtual_devices;
+    std::set<std::string> virtual_device_ids;
     for (const auto &d : devices) {
       const auto id = d.m_device_id.empty() ? d.m_display_name : d.m_device_id;
       if (!id.empty()) {
@@ -634,6 +672,9 @@ namespace display_helper::v2::codec {
         enumerated_devices.push_back(std::move(detail));
       }
       if (is_virtual_display_device(d)) {
+        if (!id.empty()) {
+          virtual_device_ids.insert(id);
+        }
         if (is_active_display_device(d) && !id.empty()) {
           virtual_devices.push_back(id);
         }
@@ -670,6 +711,24 @@ namespace display_helper::v2::codec {
       if (valid_device_ids.empty()) {
         reject_reason = "all devices are excluded";
         return std::nullopt;
+      }
+    }
+
+    // Topology and device enumeration are separate Windows queries. A physical
+    // path can disappear, or lose its display name, between them. Persisting
+    // only the remaining paths would turn that transient into a baseline that
+    // deliberately disables the missing monitor on the next restore. Reject
+    // the capture so the ledger retries and preserves its existing history.
+    // Explicit exclusions and identified virtual displays remain intentional
+    // omissions; a device already absent from the topology stays disabled.
+    for (const auto &group : snap.m_topology) {
+      for (const auto &device_id : group) {
+        if (!valid_device_ids.count(device_id) &&
+            !is_excluded(device_id) &&
+            !virtual_device_ids.count(device_id)) {
+          reject_reason = "physical topology device lost during capture: " + device_id;
+          return std::nullopt;
+        }
       }
     }
 

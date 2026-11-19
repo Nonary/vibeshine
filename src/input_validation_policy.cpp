@@ -3,6 +3,8 @@
  * @brief Definitions for portable input packet and touch-coordinate policies.
  */
 #include "input_validation_policy.h"
+#include "controller_speaker_pcm.h"
+#include "steam_controller_protocol.h"
 
 extern "C" {
 #include <moonlight-common-c/src/Input.h>
@@ -56,6 +58,8 @@ namespace input::validation {
           return packet_size_bounds_t {sizeof(SS_TOUCH_PACKET), sizeof(SS_TOUCH_PACKET)};
         case SS_PEN_MAGIC:
           return packet_size_bounds_t {sizeof(SS_PEN_PACKET), sizeof(SS_PEN_PACKET)};
+        case controller_speaker_pcm::binding_magic:
+          return packet_size_bounds_t {controller_speaker_pcm::binding_size, controller_speaker_pcm::binding_size};
         case SS_CONTROLLER_ARRIVAL_MAGIC:
           return packet_size_bounds_t {sizeof(SS_CONTROLLER_ARRIVAL_PACKET), sizeof(SS_CONTROLLER_ARRIVAL_PACKET)};
         case SS_CONTROLLER_TOUCH_MAGIC:
@@ -64,6 +68,8 @@ namespace input::validation {
           return packet_size_bounds_t {sizeof(SS_CONTROLLER_MOTION_PACKET), sizeof(SS_CONTROLLER_MOTION_PACKET)};
         case SS_CONTROLLER_BATTERY_MAGIC:
           return packet_size_bounds_t {sizeof(SS_CONTROLLER_BATTERY_PACKET), sizeof(SS_CONTROLLER_BATTERY_PACKET)};
+        case SS_STEAM_CONTROLLER_ATTRIBUTES_MAGIC:
+          return packet_size_bounds_t {sizeof(SS_STEAM_CONTROLLER_ATTRIBUTES_PACKET), sizeof(SS_STEAM_CONTROLLER_ATTRIBUTES_PACKET)};
         default:
           return std::nullopt;
       }
