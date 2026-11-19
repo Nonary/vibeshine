@@ -5852,17 +5852,24 @@ launch_session->exact_target_hold.reset();
       launch_session->virtual_display_device_id.clear();
       BOOST_LOG(info) << "Joining the running game's active capture output without preparing a per-client display.";
     }
-    std::optional<std::string> pending_output_override;
 #ifdef __APPLE__
     auto launch_display_guard = util::fail_guard([]() {
       platf::macos_virtual_display::end_launch_hold();
     });
 #endif
+#ifdef __linux__
+    config::runtime_output_override_lease_t pending_output_lease {};
+    auto output_override_guard = util::fail_guard([&] {
+      (void) config::clear_runtime_output_name_override_if_lease(pending_output_lease);
+    });
+#else
+    std::optional<std::string> pending_output_override;
     auto output_override_guard = util::fail_guard([&]() {
       if (pending_output_override) {
         config::set_runtime_output_name_override(std::nullopt);
       }
     });
+#endif
 
 #ifdef _WIN32
     std::optional<video::encoder_probe_adapter_hint_lease_t> pending_adapter_hint;
@@ -5970,8 +5977,9 @@ launch_session->exact_target_hold.reset();
       return;
     }
     if (!prepared_display.output_name.empty()) {
-      config::set_runtime_output_name_override_with_lease(prepared_display.output_name, launch_session->exclusive_private_capture);
-      pending_output_override = prepared_display.output_name;
+      pending_output_lease = config::set_runtime_output_name_override_with_lease(prepared_display.output_name, launch_session->exclusive_private_capture);
+    } else if (no_active_sessions && !joining_existing_game_output) {
+      pending_output_lease = config::replace_retained_private_capture(launch_session->output_name_override);
     }
 #endif
 
