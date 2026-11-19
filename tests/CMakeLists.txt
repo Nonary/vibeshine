@@ -2171,6 +2171,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET libinputtino)
         target_include_directories(test_${profile}_usb PRIVATE "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/inputtino/include")
         add_test(NAME test_component_${profile}_usb COMMAND test_${profile}_usb)
     endforeach()
+    add_executable(test_sc26_policy unit/platform/linux/test_sc26_policy.cpp)
+    target_include_directories(test_sc26_policy PRIVATE
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libvirtualgamepad/include")
+    add_test(NAME test_component_sc26_policy COMMAND test_sc26_policy)
     # Manual only: creates temporary devices visible to the desktop and Steam.
     add_executable(probe_playstation_uhid integration/probe_playstation_uhid.cpp
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/linux/input/inputtino_ds4.cpp")

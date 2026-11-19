@@ -274,6 +274,7 @@ const gamepadOptions = [
   option('ds4', 'config.gamepad_ds4'),
   option('ds5', 'config.gamepad_ds5'),
   option('switch', 'config.gamepad_switch'),
+  option('steam', 'config.gamepad_steam'),
   option('vhf', 'config.gamepad_vhf'),
   option('vhf_xbox', 'config.gamepad_vhf_xbox'),
   option('vhf_xbox_one', 'config.gamepad_vhf_xbox_one'),
@@ -301,7 +302,7 @@ export function gamepadOptionsForPlatform(platform: string): SettingsOption[] {
         'vhf_steam',
       ])
     : normalized.includes('linux')
-      ? new Set(['auto', 'xone', 'ds4', 'ds5', 'switch'])
+      ? new Set(['auto', 'xone', 'ds4', 'ds5', 'switch', 'steam'])
       : new Set(['auto']);
   return gamepadOptions.filter((candidate) => supportedValues.has(candidate.value));
 }
