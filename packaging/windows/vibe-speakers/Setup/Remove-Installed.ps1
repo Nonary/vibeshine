@@ -13,4 +13,5 @@ foreach($dir in Get-ChildItem -LiteralPath $users -Directory){
  # The uninstall of another portable/install location cannot take this record.
  if(!$state.InstallRoot -or $state.InstallRoot -ine (PackageRoot)){continue}
  & (Join-Path $PSScriptRoot 'Invoke-AdminSetup.ps1') -Action Remove -TargetUserSid $dir.Name -ConfirmSetup
+ if(!$?){throw "Vibe Speakers removal failed for $($dir.Name) (exit code $LASTEXITCODE)."}
 }
