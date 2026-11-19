@@ -32,6 +32,7 @@
   #include <display_device/json.h>
   #include <display_device/windows/win_api_layer.h>
   #include <display_device/windows/win_api_recovery.h>
+  #include <display_device/windows/win_display_query_stop.h>
   #include <display_device/windows/win_api_utils.h>
   #include <display_device/windows/win_display_device.h>
   #include <nlohmann/json.hpp>
@@ -3474,7 +3475,11 @@ namespace display_helper_integration {
       display_device::DisplayRecoveryBehaviorGuard guard(display_device::DisplayRecoveryBehavior::Skip);
       auto api = std::make_shared<display_device::WinApiLayer>();
       display_device::WinDisplayDevice dd(api);
-      return dd.enumAvailableDevices(detail);
+      return display_device::run_display_query([&] {
+        return dd.enumAvailableDevices(detail);
+      });
+    } catch (const display_device::DisplayQueryStopped &) {
+      throw;
     } catch (...) {
       return std::nullopt;
     }

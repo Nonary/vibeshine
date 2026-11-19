@@ -1,6 +1,7 @@
 #include "../tests_common.h"
 #include "src/video_capture_source.h"
 
+#include <display_device/windows/win_display_query_stop.h>
 #include <future>
 #include <memory>
 
@@ -8,6 +9,7 @@ namespace {
   struct capture_context_t {
     int generation = 0;
     safe::signal_t reinit;
+    std::stop_source display_stop {std::nostopstate};
   };
 
   using lease_t = video::capture_source_lease_t<capture_context_t>;
@@ -21,10 +23,12 @@ namespace {
 
   int start(capture_context_t &ctx) {
     ctx.generation = ++starts;
+    ctx.display_stop = std::stop_source {};
     return 0;
   }
 
-  void stop(capture_context_t &) {
+  void stop(capture_context_t &ctx) {
+    ctx.display_stop.request_stop();
     if (stop_hook) {
       stop_hook();
     }
@@ -251,17 +255,110 @@ TEST_F(CaptureSourceLease, RemoteMonitorAndInputRemainPrivate) {
 }
 
 TEST_F(CaptureSourceLease, FinalDisconnectStopsAndReconnectStartsFresh) {
+  std::stop_token old_stop;
   {
     auto first = acquire(source_e::active_output);
     auto second = acquire(source_e::active_output);
+    old_stop = first->get()->display_stop.get_token();
     second.reset();
     EXPECT_EQ(stops.load(), 0);
+    EXPECT_FALSE(old_stop.stop_requested());
     EXPECT_EQ(first->get()->generation, 1);
   }
   EXPECT_EQ(stops.load(), 1);
+  EXPECT_TRUE(old_stop.stop_requested());
   auto reconnect = acquire(source_e::active_output);
   EXPECT_EQ(reconnect->get()->generation, 2);
   EXPECT_FALSE(reconnect->get()->reinit.peek());
+  const auto new_stop = reconnect->get()->display_stop.get_token();
+  EXPECT_TRUE(new_stop.stop_possible());
+  EXPECT_FALSE(new_stop.stop_requested());
+  EXPECT_NE(old_stop, new_stop);
+}
+
+TEST_F(CaptureSourceLease, FinalReleaseCancelsDisplayRetryForSharedAndExactWorkers) {
+  using namespace std::chrono_literals;
+  for (const auto source : {source_e::active_output, source_e::exact_output}) {
+    auto private_peer = acquire(source_e::exact_output);
+    auto ending = acquire(source);
+    const auto token = ending->get()->display_stop.get_token();
+    std::promise<void> retry_entered;
+    auto entered = retry_entered.get_future();
+    int native_queries = 0;
+    bool fallback = false;
+    auto retry_worker = std::async(std::launch::async, [&] {
+      try {
+        display_device::DisplayQueryStopGuard guard {token};
+        display_device::run_display_query([&] { return ++native_queries; });
+        retry_entered.set_value();
+        display_device::wait_for_display_query_retry(5s, [](auto delay) {
+          std::this_thread::sleep_for(delay);
+        });
+        display_device::run_display_query([&] { return ++native_queries; });
+        fallback = true;
+      } catch (const display_device::DisplayQueryStopped &) {
+        return true;
+      }
+      return false;
+    });
+    EXPECT_EQ(entered.wait_for(2s), std::future_status::ready);
+    ending.reset();
+    EXPECT_EQ(retry_worker.wait_for(2s), std::future_status::ready);
+    EXPECT_TRUE(retry_worker.get());
+    EXPECT_EQ(native_queries, 1);
+    EXPECT_FALSE(fallback);
+    EXPECT_FALSE(private_peer->get()->display_stop.stop_requested());
+  }
+}
+
+TEST_F(CaptureSourceLease, StoppingOneMirrorLeavesDisplayRecoveryForPendingPeer) {
+  auto first = acquire(source_e::active_output);
+  auto pending = acquire(source_e::active_output);
+  ASSERT_EQ(first->get(), pending->get());
+  const auto token = pending->get()->display_stop.get_token();
+  std::vector<consumer_t> consumers {{.config = {30, 0, 30000, 1920}}};
+  safe::queue_t<consumer_t> queue {30};
+
+  // Reinitialization is looking for a display as the active consumer leaves.
+  display_device::DisplayQueryStopGuard guard {token};
+  const bool initial_query = display_device::run_display_query([] { return true; });
+  const bool reinit_query = display_device::run_display_query([] { return false; });
+  EXPECT_TRUE(initial_query);
+  EXPECT_FALSE(reinit_query);
+  consumers.front().images->stop();
+  first.reset();
+  ASSERT_FALSE(token.stop_requested());
+  ASSERT_TRUE(queue.try_raise(consumer_t {.config = {60, 0, 60000, 3840}}));
+
+  const auto selected = video::await_capture_config(consumers, queue);
+  ASSERT_TRUE(selected);
+  EXPECT_EQ(selected->framerate, 60);
+  EXPECT_TRUE(display_device::run_display_query([] { return true; }));
+  EXPECT_EQ(starts.load(), 1);
+  EXPECT_EQ(stops.load(), 0);
+}
+
+TEST(CaptureDisplayQueryStop, StopDiscardsNativeResultAndPreventsNextQuery) {
+  std::stop_source stop;
+  int native_queries = 0;
+  {
+    display_device::DisplayQueryStopGuard guard {stop.get_token()};
+    EXPECT_THROW(display_device::run_display_query([&] {
+      ++native_queries;
+      stop.request_stop();
+      return true;
+    }), display_device::DisplayQueryStopped);
+    EXPECT_THROW(display_device::run_display_query([&] {
+      return ++native_queries;
+    }), display_device::DisplayQueryStopped);
+    EXPECT_EQ(native_queries, 1);
+  }
+  // Other calls on the same thread keep their normal policy after the scope.
+  EXPECT_EQ(display_device::run_display_query([&] { return ++native_queries; }), 2);
+  using namespace std::chrono_literals;
+  display_device::wait_for_display_query_retry(250ms, [](auto delay) {
+    EXPECT_EQ(delay, 250ms);
+  });
 }
 
 TEST_F(CaptureSourceLease, ConcurrentJoinsStartOnlyOneProducer) {

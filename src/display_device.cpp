@@ -21,6 +21,7 @@
 
   #include <display_device/windows/win_api_layer.h>
   #include <display_device/windows/win_api_recovery.h>
+  #include <display_device/windows/win_display_query_stop.h>
   #include <display_device/windows/win_display_device.h>
 #endif
 
@@ -609,6 +610,7 @@ namespace display_device {
   std::string map_output_name(const std::string &output_name) {
 #ifdef _WIN32
     try {
+      check_display_query_stop();
       if (output_name.empty()) {
         return output_name;
       }
@@ -636,7 +638,9 @@ namespace display_device {
       // to the Windows logical display name using libdisplaydevice enumeration.
       auto api = std::make_shared<display_device::WinApiLayer>();
       display_device::WinDisplayDevice dd(api);
-      const auto devices = dd.enumAvailableDevices(DeviceEnumerationDetail::Minimal);
+      const auto devices = run_display_query([&] {
+        return dd.enumAvailableDevices(DeviceEnumerationDetail::Minimal);
+      });
 
       auto equals_ci = [](const std::string &a, const std::string &b) {
         if (a.size() != b.size()) {
@@ -664,6 +668,8 @@ namespace display_device {
 
       // Fallback to original if not found
       return output_name;
+    } catch (const DisplayQueryStopped &) {
+      throw;
     } catch (...) {
       // If enumeration fails for any reason, fall back to the provided value.
       return output_name;

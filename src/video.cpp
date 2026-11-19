@@ -18,6 +18,7 @@
 #include <mutex>
 #include <optional>
 #include <sstream>
+#include <stop_token>
 #include <system_error>
 #include <thread>
 #include <utility>
@@ -81,6 +82,7 @@ extern "C" {
   #include <AMF/core/Debug.h>
   #include <AMF/core/Factory.h>
   #include <AMF/core/Trace.h>
+  #include <display_device/windows/win_display_query_stop.h>
 
   // These using-declarations must sit between the AMF headers above and
   // hwcontext_amf.h below, and must stay outside the extern "C" block. hwcontext_amf.h
@@ -126,8 +128,18 @@ namespace video {
     }
 #endif
 
+    void sleep_before_display_retry(std::chrono::milliseconds delay) {
+#ifdef _WIN32
+      display_device::wait_for_display_query_retry(delay, [](auto timeout) {
+        std::this_thread::sleep_for(timeout);
+      });
+#else
+      std::this_thread::sleep_for(delay);
+#endif
+    }
+
     void wait_before_display_retry(std::size_t &consecutive_failures) {
-      std::this_thread::sleep_for(policy::display_retry_delay(consecutive_failures));
+      sleep_before_display_retry(policy::display_retry_delay(consecutive_failures));
       if (consecutive_failures < std::numeric_limits<std::size_t>::max()) {
         ++consecutive_failures;
       }
@@ -1906,6 +1918,7 @@ namespace video {
   struct capture_thread_async_ctx_t {
     std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue;
     std::thread capture_thread;
+    std::stop_source display_query_stop {std::nostopstate};
 
     safe::signal_t reinit_event;
     const encoder_t *encoder_p;
@@ -2978,7 +2991,7 @@ namespace video {
         delay = std::max(0ms, std::min(delay, remaining));
       }
 #endif
-      std::this_thread::sleep_for(delay);
+      sleep_before_display_retry(delay);
     }
   }
 
@@ -3115,7 +3128,8 @@ namespace video {
     std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue,
     sync_util::sync_t<std::weak_ptr<platf::display_t>> &display_wp,
     safe::signal_t &reinit_event,
-    const encoder_t &encoder
+    const encoder_t &encoder,
+    [[maybe_unused]] std::stop_token display_stop
   ) {
     std::vector<capture_ctx_t> capture_ctxs;
 
@@ -3183,6 +3197,10 @@ namespace video {
         return;
       }
 
+#ifdef _WIN32
+      display_device::DisplayQueryStopGuard stop_guard {display_stop};
+      display_device::check_display_query_stop();
+#endif
       if (capture_config.capture_target_valid && !capture_config.capture_target_valid()) return;
       const auto required_output = capture_config.capture_source == capture_source_e::exact_output ? capture_config.capture_output : std::nullopt;
       const bool log_display_retry = policy::should_log_display_retry(display_retry_failures);
@@ -3585,6 +3603,10 @@ namespace video {
               disp.reset();
 
               // Refresh display names since a display removal might have caused the reinitialization
+#ifdef _WIN32
+              display_device::DisplayQueryStopGuard stop_guard {display_stop};
+              display_device::check_display_query_stop();
+#endif
               if (capture_ctxs.front().config.capture_target_valid && !capture_ctxs.front().config.capture_target_valid()) return;
               const auto required_output = capture_ctxs.front().config.capture_source == capture_source_e::exact_output ? capture_ctxs.front().config.capture_output : std::nullopt;
               refresh_displays(
@@ -7991,13 +8013,29 @@ namespace video {
 
     capture_thread_ctx.capture_ctx_queue = std::make_shared<safe::queue_t<capture_ctx_t>>(30);
 
-    capture_thread_ctx.capture_thread = std::thread {
-      captureThread,
-      capture_thread_ctx.capture_ctx_queue,
-      std::ref(capture_thread_ctx.display_wp),
-      std::ref(capture_thread_ctx.reinit_event),
-      std::ref(*capture_thread_ctx.encoder_p)
-    };
+#ifdef _WIN32
+    capture_thread_ctx.display_query_stop = std::stop_source {};
+#endif
+    capture_thread_ctx.capture_thread = std::thread {[&capture_thread_ctx] {
+      const auto run_worker = [&] {
+        captureThread(
+          capture_thread_ctx.capture_ctx_queue,
+          capture_thread_ctx.display_wp,
+          capture_thread_ctx.reinit_event,
+          *capture_thread_ctx.encoder_p,
+          capture_thread_ctx.display_query_stop.get_token()
+        );
+      };
+#ifdef _WIN32
+      try {
+        run_worker();
+      } catch (const display_device::DisplayQueryStopped &) {
+        // The worker has already stopped its capture consumers on unwind.
+      }
+#else
+      run_worker();
+#endif
+    }};
 
     return 0;
   }
@@ -8006,6 +8044,8 @@ namespace video {
     capture_thread_ctx.capture_ctx_queue->stop();
 
 #ifdef _WIN32
+    // Only the final lease ends a worker, even if a peer is still joining.
+    capture_thread_ctx.display_query_stop.request_stop();
     {
       // The queue cannot interrupt a WGC helper handshake already in progress.
       // Notify this generation without entering the driver. Release the borrowed

@@ -51,6 +51,7 @@
 #include <Shlwapi.h>
 
 // lib includes
+#include <display_device/windows/win_display_query_stop.h>
 #include <libvirtualgamepad/client.h>
 
 // local includes
@@ -2732,7 +2733,10 @@ namespace platf {
     for (int attempt = 0; attempt < max_query_attempts && query_result == ERROR_INSUFFICIENT_BUFFER; ++attempt) {
       UINT32 path_count = 0;
       UINT32 mode_count = 0;
-      if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count) != ERROR_SUCCESS) {
+      const auto size_result = display_device::run_display_query([&] {
+        return GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count);
+      });
+      if (size_result != ERROR_SUCCESS) {
         return adapter_output_match_e::unknown;
       }
 
@@ -2740,14 +2744,9 @@ namespace platf {
       mode_count = std::max<UINT32>(mode_count, 1);
       paths.resize(path_count);
       modes.resize(mode_count);
-      query_result = QueryDisplayConfig(
-        QDC_ONLY_ACTIVE_PATHS,
-        &path_count,
-        paths.data(),
-        &mode_count,
-        modes.data(),
-        nullptr
-      );
+      query_result = display_device::run_display_query([&] {
+        return QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths.data(), &mode_count, modes.data(), nullptr);
+      });
       if (query_result == ERROR_SUCCESS) {
         paths.resize(path_count);
       }
@@ -2772,7 +2771,10 @@ namespace platf {
       source_name.header.size = sizeof(source_name);
       source_name.header.adapterId = path.sourceInfo.adapterId;
       source_name.header.id = path.sourceInfo.id;
-      if (DisplayConfigGetDeviceInfo(&source_name.header) != ERROR_SUCCESS ||
+      const auto name_result = display_device::run_display_query([&] {
+        return DisplayConfigGetDeviceInfo(&source_name.header);
+      });
+      if (name_result != ERROR_SUCCESS ||
           source_name.viewGdiDeviceName[0] == L'\0' ||
           std::find(
             std::begin(source_name.viewGdiDeviceName),

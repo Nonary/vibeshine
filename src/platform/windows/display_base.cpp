@@ -22,6 +22,7 @@
 #include <boost/algorithm/string/join.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 #include <MinHook.h>
+#include <display_device/windows/win_display_query_stop.h>
 
 typedef long NTSTATUS;
 
@@ -59,6 +60,12 @@ namespace platf {
 
 namespace platf::dxgi {
   namespace {
+    void wait_before_duplication_retry() {
+      display_device::wait_for_display_query_retry(200ms, [](auto delay) {
+        std::this_thread::sleep_for(delay);
+      });
+    }
+
     gpu_priority_manager_t &gpu_priority_manager() {
       // Capture objects can overlap during reinitialization or multiple streams.
       // The last successful lease restores the process's original class, not an
@@ -177,7 +184,9 @@ namespace platf::dxgi {
     {
       // IDXGIOutput5 is optional, but can provide improved performance and wide color support
       dxgi::output5_t output5 {};
+      display_device::check_display_query_stop();
       status = display->output->QueryInterface(IID_IDXGIOutput5, (void **) &output5);
+      display_device::check_display_query_stop();
       if (SUCCEEDED(status)) {
         // Ask the display implementation which formats it supports
         auto supported_formats = display->get_supported_capture_formats();
@@ -191,11 +200,13 @@ namespace platf::dxgi {
           // Ensure we can duplicate the current display
           syncThreadDesktop();
 
+          display_device::check_display_query_stop();
           status = output5->DuplicateOutput1((IUnknown *) display->device.get(), 0, supported_formats.size(), supported_formats.data(), &dup);
+          display_device::check_display_query_stop();
           if (SUCCEEDED(status)) {
             break;
           }
-          std::this_thread::sleep_for(200ms);
+          wait_before_duplication_retry();
         }
 
         // We don't retry with DuplicateOutput() because we can hit this codepath when we're racing
@@ -209,7 +220,9 @@ namespace platf::dxgi {
         BOOST_LOG(warning) << "IDXGIOutput5 is not supported by your OS. Capture performance may be reduced."sv;
 
         dxgi::output1_t output1 {};
+        display_device::check_display_query_stop();
         status = display->output->QueryInterface(IID_IDXGIOutput1, (void **) &output1);
+        display_device::check_display_query_stop();
         if (FAILED(status)) {
           BOOST_LOG(error) << "Failed to query IDXGIOutput1 from the output"sv;
           return -1;
@@ -219,11 +232,13 @@ namespace platf::dxgi {
           // Ensure we can duplicate the current display
           syncThreadDesktop();
 
+          display_device::check_display_query_stop();
           status = output1->DuplicateOutput((IUnknown *) display->device.get(), &dup);
+          display_device::check_display_query_stop();
           if (SUCCEEDED(status)) {
             break;
           }
-          std::this_thread::sleep_for(200ms);
+          wait_before_duplication_retry();
         }
 
         if (FAILED(status)) {
@@ -697,6 +712,7 @@ namespace platf::dxgi {
     };
 
     device_t device;
+    display_device::check_display_query_stop();
     auto status = D3D11CreateDevice(
       adapter.get(),
       D3D_DRIVER_TYPE_UNKNOWN,
@@ -709,13 +725,16 @@ namespace platf::dxgi {
       nullptr,
       nullptr
     );
+    display_device::check_display_query_stop();
     if (FAILED(status)) {
       BOOST_LOG(error) << "Failed to create D3D11 device for DD test [0x"sv << util::hex(status).to_string_view() << ']';
       return false;
     }
 
     output1_t output1;
+    display_device::check_display_query_stop();
     status = output->QueryInterface(IID_IDXGIOutput1, (void **) &output1);
+    display_device::check_display_query_stop();
     if (FAILED(status)) {
       BOOST_LOG(error) << "Failed to query IDXGIOutput1 from the output"sv;
       return false;
@@ -732,7 +751,9 @@ namespace platf::dxgi {
         syncThreadDesktop();
       }
 
+      display_device::check_display_query_stop();
       status = output1->DuplicateOutput((IUnknown *) device.get(), &dup);
+      display_device::check_display_query_stop();
       if (SUCCEEDED(status)) {
         return true;
       }
@@ -742,7 +763,7 @@ namespace platf::dxgi {
       if (enumeration_only && status == E_ACCESSDENIED) {
         break;
       } else {
-        std::this_thread::sleep_for(200ms);
+        wait_before_duplication_retry();
       }
     }
 
@@ -776,6 +797,7 @@ namespace platf::dxgi {
     const std::optional<LUID> &required_adapter_luid,
     const bool preserve_capture_for_input_geometry
   ) {
+    display_device::check_display_query_stop();
     static std::once_flag windows_cpp_once_flag;
 
     std::call_once(windows_cpp_once_flag, []() {
@@ -816,7 +838,9 @@ namespace platf::dxgi {
 
     HRESULT status;
 
-    status = CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &factory);
+    status = display_device::run_display_query([&] {
+      return CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &factory);
+    });
     if (FAILED(status)) {
       BOOST_LOG(error) << "Failed to create DXGIFactory1 [0x"sv << util::hex(status).to_string_view() << ']';
       return -1;
@@ -829,10 +853,9 @@ namespace platf::dxgi {
     std::optional<LUID> selected_adapter_luid;
     std::optional<platf::adapter_resolution_t> configured_adapter;
     if (!config::video.adapter_pnp_id.empty()) {
-      configured_adapter = platf::resolve_adapter(
-        config::video.adapter_name,
-        config::video.adapter_pnp_id
-      );
+      configured_adapter = display_device::run_display_query([&] {
+        return platf::resolve_adapter(config::video.adapter_name, config::video.adapter_pnp_id);
+      });
       if (!*configured_adapter) {
         BOOST_LOG(error)
           << "Configured adapter_pnp_id '" << config::video.adapter_pnp_id
@@ -877,23 +900,26 @@ namespace platf::dxgi {
       !selected_adapter_luid && !adapter_name.empty();
     bool configured_adapter_present = false;
     bool configured_adapter_has_output = false;
-    adapter_t::pointer adapter_p;
     for (int tries = 0; tries < 2; ++tries) {
       for (int x = 0;; ++x) {
-        adapter_p = nullptr;
-        const auto enumerate_adapter_status = factory->EnumAdapters1(x, &adapter_p);
+        dxgi::adapter_t adapter_tmp;
+        const auto enumerate_adapter_status = display_device::run_display_query([&] {
+          return factory->EnumAdapters1(x, &adapter_tmp);
+        });
         if (enumerate_adapter_status == DXGI_ERROR_NOT_FOUND) {
           break;
         }
-        if (FAILED(enumerate_adapter_status) || !adapter_p) {
+        if (FAILED(enumerate_adapter_status) || !adapter_tmp) {
           BOOST_LOG(error) << "Failed to enumerate DXGI adapter " << x
                            << " [0x" << util::hex(enumerate_adapter_status).to_string_view() << ']';
           break;
         }
-        dxgi::adapter_t adapter_tmp {adapter_p};
 
         DXGI_ADAPTER_DESC1 adapter_desc {};
-        if (FAILED(adapter_tmp->GetDesc1(&adapter_desc))) {
+        const auto adapter_desc_status = display_device::run_display_query([&] {
+          return adapter_tmp->GetDesc1(&adapter_desc);
+        });
+        if (FAILED(adapter_desc_status)) {
           continue;
         }
 
@@ -906,22 +932,25 @@ namespace platf::dxgi {
         }
         configured_adapter_present = true;
 
-        dxgi::output_t::pointer output_p;
         for (int y = 0;; ++y) {
-          output_p = nullptr;
-          const auto enumerate_output_status = adapter_tmp->EnumOutputs(y, &output_p);
+          dxgi::output_t output_tmp;
+          const auto enumerate_output_status = display_device::run_display_query([&] {
+            return adapter_tmp->EnumOutputs(y, &output_tmp);
+          });
           if (enumerate_output_status == DXGI_ERROR_NOT_FOUND) {
             break;
           }
-          if (FAILED(enumerate_output_status) || !output_p) {
+          if (FAILED(enumerate_output_status) || !output_tmp) {
             BOOST_LOG(error) << "Failed to enumerate DXGI output " << y
                              << " [0x" << util::hex(enumerate_output_status).to_string_view() << ']';
             break;
           }
-          dxgi::output_t output_tmp {output_p};
 
           DXGI_OUTPUT_DESC desc {};
-          if (FAILED(output_tmp->GetDesc(&desc))) {
+          const auto output_desc_status = display_device::run_display_query([&] {
+            return output_tmp->GetDesc(&desc);
+          });
+          if (FAILED(output_desc_status)) {
             continue;
           }
 
@@ -973,8 +1002,12 @@ namespace platf::dxgi {
 
       // If we made it here without finding an output, try to power on the display and retry.
       if (tries == 0) {
-        SetThreadExecutionState(ES_DISPLAY_REQUIRED);
-        Sleep(500);
+        display_device::run_display_query([] {
+          return SetThreadExecutionState(ES_DISPLAY_REQUIRED);
+        });
+        display_device::wait_for_display_query_retry(500ms, [](auto delay) {
+          ::Sleep(static_cast<DWORD>(delay.count()));
+        });
       }
     }
 
@@ -1023,26 +1056,31 @@ namespace platf::dxgi {
       D3D_FEATURE_LEVEL_9_1
     };
 
-    status = adapter->QueryInterface(IID_IDXGIAdapter, (void **) &adapter_p);
-    if (FAILED(status)) {
-      BOOST_LOG(error) << "Failed to query IDXGIAdapter interface"sv;
-      return -1;
+    {
+      util::safe_ptr<IDXGIAdapter, Release<IDXGIAdapter>> base_adapter;
+      status = display_device::run_display_query([&] {
+        return adapter->QueryInterface(IID_IDXGIAdapter, (void **) &base_adapter);
+      });
+      if (FAILED(status)) {
+        BOOST_LOG(error) << "Failed to query IDXGIAdapter interface"sv;
+        return -1;
+      }
+
+      status = display_device::run_display_query([&] {
+        return D3D11CreateDevice(
+          base_adapter.get(),
+          D3D_DRIVER_TYPE_UNKNOWN,
+          nullptr,
+          D3D11_CREATE_DEVICE_FLAGS,
+          featureLevels,
+          sizeof(featureLevels) / sizeof(D3D_FEATURE_LEVEL),
+          D3D11_SDK_VERSION,
+          &device,
+          &feature_level,
+          &device_ctx
+        );
+      });
     }
-
-    status = D3D11CreateDevice(
-      adapter_p,
-      D3D_DRIVER_TYPE_UNKNOWN,
-      nullptr,
-      D3D11_CREATE_DEVICE_FLAGS,
-      featureLevels,
-      sizeof(featureLevels) / sizeof(D3D_FEATURE_LEVEL),
-      D3D11_SDK_VERSION,
-      &device,
-      &feature_level,
-      &device_ctx
-    );
-
-    adapter_p->Release();
 
     if (FAILED(status)) {
       BOOST_LOG(error) << "Failed to create D3D11 device [0x"sv << util::hex(status).to_string_view() << ']';
@@ -1471,30 +1509,36 @@ namespace platf {
       // even if the current desktop changes during our enumeration process.
       // It is critical that we either fully succeed in enumeration or fully fail,
       // otherwise it can lead to the capture code switching monitors unexpectedly.
+      display_device::check_display_query_stop();
       syncThreadDesktop();
+      display_device::check_display_query_stop();
 
       dxgi::factory1_t factory;
+      display_device::check_display_query_stop();
       status = CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &factory);
+      display_device::check_display_query_stop();
       if (FAILED(status)) {
         BOOST_LOG(error) << "Failed to create DXGIFactory1 [0x"sv << util::hex(status).to_string_view() << ']';
         return {};
       }
 
-      dxgi::adapter_t::pointer adapter_p;
       for (int x = 0;; ++x) {
-        adapter_p = nullptr;
-        const auto adapter_status = factory->EnumAdapters1(x, &adapter_p);
+        dxgi::adapter_t adapter;
+        display_device::check_display_query_stop();
+        const auto adapter_status = factory->EnumAdapters1(x, &adapter);
+        display_device::check_display_query_stop();
         if (adapter_status == DXGI_ERROR_NOT_FOUND) {
           break;
         }
-        if (FAILED(adapter_status) || !adapter_p) {
+        if (FAILED(adapter_status) || !adapter) {
           BOOST_LOG(error) << "Failed to enumerate DXGI adapter " << x
                            << " [0x" << util::hex(adapter_status).to_string_view() << ']';
           return {};
         }
-        dxgi::adapter_t adapter {adapter_p};
         DXGI_ADAPTER_DESC1 adapter_desc {};
+        display_device::check_display_query_stop();
         const auto adapter_desc_status = adapter->GetDesc1(&adapter_desc);
+        display_device::check_display_query_stop();
         if (FAILED(adapter_desc_status)) {
           BOOST_LOG(error) << "Failed to describe DXGI adapter " << x
                            << " [0x" << util::hex(adapter_desc_status).to_string_view() << ']';
@@ -1523,22 +1567,24 @@ namespace platf {
             << "    ====== OUTPUT ======"sv << std::endl;
         }
 
-        dxgi::output_t::pointer output_p;
         for (int y = 0;; ++y) {
-          output_p = nullptr;
-          const auto output_status = adapter->EnumOutputs(y, &output_p);
+          dxgi::output_t output;
+          display_device::check_display_query_stop();
+          const auto output_status = adapter->EnumOutputs(y, &output);
+          display_device::check_display_query_stop();
           if (output_status == DXGI_ERROR_NOT_FOUND) {
             break;
           }
-          if (FAILED(output_status) || !output_p) {
+          if (FAILED(output_status) || !output) {
             BOOST_LOG(error) << "Failed to enumerate DXGI output " << y
                              << " [0x" << util::hex(output_status).to_string_view() << ']';
             return {};
           }
-          dxgi::output_t output {output_p};
 
           DXGI_OUTPUT_DESC desc {};
+          display_device::check_display_query_stop();
           const auto output_desc_status = output->GetDesc(&desc);
+          display_device::check_display_query_stop();
           if (FAILED(output_desc_status)) {
             BOOST_LOG(error) << "Failed to describe DXGI output " << y
                              << " [0x" << util::hex(output_desc_status).to_string_view() << ']';
@@ -1624,6 +1670,7 @@ namespace platf {
     const video::config_t &config,
     const std::optional<adapter_id_t> &required_adapter
   ) {
+    display_device::check_display_query_stop();
     std::optional<LUID> required_adapter_luid;
     if (required_adapter) {
       required_adapter_luid = LUID {
@@ -1642,6 +1689,7 @@ namespace platf {
 #if defined(SUNSHINE_ENABLE_FRAME_PUSH_CAPTURE) && SUNSHINE_ENABLE_FRAME_PUSH_CAPTURE
       const bool sunshine_virtual_display = VDISPLAY::is_sunshine_virtual_display_output(display_name);
       const bool driver_capable = sunshine_virtual_display && VDISPLAY::driver_supports_frame_push_capture();
+      display_device::check_display_query_stop();
       frame_push_selection = frame_push::policy::select(
         true,
         true,
@@ -1652,7 +1700,9 @@ namespace platf {
       if (frame_push_selection == frame_push::policy::Selection::HostBackendUnavailable &&
           hwdevice_type == mem_type_e::dxgi) {
         auto frame_push_display = std::make_shared<dxgi::display_frame_push_vram_t>();
-        if (frame_push_display->init(config, display_name, required_adapter_luid) == 0) {
+        const auto result = frame_push_display->init(config, display_name, required_adapter_luid);
+        display_device::check_display_query_stop();
+        if (result == 0) {
           frame_push_selection = frame_push::policy::select(true, true, true, true, true);
           BOOST_LOG(info) << "capture=idd-push initialized the live frame-push session.";
           return frame_push_display;
@@ -1674,25 +1724,31 @@ namespace platf {
     if (hwdevice_type == mem_type_e::dxgi) {
       if (prefer_wgc_backend) {
         auto disp = dxgi::display_wgc_ipc_vram_t::create(config, display_name, required_adapter_luid);
+        display_device::check_display_query_stop();
         if (disp || wgc_requested || frame_push_wgc_fallback) {
           return disp;
         }
       }
 
       auto disp = std::make_shared<dxgi::display_ddup_vram_t>();
-      if (!disp->init(config, display_name, required_adapter_luid)) {
+      const auto result = disp->init(config, display_name, required_adapter_luid);
+      display_device::check_display_query_stop();
+      if (result == 0) {
         return disp;
       }
     } else if (hwdevice_type == mem_type_e::system) {
       if (prefer_wgc_backend) {
         auto disp = dxgi::display_wgc_ipc_ram_t::create(config, display_name, required_adapter_luid);
+        display_device::check_display_query_stop();
         if (disp || wgc_requested || frame_push_wgc_fallback) {
           return disp;
         }
       }
 
       auto disp = std::make_shared<dxgi::display_ddup_ram_t>();
-      if (!disp->init(config, display_name, required_adapter_luid)) {
+      const auto result = disp->init(config, display_name, required_adapter_luid);
+      display_device::check_display_query_stop();
+      if (result == 0) {
         return disp;
       }
     }
