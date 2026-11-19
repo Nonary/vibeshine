@@ -148,6 +148,11 @@ struct signal_t {
   }
 };
 
+namespace remote_session { enum class role_e { game, input, monitor }; }
+namespace rtsp_stream::pending_policy {
+  /* PRODUCTION_GAME_SESSION_REQUIRES_SHUTDOWN */
+}
+
 /* PRODUCTION_PACKET_TYPES */
 constexpr int IDX_TERMINATION = 7;
 namespace stream {
@@ -185,6 +190,7 @@ namespace stream {
   struct broadcast_t { control_server_t control_server; };
   struct session_t {
     state_t state;
+    remote_session::role_e remote_role = remote_session::role_e::game;
     /* PRODUCTION_REASON_FIELD */
     int input = 1;
     event_t shutdown_storage;
@@ -254,10 +260,27 @@ namespace stream {
     /* PRODUCTION_GRACEFUL_STOP */
     /* PRODUCTION_UPDATE_DEVICE */
   }
+  // Exercise the connected game session branch. Model enet_host_service()
+  // returning an already-queued input event without sending queued output before
+  // the next control-loop iteration reaps STOPPING sessions.
+  void app_exit_once(control_server_t *server, bool game_runtime_active = false) {
+    const auto previous_owner = std::exchange(control_owner, true);
+    /* PRODUCTION_SEND_TERMINATION_APP_EXIT */
+    (void) send_termination;
+    bool has_game_session_pending_or_draining = false;
+    for (auto pos = server->_sessions->begin(); pos != server->_sessions->end();) {
+      auto session = *pos;
+      const bool game_session_requires_shutdown =
+        rtsp_stream::pending_policy::game_session_requires_shutdown(game_runtime_active, session->remote_role);
+      /* PRODUCTION_APP_EXIT */
+      ++pos;
+    }
+    if (!game_runtime_active) require(has_game_session_pending_or_draining, "exited game must remain draining");
+    control_owner = previous_owner;
+  }
 }
 
 namespace remote_session {
-  enum class role_e { input, monitor };
   bool release_monitor(const std::string &, std::uint64_t, const char *) { return false; }
 }
 namespace rtsp_stream {
@@ -377,7 +400,50 @@ int main(int argc, char **argv) {
     fixture_t f(name != "pending_peer");
     auto &session = f.session;
     rtsp_stream::route_session = &session;
-    if (name == "devices_disconnect") {
+    if (name == "app_exit_queued_event" || name == "app_exit_encrypted") {
+      if (name == "app_exit_encrypted") {
+        session.config.controlProtocolType = 13;
+        session.config.encryptionFlagsEnabled = stream::SS_ENC_CONTROL_V2;
+      }
+      stream::app_exit_once(&f.server);
+      // The service call dispatched an input event before sending output.
+      f.drain();
+      f.completed(true);
+    } else if (name == "app_still_running") {
+      stream::app_exit_once(&f.server, true);
+      f.drain();
+      require(session.state.load() == stream::session::state_e::RUNNING && f.peer.connected &&
+              f.peer.wire.empty() && !session.controlEnd.raised, "live app must keep its session");
+    } else if (name == "app_exit_roles") {
+      stream::session_t second_game, monitor, remote_input;
+      peer_t second_peer, monitor_peer, input_peer;
+      second_game.broadcast_ref = monitor.broadcast_ref = remote_input.broadcast_ref = session.broadcast_ref;
+      second_game.control.peer = &second_peer;
+      monitor.control.peer = &monitor_peer;
+      monitor.remote_role = remote_session::role_e::monitor;
+      remote_input.control.peer = &input_peer;
+      remote_input.remote_role = remote_session::role_e::input;
+      f.server._sessions->push_back(&second_game);
+      f.server._sessions->push_back(&monitor);
+      f.server._sessions->push_back(&remote_input);
+      f.server._peer_to_session->emplace(&second_peer, &second_game);
+      f.server._peer_to_session->emplace(&monitor_peer, &monitor);
+      f.server._peer_to_session->emplace(&input_peer, &remote_input);
+      f.server._host->peers.push_back(&second_peer);
+      f.server._host->peers.push_back(&monitor_peer);
+      f.server._host->peers.push_back(&input_peer);
+      stream::app_exit_once(&f.server);
+      f.drain();
+      f.completed(true);
+      require(second_peer.wire.size() == 1 && !second_peer.connected && second_game.controlEnd.raised,
+              "all connected game sessions must receive termination");
+      require(monitor_peer.connected && monitor_peer.wire.empty() && !monitor.controlEnd.raised &&
+              monitor.state.load() == stream::session::state_e::RUNNING,
+              "processless monitor must remain connected");
+      require(input_peer.connected && input_peer.wire.empty() && !remote_input.controlEnd.raised &&
+              remote_input.state.load() == stream::session::state_e::RUNNING,
+              "processless input must remain connected");
+    } else if (name == "devices_disconnect") {
       require(nvhttp::disconnect_client("target"), "Devices route did not report disconnect");
       require(session.client_disconnected && session.joined, "Devices disconnect must retain bookkeeping and join");
       f.completed(true);

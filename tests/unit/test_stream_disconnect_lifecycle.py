@@ -43,6 +43,7 @@ def program(root, revision=None):
     header = read("src/stream.h")
     rtsp = read("src/rtsp.cpp")
     rtsp_header = read("src/rtsp.h")
+    pending_policy = read("src/rtsp_pending_policy.cpp")
     nvhttp = read("src/nvhttp.cpp")
     route = block(rtsp, "client_disconnect_result_t disconnect_client(")
     termination_setup = stream[stream.index("    std::uint32_t termination_reason ="):
@@ -74,7 +75,10 @@ def program(root, revision=None):
         # its downstream-specific behavior out of this source test seam.
         "UPDATE_DEVICE": "",
         "SEND_TERMINATION": termination_setup + block(stream, "auto send_termination =") + ";",
+        "SEND_TERMINATION_APP_EXIT": termination_setup + block(stream, "auto send_termination =") + ";",
         "STOPPING": block(stream, "if (session->state.load(std::memory_order_acquire) == session::state_e::STOPPING)"),
+        "APP_EXIT": block(stream, "if (game_session_requires_shutdown)"),
+        "GAME_SESSION_REQUIRES_SHUTDOWN": block(pending_policy, "bool game_session_requires_shutdown("),
         "DISCONNECT": block(route, "for (auto &slot : to_cleanup)"),
         "NVHTTP_DISCONNECT": block(nvhttp, "bool disconnect_client(const std::string &uuid)"),
         "RTSP_DECLARATION": next(line.strip() for line in rtsp_header.splitlines()
@@ -94,6 +98,10 @@ def program(root, revision=None):
 
 
 CASES = (
+    "app_exit_queued_event",
+    "app_exit_encrypted",
+    "app_exit_roles",
+    "app_still_running",
     "devices_disconnect",
     "request_ownership",
     "graceful_delivery",
