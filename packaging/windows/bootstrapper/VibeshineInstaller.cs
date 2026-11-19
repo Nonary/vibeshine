@@ -157,6 +157,7 @@ namespace VibeshineInstaller {
     private readonly Border _installVirtualDisplaySection;
     private readonly Border _installVirtualGamepadSection;
     private readonly Border _installUsbIpTransportSection;
+    private readonly Border _installVibeSpeakersSection;
     private readonly TextBlock _installLocationTitleText;
     private readonly TextBlock _installLocationHintText;
     private readonly Grid _installPathGrid;
@@ -209,7 +210,6 @@ namespace VibeshineInstaller {
     private readonly bool _showInstallUsbIpTransportOption;
     private readonly bool _showVibeSpeakersOption;
     private readonly CheckBox _vibeSpeakersCheckBox;
-    private readonly TextBlock _vibeSpeakersDescription;
     private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
     private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
     private const uint SWP_NOMOVE = 0x0002;
@@ -784,6 +784,27 @@ namespace VibeshineInstaller {
         TextWrapping = TextWrapping.Wrap
       });
 
+      _installVibeSpeakersSection = new Border {
+        CornerRadius = new CornerRadius(10),
+        Padding = new Thickness(16),
+        Margin = new Thickness(0, 0, 0, 10),
+        Background = new SolidColorBrush(Color.FromArgb(44, 99, 102, 241)),
+        BorderBrush = new SolidColorBrush(Color.FromArgb(112, 128, 133, 255)),
+        BorderThickness = new Thickness(1)
+      };
+      contentStack.Children.Add(_installVibeSpeakersSection);
+
+      var vibeSpeakersStack = new StackPanel {
+        Orientation = Orientation.Vertical
+      };
+      _installVibeSpeakersSection.Child = vibeSpeakersStack;
+      vibeSpeakersStack.Children.Add(new TextBlock {
+        Text = "Vibe Speakers virtual audio device",
+        FontSize = 13,
+        FontWeight = FontWeights.SemiBold,
+        Foreground = new SolidColorBrush(Color.FromRgb(226, 235, 250)),
+        Margin = new Thickness(0, 0, 0, 6)
+      });
       _vibeSpeakersCheckBox = new CheckBox {
         Content = new TextBlock {
           Text = "Install Vibe Speakers virtual audio device",
@@ -792,16 +813,15 @@ namespace VibeshineInstaller {
         IsChecked = _arguments.InstallVibeSpeakersRequested,
         FontSize = 13,
         Foreground = new SolidColorBrush(Color.FromRgb(232, 239, 253)),
-        Margin = new Thickness(0, 10, 0, 6)
+        Margin = new Thickness(0, 0, 0, 6)
       };
-      _vibeSpeakersDescription = new TextBlock {
-        Text = "Enables virtual 7.1.4 surround sound capture for streaming. Installs the required signed USB/IP components if needed.",
+      vibeSpeakersStack.Children.Add(_vibeSpeakersCheckBox);
+      vibeSpeakersStack.Children.Add(new TextBlock {
+        Text = "Enables virtual 7.1.4 surround sound capture for streaming.",
         FontSize = 12,
         Foreground = new SolidColorBrush(Color.FromRgb(190, 208, 236)),
         TextWrapping = TextWrapping.Wrap
-      };
-      usbIpStack.Children.Add(_vibeSpeakersCheckBox);
-      usbIpStack.Children.Add(_vibeSpeakersDescription);
+      });
 
       var divider = new System.Windows.Shapes.Rectangle {
         Height = 1,
@@ -1663,6 +1683,7 @@ namespace VibeshineInstaller {
         _installVirtualDisplaySection.Visibility = Visibility.Collapsed;
         _installVirtualGamepadSection.Visibility = Visibility.Collapsed;
         _installUsbIpTransportSection.Visibility = Visibility.Collapsed;
+        _installVibeSpeakersSection.Visibility = Visibility.Collapsed;
         _continueButton.Visibility = Visibility.Collapsed;
         _uninstallButton.Visibility = Visibility.Visible;
         _uninstallButton.IsEnabled = allowUninstall;
@@ -1684,8 +1705,8 @@ namespace VibeshineInstaller {
       _installSection.Visibility = showInstallLocation ? Visibility.Visible : Visibility.Collapsed;
       _installVirtualDisplaySection.Visibility = _showInstallVirtualDisplayOption ? Visibility.Visible : Visibility.Collapsed;
       _installVirtualGamepadSection.Visibility = _showInstallVirtualGamepadOption ? Visibility.Visible : Visibility.Collapsed;
-      _installUsbIpTransportSection.Visibility = _showInstallUsbIpTransportOption || _showVibeSpeakersOption ? Visibility.Visible : Visibility.Collapsed;
-      _vibeSpeakersCheckBox.Visibility = _vibeSpeakersDescription.Visibility = _showVibeSpeakersOption ? Visibility.Visible : Visibility.Collapsed;
+      _installUsbIpTransportSection.Visibility = _showInstallUsbIpTransportOption ? Visibility.Visible : Visibility.Collapsed;
+      _installVibeSpeakersSection.Visibility = _showVibeSpeakersOption ? Visibility.Visible : Visibility.Collapsed;
       _vibeSpeakersCheckBox.IsEnabled = allowInstallInputs && _showVibeSpeakersOption;
       _uninstallButton.Visibility = hasInstalledProduct ? Visibility.Visible : Visibility.Collapsed;
       _continueButton.Visibility = Visibility.Visible;
