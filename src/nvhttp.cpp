@@ -5320,7 +5320,7 @@ launch_session->exact_target_hold.reset();
       return;
     }
     if (!prepared_display.output_name.empty()) {
-      config::set_runtime_output_name_override(prepared_display.output_name);
+      config::set_runtime_output_name_override_with_lease(prepared_display.output_name, launch_session->exclusive_private_capture);
       pending_output_override = prepared_display.output_name;
     }
 #endif
@@ -5422,6 +5422,15 @@ launch_session->exact_target_hold.reset();
       bool encoder_probe_failed = video::probe_encoders();
 #endif
 
+#ifdef __linux__
+      if (const auto capture_error = platf::linux_private_display::capture_start_error(*launch_session)) {
+        BOOST_LOG(error) << *capture_error;
+        tree.put("root.<xmlattr>.status_code", 503);
+        tree.put("root.<xmlattr>.status_message", *capture_error);
+        tree.put("root.gamesession", 0);
+        return;
+      }
+#endif
       if (encoder_probe_failed) {
         const std::string status_message = "Failed to initialize a video encoder on the selected adapter.";
         BOOST_LOG(error) << status_message;
@@ -5961,7 +5970,7 @@ launch_session->exact_target_hold.reset();
       return;
     }
     if (!prepared_display.output_name.empty()) {
-      config::set_runtime_output_name_override(prepared_display.output_name);
+      config::set_runtime_output_name_override_with_lease(prepared_display.output_name, launch_session->exclusive_private_capture);
       pending_output_override = prepared_display.output_name;
     }
 #endif
@@ -6093,6 +6102,15 @@ launch_session->exact_target_hold.reset();
       bool encoder_probe_failed = video::probe_encoders();
 #endif
 
+#ifdef __linux__
+      if (const auto capture_error = platf::linux_private_display::capture_start_error(*launch_session)) {
+        BOOST_LOG(error) << *capture_error;
+        tree.put("root.<xmlattr>.status_code", 503);
+        tree.put("root.<xmlattr>.status_message", *capture_error);
+        tree.put("root.resume", 0);
+        return;
+      }
+#endif
       if (encoder_probe_failed) {
         const std::string status_message = "Failed to initialize a video encoder on the selected adapter.";
         tree.put("root.resume", 0);
