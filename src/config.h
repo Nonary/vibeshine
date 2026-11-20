@@ -510,6 +510,9 @@ namespace config {
   extern stream_t stream;
   // One snapshot of the last completed apply; 0 preserves ENet defaults.
   std::chrono::milliseconds get_control_peer_timeout();
+  // app_resume_terminate from the last completed apply. Request handlers read
+  // this instead of `video`, which a hot apply resets and rewrites.
+  bool get_app_resume_terminate();
   extern nvhttp_t nvhttp;
   extern input_t input;
   extern frame_limiter_t frame_limiter;
