@@ -139,8 +139,8 @@ namespace rtsp_stream {
     bool virtual_display_detach_with_app;
     std::optional<config::video_t::virtual_display_mode_e> virtual_display_mode_override;
     std::optional<config::video_t::virtual_display_layout_e> virtual_display_layout_override;
+    bool explicit_virtual_display_override = false;
     std::optional<config::video_t::dd_t::config_option_e> dd_config_option_override;
-    bool virtual_display_preparation_override = false;  ///< Lift inherited VerifyOnly for a virtual target only.
     std::optional<std::string> output_name_override;
     bool display_config_preapplied = false;
     // Preserve startup-owned displays and deferred setup across app replacement,

@@ -54,18 +54,21 @@ namespace display_helper_integration::helpers {
     layout_flags_t describe_layout(const config::video_t::virtual_display_layout_e layout) {
       using enum display_helper_integration::VirtualDisplayArrangement;
       using Prep = display_device::SingleDisplayConfiguration::DevicePreparation;
+      const auto preparation = static_cast<Prep>(
+        request_policy::virtual_layout_preparation(static_cast<request_policy::VirtualDisplayLayout>(layout))
+      );
       switch (layout) {
         case config::video_t::virtual_display_layout_e::extended:
-          return {Extended, Prep::EnsureActive, false};
+          return {Extended, preparation, false};
         case config::video_t::virtual_display_layout_e::extended_primary:
-          return {ExtendedPrimary, Prep::EnsurePrimary, false};
+          return {ExtendedPrimary, preparation, false};
         case config::video_t::virtual_display_layout_e::extended_isolated:
-          return {ExtendedIsolated, Prep::EnsureActive, true};
+          return {ExtendedIsolated, preparation, true};
         case config::video_t::virtual_display_layout_e::extended_primary_isolated:
-          return {ExtendedPrimaryIsolated, Prep::EnsurePrimary, true};
+          return {ExtendedPrimaryIsolated, preparation, true};
         case config::video_t::virtual_display_layout_e::exclusive:
         default:
-          return {Exclusive, Prep::EnsureOnlyDisplay, false};
+          return {Exclusive, preparation, false};
       }
     }
 
@@ -113,8 +116,8 @@ namespace display_helper_integration::helpers {
       snapshot.virtual_display_failed = session.virtual_display_failed;
       snapshot.virtual_display_mode_override = session.virtual_display_mode_override;
       snapshot.virtual_display_layout_override = session.virtual_display_layout_override;
+      snapshot.explicit_virtual_display_override = session.explicit_virtual_display_override;
       snapshot.dd_config_option_override = session.dd_config_option_override;
-      snapshot.virtual_display_preparation_override = session.virtual_display_preparation_override;
       snapshot.output_name_override = session.output_name_override;
       snapshot.virtual_display_device_id = session.virtual_display_device_id;
       snapshot.virtual_display_ready_since = session.virtual_display_ready_since;
@@ -296,13 +299,6 @@ namespace display_helper_integration::helpers {
     if (auto runtime_output_override = config::runtime_output_name_override()) {
       effective_video_config_.output_name = *runtime_output_override;
     }
-    const auto effective_layout =
-      session_.virtual_display_layout_override.value_or(effective_video_config_.virtual_display_layout);
-    if ((session_.virtual_display || virtual_display_intended) &&
-        effective_video_config_.dd.configuration_option == config::video_t::dd_t::config_option_e::disabled &&
-        effective_layout == config::video_t::virtual_display_layout_e::exclusive) {
-      effective_video_config_.dd.configuration_option = config::video_t::dd_t::config_option_e::ensure_only_display;
-    }
   }
 
   std::optional<display_device::Resolution> SessionDisplayConfigurationHelper::initial_virtual_display_resolution() const {
@@ -454,22 +450,14 @@ namespace display_helper_integration::helpers {
     if (auto resolved = resolve_virtual_device_id(effective_video_config_, session_)) {
       target_device_id = *resolved;
     }
-    const auto target_policy = request_policy::evaluate({
-      .virtual_display = true,
-      .target_device_id = target_device_id,
-    });
-    if (!target_policy.dispatch) {
+    if (target_device_id.empty()) {
       BOOST_LOG(warning) << "Display helper: virtual display target identity is not ready; skipping display configuration changes to avoid targeting a physical display.";
       builder.set_action(DisplayApplyAction::Skip);
       return false;
     }
     vd_cfg.m_device_id = target_device_id;
     const auto layout_flags = describe_layout(layout);
-    // VerifyOnly validates an already active extended target without preparing
-    // topology or primary state. Mode/HDR policy remains independently parsed.
-    if (layout == config::video_t::virtual_display_layout_e::exclusive || effective_video_config_.dd.configuration_option != config::video_t::dd_t::config_option_e::verify_only) {
-      vd_cfg.m_device_prep = layout_flags.device_prep;
-    }
+    vd_cfg.m_device_prep = layout_flags.device_prep;
     if (minimum_fps > 0 && vd_cfg.m_refresh_rate &&
         !session_.framegen_fixed_refresh &&
         !session_.client_display_mode_override &&
@@ -541,9 +529,7 @@ namespace display_helper_integration::helpers {
         BOOST_LOG(info) << "Display helper applying standard display configuration.";
       }
 
-      if (session_.virtual_display &&
-          (layout == config::video_t::virtual_display_layout_e::exclusive ||
-           effective_video_config_.dd.configuration_option != config::video_t::dd_t::config_option_e::verify_only)) {
+      if (session_.virtual_display) {
         const auto layout_flags = describe_layout(layout);
         cfg_effective.m_device_prep = layout_flags.device_prep;
       }
@@ -633,13 +619,6 @@ namespace display_helper_integration::helpers {
     if (auto runtime_output_override = config::runtime_output_name_override()) {
       effective_video_config_.output_name = *runtime_output_override;
     }
-    const auto effective_layout =
-      session_.virtual_display_layout_override.value_or(effective_video_config_.virtual_display_layout);
-    if (session_.virtual_display &&
-        effective_video_config_.dd.configuration_option == config::video_t::dd_t::config_option_e::disabled &&
-        effective_layout == config::video_t::virtual_display_layout_e::exclusive) {
-      effective_video_config_.dd.configuration_option = config::video_t::dd_t::config_option_e::ensure_only_display;
-    }
   }
 
   void SessionMonitorPositionHelper::configure(DisplayApplyBuilder &builder) const {
@@ -680,9 +659,6 @@ namespace display_helper_integration::helpers {
     const auto effective_layout =
       session_.virtual_display_layout_override.value_or(effective_video_config_.virtual_display_layout);
     const auto layout_flags = describe_layout(effective_layout);
-    if (effective_layout != config::video_t::virtual_display_layout_e::exclusive && effective_video_config_.dd.configuration_option == config::video_t::dd_t::config_option_e::verify_only) {
-      return;
-    }
     const auto resolved_virtual_device_id = resolve_virtual_device_id(effective_video_config_, session_);
     const std::string topology_device_id =
       resolved_virtual_device_id && !resolved_virtual_device_id->empty() ? *resolved_virtual_device_id : default_device_id;
@@ -909,10 +885,10 @@ namespace display_helper_integration::helpers {
       .target_device_id = session.virtual_display_device_id,
     });
     if (!policy.dispatch) {
-      if (session.virtual_display && session.virtual_display_device_id.empty()) {
-        BOOST_LOG(warning) << "Display helper: virtual display target identity is not ready; deferring display configuration changes.";
+      if (effective_config_option == config::video_t::dd_t::config_option_e::disabled) {
+        BOOST_LOG(info) << "Display helper: display automation is disabled; using capture target only.";
       } else {
-        BOOST_LOG(info) << "Display helper: physical output override with display configuration disabled; using capture target only.";
+        BOOST_LOG(warning) << "Display helper: virtual display target identity is not ready; deferring display configuration changes.";
       }
       return std::nullopt;
     }

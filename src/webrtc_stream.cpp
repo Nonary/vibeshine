@@ -50,6 +50,7 @@
 #endif
 
 // local includes
+#include "app_display_policy.h"
 #include "audio.h"
 #include "config.h"
 #include "crypto.h"
@@ -216,14 +217,18 @@ namespace webrtc_stream {
       };
 
       std::optional<std::string> app_output_override;
+      auto target_override = proc::display_policy::app_override_e::inherit;
       if (session->output_name_override) {
         app_output_override = boost::algorithm::trim_copy(*session->output_name_override);
       }
 
       if (app_output_override && !app_output_override->empty() && VDISPLAY::is_virtual_display_selection(*app_output_override)) {
         session->virtual_display = true;
+        target_override = proc::display_policy::app_override_e::virtual_display;
         app_output_override.reset();
         session->output_name_override.reset();
+      } else if (app_output_override) {
+        target_override = proc::display_policy::app_override_e::physical;
       }
       session->virtual_display_recreated_on_demand = false;
       session->virtual_display_needs_resume_apply = false;
@@ -235,8 +240,9 @@ namespace webrtc_stream {
           *session->virtual_display_mode_override != config::video_t::virtual_display_mode_e::disabled;
       }
       const bool metadata_requests_virtual = session->app_metadata && session->app_metadata->virtual_screen;
-      bool request_virtual_display =
-        session->virtual_display || config_requests_virtual || metadata_requests_virtual;
+      bool request_virtual_display = proc::display_policy::resolve_virtual_display_request(
+        session->virtual_display || config_requests_virtual || metadata_requests_virtual, target_override
+      ) || session->client_requests_virtual_display;
       const auto requested_virtual_display_mode =
         session->virtual_display_mode_override.value_or(config::video.virtual_display_mode);
       const bool shared_virtual_display_mode =
@@ -658,9 +664,11 @@ namespace webrtc_stream {
             recovery_session->virtual_display_hdr_enabled = result.hdr_enabled;
             if (recovery_session->virtual_display) {
               constexpr int kMaxApplyAttempts = 5;
+              const auto preparation = proc::display_policy::effective_preparation(config::video.dd.configuration_option, *recovery_session);
+              const bool configure_display = preparation != config::video_t::dd_t::config_option_e::disabled;
               bool applied = false;
 
-              for (int attempt = 1; attempt <= kMaxApplyAttempts; ++attempt) {
+              for (int attempt = 1; configure_display && attempt <= kMaxApplyAttempts; ++attempt) {
                 if (cancelled()) {
                   return {};
                 }
@@ -713,7 +721,7 @@ namespace webrtc_stream {
                 return {};
               }
               BOOST_LOG(info) << "Virtual display recovery: requested WebRTC capture reinit to pick up recreated display"
-                              << (applied ? "." : " (apply did not succeed).");
+                              << (!configure_display || applied ? "." : " (apply did not succeed).");
             }
             std::function<void()> rollback_output_override;
             if (recovery_output_override_lease) {
@@ -3105,15 +3113,13 @@ namespace webrtc_stream {
       }
 
       // Resolve display preparation after client and application fields.
-      const auto display_preparation = proc::display_policy::resolve_preparation(
-        config::video.dd.configuration_option,
-        launch_session->dd_config_option_override,
-        options.client_uuid ? proc::display_policy::preparation_override(nvhttp::get_client_config_overrides(*options.client_uuid)) : std::nullopt,
-        false,
-        proc::display_policy::virtual_display_override(*launch_session).value_or(false)
-      );
-      launch_session->dd_config_option_override = display_preparation.option;
-      launch_session->virtual_display_preparation_override = display_preparation.virtual_override;
+      if (options.client_uuid) {
+        nvhttp::apply_client_display_routing(*launch_session, *options.client_uuid);
+        if (const auto option = proc::display_policy::preparation_override(nvhttp::get_client_config_overrides(*options.client_uuid))) {
+          launch_session->dd_config_option_override = option;
+        }
+      }
+      launch_session->explicit_virtual_display_override = proc::display_policy::has_virtual_display_override(*launch_session);
 
       auto key = crypto::rand(16);
       launch_session->gcm_key.assign(key.begin(), key.end());

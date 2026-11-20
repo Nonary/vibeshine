@@ -67,6 +67,7 @@
 #include "remote_session.h"
 #include "remote_display_topology.h"
 #include "platform/common.h"
+#include "platform/windows/virtual_display_policy.h"
 #include "pyrowave_protocol.h"
 #include "pyrowave_udp_probe.h"
 #include "state_storage.h"
@@ -1300,9 +1301,11 @@ namespace nvhttp {
           recovery_session->virtual_display_hdr_enabled = result.hdr_enabled;
           if (recovery_session->virtual_display) {
             constexpr int kMaxApplyAttempts = 5;
+            const auto preparation = proc::display_policy::effective_preparation(config::video.dd.configuration_option, *recovery_session);
+            const bool configure_display = preparation != config::video_t::dd_t::config_option_e::disabled;
             bool applied = false;
 
-            for (int attempt = 1; attempt <= kMaxApplyAttempts; ++attempt) {
+            for (int attempt = 1; configure_display && attempt <= kMaxApplyAttempts; ++attempt) {
               if (cancelled()) {
                 return {};
               }
@@ -1359,7 +1362,7 @@ namespace nvhttp {
               return {};
             }
             BOOST_LOG(info) << "Virtual display recovery: requested capture reinit to pick up recreated display"
-                            << (applied ? "." : " (apply did not succeed).");
+                            << (!configure_display || applied ? "." : " (apply did not succeed).");
           }
           std::function<void()> rollback_output_override;
           if (recovery_output_override_lease) {
@@ -3064,6 +3067,25 @@ namespace nvhttp {
     return std::nullopt;
   }
 
+  void apply_client_display_routing(rtsp_stream::launch_session_t &session, const named_cert_t &client) {
+    session.client_requests_virtual_display = client.always_use_virtual_display;
+    if (!client.output_name_override.empty()) {
+      session.output_name_override = client.output_name_override;
+    }
+    if (const auto mode = parse_virtual_display_mode_override(client.virtual_display_mode_override)) {
+      session.virtual_display_mode_override = mode;
+    }
+    if (const auto layout = parse_virtual_display_layout_override(client.virtual_display_layout_override)) {
+      session.virtual_display_layout_override = layout;
+    }
+  }
+
+  void apply_client_display_routing(rtsp_stream::launch_session_t &session, const std::string &uuid) {
+    if (const auto client = get_named_cert_by_uuid(uuid)) {
+      apply_client_display_routing(session, *client);
+    }
+  }
+
   /**
    * @brief Capture display-warning intent from the same snapshots used by session assembly.
    * @param args Original request; only literal virtualDisplay=0 requests this warning.
@@ -3186,7 +3208,8 @@ namespace nvhttp {
     bool allow_display_changes = true,
     const resolved_client_identity_t *resolved_client_identity = nullptr,
     bool use_app_color_preference = true,
-    bool include_identity_log_fields = true
+    bool include_identity_log_fields = true,
+    int resuming_app_id = 0
   ) {
     auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
 
@@ -3371,21 +3394,8 @@ namespace nvhttp {
     }
 
     if (client_settings) {
-      launch_session->client_requests_virtual_display = client_settings->always_use_virtual_display;
+      apply_client_display_routing(*launch_session, *client_settings);
       launch_session->requested_resolution_only = client_settings->requested_resolution_only;
-      if (!client_settings->output_name_override.empty()) {
-        launch_session->output_name_override = client_settings->output_name_override;
-      }
-      if (!client_settings->virtual_display_mode_override.empty()) {
-        if (auto parsed_mode = parse_virtual_display_mode_override(client_settings->virtual_display_mode_override)) {
-          launch_session->virtual_display_mode_override = *parsed_mode;
-        }
-      }
-      if (!client_settings->virtual_display_layout_override.empty()) {
-        if (auto parsed_layout = parse_virtual_display_layout_override(client_settings->virtual_display_layout_override)) {
-          launch_session->virtual_display_layout_override = *parsed_layout;
-        }
-      }
       if (!client_settings->hdr_profile.empty()) {
         launch_session->hdr_profile = client_settings->hdr_profile;
       }
@@ -3397,8 +3407,6 @@ namespace nvhttp {
         launch_session->virtual_display_mode_override = config::video_t::virtual_display_mode_e::disabled;
       }
     }
-
-    const auto client_virtual_display_override = proc::display_policy::virtual_display_override(*launch_session);
 
     const auto scale_factor = util::from_view(get_arg(args, "scaleFactor", "100"));
     if (scale_factor > 0 && scale_factor != 100 && launch_session->width > 0 && launch_session->height > 0) {
@@ -3444,8 +3452,11 @@ namespace nvhttp {
     const auto launch_identity_control = remote_session::identify(
       util::from_view(launch_appid_arg), launch_appuuid_arg, proc::proc.current_app_id(), remote_configured_catalogue(proc::proc.get_apps())
     );
-    auto launch_app_ctx = launch_identity_control == remote_session::control_e::none ?
-      proc::proc.resolve_app(launch_appid_arg, launch_appuuid_arg) : std::nullopt;
+    auto launch_app_ctx = resuming_app_id > 0 ?
+                           proc::proc.resolve_app(resuming_app_id) :
+                         launch_identity_control == remote_session::control_e::none ?
+                           proc::proc.resolve_app(launch_appid_arg, launch_appuuid_arg) :
+                           std::nullopt;
     launch_session->client_display_warning_requested = client_display_warning_requested(args, client_settings, launch_app_ctx);
     launch_session->appid = launch_app_ctx ? (int) util::from_view(launch_app_ctx->id) : (int) util::from_view(launch_appid_arg);
     if (launch_app_ctx || (launch_identity_control == remote_session::control_e::none && launch_session->appid > 0)) {
@@ -3490,15 +3501,12 @@ namespace nvhttp {
     }
 
     // Resolve display preparation after client and application fields.
-    const auto display_preparation = proc::display_policy::resolve_preparation(
-      config::video.dd.configuration_option,
-      launch_session->dd_config_option_override,
-      client_settings ? proc::display_policy::preparation_override(client_settings->config_overrides) : std::nullopt,
-      client_virtual_display_override.value_or(false),
-      client_virtual_display_override.value_or(proc::display_policy::virtual_display_override(*launch_session).value_or(false))
-    );
-    launch_session->dd_config_option_override = display_preparation.option;
-    launch_session->virtual_display_preparation_override = display_preparation.virtual_override;
+    launch_session->explicit_virtual_display_override = proc::display_policy::has_virtual_display_override(*launch_session);
+    if (client_settings) {
+      if (const auto option = proc::display_policy::preparation_override(client_settings->config_overrides)) {
+        launch_session->dd_config_option_override = option;
+      }
+    }
 
     launch_session->framegen_refresh_rate.reset();
     launch_session->framegen_refresh_millihz.reset();
@@ -5762,7 +5770,10 @@ launch_session->exact_target_hold.reset();
       request_audio_hold.before(disarm_startup_restore);
     }
 #endif
-    const auto launch_session = make_launch_session(host_audio, args, request, allow_session_display_changes, &request_client_identity, true, dispatch::include_request_identity_log_fields(trace_id));
+    const auto launch_session = make_launch_session(
+      host_audio, args, request, allow_session_display_changes, &request_client_identity,
+      true, dispatch::include_request_identity_log_fields(trace_id), current_appid
+    );
 #ifndef _WIN32
     if (launch_session->requested_resolution_only) {
       tree.put("root.<xmlattr>.status_code", 503);
@@ -5836,8 +5847,8 @@ launch_session->exact_target_hold.reset();
       launch_session->client_virtual_display_override.reset();
       launch_session->virtual_display_mode_override = config::video_t::virtual_display_mode_e::disabled;
       launch_session->virtual_display_layout_override.reset();
+      launch_session->explicit_virtual_display_override = false;
       launch_session->dd_config_option_override.reset();
-      launch_session->virtual_display_preparation_override = false;
       launch_session->output_name_override.reset();
       launch_session->virtual_display_guid_bytes.fill(0);
       launch_session->virtual_display_device_id.clear();

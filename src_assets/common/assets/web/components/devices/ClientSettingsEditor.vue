@@ -275,8 +275,17 @@ const visibleOverrideDisplaySelection = computed<ClientDisplaySelection | undefi
   draft.displayOverrideEnabled ? draft.displaySelection : undefined,
 );
 
+const hasVirtualDisplayOverride = computed(
+  () =>
+    visibleOverrideDisplaySelection.value === 'virtual' &&
+    (draft.virtualDisplayLayout !== null ||
+      draft.virtualDisplayMode === 'per_client' ||
+      draft.virtualDisplayMode === 'shared'),
+);
+
 const hiddenOverrideKeys = computed(() =>
-  draft.displayOverrideEnabled && draft.displaySelection === 'physical'
+  visibleOverrideDisplaySelection.value === 'physical' ||
+  (isWindows.value && hasVirtualDisplayOverride.value)
     ? ['dd_configuration_option']
     : [],
 );
@@ -641,6 +650,9 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
             </select>
           </SettingRow>
 
+          <p v-if="isWindows && hasVirtualDisplayOverride" class="client-settings-helper">
+            {{ t('config.virtual_display_layout_override_hint') }}
+          </p>
           <p class="client-settings-helper">
             {{
               t('ui.devices.editor.common_display_summary', {

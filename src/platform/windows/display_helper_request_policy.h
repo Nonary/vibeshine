@@ -1,5 +1,7 @@
 #pragma once
 
+#include "src/display_device_policy.h"
+
 #include <functional>
 #include <optional>
 #include <string>
@@ -21,12 +23,7 @@ namespace display_helper_integration::request_policy {
     ExtendedPrimaryIsolated,
   };
 
-  enum class DevicePreparation {
-    VerifyOnly,
-    EnsureActive,
-    EnsurePrimary,
-    EnsureOnlyDisplay,
-  };
+  using DevicePreparation = display_device::policy::device_preparation_e;
 
   struct Resolution {
     int width = 0;
@@ -75,5 +72,6 @@ namespace display_helper_integration::request_policy {
     const std::vector<std::vector<std::string>> &active_physical_topology
   );
 
+  [[nodiscard]] DevicePreparation virtual_layout_preparation(VirtualDisplayLayout layout);
   [[nodiscard]] Result evaluate(const Input &input);
 }  // namespace display_helper_integration::request_policy

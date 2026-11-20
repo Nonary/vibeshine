@@ -25,6 +25,10 @@
 #include "nvhttp_server.h"
 #include "thread_safe.h"
 
+namespace rtsp_stream {
+  struct launch_session_t;
+}
+
 /**
  * @brief Contains all the functions and variables related to the nvhttp (GameStream) server.
  */
@@ -261,6 +265,7 @@ namespace nvhttp {
    * @brief Get a copy of a client's runtime config overrides.
    */
   std::unordered_map<std::string, std::string> get_client_config_overrides(const std::string &uuid);
+  void apply_client_display_routing(rtsp_stream::launch_session_t &session, const std::string &uuid);
 
   /**
    * @brief Encoder capabilities safe to expose to the browser WebRTC UI.
