@@ -6,6 +6,10 @@
 
 // local includes
 #include "audio_context.h"
+#include "audio_delivery.h"
+#include "audio_packet.h"
+#include "audio_packet_queue.h"
+#include "audio_encoder.h"
 #include "audio_display_transition.h"
 #include "platform/common.h"
 #include "thread_safe.h"
@@ -15,6 +19,7 @@
 #include <string_view>
 
 namespace audio {
+  packet_queue_policy_t configured_packet_queue_policy();
   enum stream_config_e : int {
     STEREO,  ///< Stereo
     HIGH_STEREO,  ///< High stereo
@@ -22,6 +27,7 @@ namespace audio {
     HIGH_SURROUND51,  ///< High surround 5.1
     SURROUND71,  ///< Surround 7.1
     HIGH_SURROUND71,  ///< High surround 7.1
+    SURROUND714,  ///< Optional normal 12/8/4 discrete test profile
     MAX_STREAM_CONFIG  ///< Maximum audio stream configuration
   };
 
@@ -38,7 +44,7 @@ namespace audio {
     int channelCount;
     int streams;
     int coupledStreams;
-    std::uint8_t mapping[8];
+    std::uint8_t mapping[12];
   };
 
   extern opus_stream_config_t stream_configs[MAX_STREAM_CONFIG];
@@ -64,10 +70,15 @@ namespace audio {
     bool use_ac3 {false};  ///< Encode audio as AC-3 instead of Opus for this streaming session.
     bool use_eac3 {false};  ///< Encode audio as E-AC-3 instead of Opus for this streaming session.
     bool high_quality_dolby {false};  ///< Higher bitrate for Dolby only; ignored for Opus.
+    int session_bitrate = 0;
+    std::shared_ptr<const session_profile_t> validated;
+    std::shared_ptr<delivery_state_t> delivery;
   };
 
-  using buffer_t = util::buffer_t<std::uint8_t>;
-  using packet_t = std::pair<void *, buffer_t>;
+  std::shared_ptr<void> prepare_usb_before_launch(unsigned channels, unsigned mask);
+  bool discrete_source_enabled();
+  bool discrete_714_available(std::string &reason);
+  bool prepare_session(config_t &config, std::string &reason);
 
   void capture(safe::mail_t mail, config_t config, void *channel_data);
 

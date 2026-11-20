@@ -23,9 +23,15 @@ extern "C" {
 #include "audio_lifecycle_policy.h"
 #include "audio_lifecycle_state.h"
 #include "audio_policy.h"
+#include "audio_protocol.h"
+#include "audio_source_lifecycle.h"
+#include "audio_usb_mmcss.h"
+#include "audio_usb_validation.h"
+#include "audio_transport.h"
 #include "config.h"
 #include "globals.h"
 #include "logging.h"
+#include "audio_usb_metrics.h"
 #include "platform/common.h"
 #include "process.h"
 #include "thread_safe.h"
@@ -34,7 +40,6 @@ extern "C" {
 
 namespace audio {
   using namespace std::literals;
-  using opus_t = util::safe_ptr<OpusMSEncoder, opus_multistream_encoder_destroy>;
   using sample_queue_t = std::shared_ptr<safe::queue_t<std::vector<float>>>;
 
   static void apply_surround_params(opus_stream_config_t &stream, const stream_params_t &params);
@@ -65,56 +70,147 @@ namespace audio {
 
   // NOTE: If you adjust the bitrates listed here, make sure to update the
   // corresponding bitrate adjustment logic in rtsp_stream::cmd_announce()
+  static opus_stream_config_t standard_stream(int channels,bool quality,const std::uint8_t *mapping) {
+    session_profile_t profile;
+    standard_opus_profile(channels,quality,profile);
+    return {profile.sample_rate,profile.channels,profile.streams,profile.coupled,mapping,profile.bitrate};
+  }
   opus_stream_config_t stream_configs[MAX_STREAM_CONFIG] {
-    {
-      SAMPLE_RATE,
-      2,
-      1,
-      1,
-      platf::speaker::map_stereo,
-      96000,
-    },
-    {
-      SAMPLE_RATE,
-      2,
-      1,
-      1,
-      platf::speaker::map_stereo,
-      512000,
-    },
-    {
-      SAMPLE_RATE,
-      6,
-      4,
-      2,
-      platf::speaker::map_surround51,
-      256000,
-    },
-    {
-      SAMPLE_RATE,
-      6,
-      6,
-      0,
-      platf::speaker::map_surround51,
-      1536000,
-    },
-    {
-      SAMPLE_RATE,
-      8,
-      5,
-      3,
-      platf::speaker::map_surround71,
-      450000,
-    },
-    {
-      SAMPLE_RATE,
-      8,
-      8,
-      0,
-      platf::speaker::map_surround71,
-      2048000,
-    },
+    standard_stream(2,false,platf::speaker::map_stereo),standard_stream(2,true,platf::speaker::map_stereo),
+    standard_stream(6,false,platf::speaker::map_surround51),standard_stream(6,true,platf::speaker::map_surround51),
+    standard_stream(8,false,platf::speaker::map_surround71),standard_stream(8,true,platf::speaker::map_surround71),
+    standard_stream(12,false,platf::speaker::map_surround714),
   };
+  bool discrete_source_enabled() {
+    return !startup::shared_context_allowed(config::audio_714_startup_settings());
+  }
+  packet_queue_policy_t configured_packet_queue_policy() {
+    return packet_queue_policy(config::audio_714_startup_settings().source=="vibe_usb");
+  }
+  usb_launch_config_t usb_launch_settings(const startup::settings_t& settings) {
+    return usb_session_t::bundled_configuration({settings.usb.bridge_executable,settings.usb.bridge_sha256,settings.usb.controller_instance,
+            settings.usb_evidence_root,settings.usb_session_seconds,false,false});
+  }
+
+  std::shared_ptr<void> prepare_usb_before_launch(unsigned channels,unsigned mask) {
+    const auto settings=config::audio_714_startup_settings();
+    if(settings.source!="vibe_usb")return {};
+    const bool pcm16=settings.usb.sample_format=="pcm16";
+    const atmos_format_t format{channels,mask,static_cast<std::uint16_t>(pcm16?16:32),static_cast<std::uint16_t>(pcm16?16:24)};
+    std::string preparation_error;
+    auto session=usb_session_t::acquire(usb_launch_settings(settings),format,preparation_error);
+    if(!session)BOOST_LOG(error)<<"Vibe Speakers profile preparation failed: "<<preparation_error;
+    return session;
+  }
+
+  bool discrete_714_available(std::string &reason) {
+    reason.clear();
+#ifndef _WIN32
+    reason = "unavailable_12ch: this platform has not been validated";
+    return false;
+#else
+    const auto &settings = config::audio_714_startup_settings();
+    if (!config::audio.stream || !protocol::valid_714_bitrate(settings.bitrate)) {
+      reason = "unavailable_12ch: audio disabled or invalid fixed 12ch bitrate";
+      return false;
+    }
+    if(settings.source=="vibe_usb")return usb_session_t::configured(usb_launch_settings(settings),reason);
+    reason = "unavailable_12ch: select the configured Vibe Speakers input";
+    return false;
+#endif
+  }
+
+  bool prepare_session(config_t &config, std::string &reason) {
+    reason.clear();
+    const auto usb_channels = static_cast<unsigned>(config.channels);
+    const auto usb_mask = config.channels == 12 ? protocol::discrete_wave_mask : static_cast<std::uint32_t>(config.mask);
+    if (config.packetDuration <= 0 || config.packetDuration > 120) {
+      reason = "invalid audio packet duration";
+      return false;
+    }
+    if (!config.use_ac3 && !config.use_eac3 && !config.bypass_opus &&
+        config.packetDuration != 5 && config.packetDuration != 10 && config.packetDuration != 20 &&
+        config.packetDuration != 40 && config.packetDuration != 60) {
+      reason = "unsupported Opus packet duration";
+      return false;
+    }
+    if (config.validated) {
+      const auto &p=*config.validated;
+      if(p.source_kind=="user_mode_usb"&&(p.usb.format.channels!=usb_channels||
+         p.usb.format.channel_mask!=usb_mask||
+         config.packetDuration!=5||config.use_ac3||config.use_eac3||config.bypass_opus)) {
+        reason="USB session profile/codec changed after validation";return false;
+      }
+      if (config.validated->channels != config.channels || config.validated->frame_size != config.packetDuration * 48 ||
+          config.validated->bitrate != config.session_bitrate ||
+          (config.channels == 12 && (!config.delivery || !protocol::validate_714_request(config.channels, static_cast<std::uint32_t>(config.mask),
+            config.packetDuration, config.flags[config_t::HIGH_QUALITY], std::nullopt)))) {
+        reason = "audio session changed after validation";
+        return false;
+      }
+      return true;
+    }
+    const auto index = map_stream(config.channels, config.flags[config_t::HIGH_QUALITY]);
+    if (index < 0 || index >= MAX_STREAM_CONFIG) {
+      reason = "unsupported audio channel/quality profile";
+      return false;
+    }
+    if (config.channels != 12 && discrete_source_enabled() && config::audio_714_startup_settings().source!="vibe_usb") {
+      reason = "isolated 12ch source mode accepts only negotiated 12ch sessions";
+      return false;
+    }
+    auto stream = stream_configs[index];
+    if (config.flags[config_t::CUSTOM_SURROUND_PARAMS]) {
+      const auto &custom = config.customStreamParams;
+      if (custom.channelCount != config.channels || custom.streams <= 0 || custom.streams > config.channels ||
+          custom.coupledStreams < 0 || custom.coupledStreams > custom.streams ||
+          custom.streams + custom.coupledStreams != config.channels ||
+          std::any_of(std::begin(custom.mapping), std::begin(custom.mapping) + config.channels,
+            [&](auto channel) { return channel >= config.channels; })) {
+        reason = "invalid custom audio layout";
+        return false;
+      }
+      apply_surround_params(stream, custom);
+    }
+    session_profile_t profile;
+    profile.sample_rate = stream.sampleRate;
+    profile.channels = stream.channelCount;
+    profile.streams = stream.streams;
+    profile.coupled = stream.coupledStreams;
+    profile.mapping.fill(0);
+    std::copy_n(stream.mapping, stream.channelCount, profile.mapping.begin());
+    profile.bitrate = stream.bitrate;
+    profile.frame_size = config.packetDuration * stream.sampleRate / 1000;
+    if (config.channels == 12) {
+      const policy::stream_layout_t layout {profile.channels, profile.streams, profile.coupled, profile.mapping};
+      if (!protocol::validate_714_request(config.channels, static_cast<std::uint32_t>(config.mask), config.packetDuration,
+            config.flags[config_t::HIGH_QUALITY], layout) || config.use_ac3 || config.use_eac3 || config.bypass_opus ||
+          !discrete_714_available(reason)) {
+        if (reason.empty()) reason = "unsupported 12ch session contract";
+        return false;
+      }
+      const auto &settings = config::audio_714_startup_settings();
+      profile.bitrate = settings.bitrate;
+      config.delivery = std::make_shared<delivery_state_t>();
+    }
+    const auto &atmos_settings=config::audio_714_startup_settings();
+    if(atmos_settings.source=="vibe_usb") {
+      if(config.packetDuration!=5||config.use_ac3||config.use_eac3||config.bypass_opus||
+         (atmos_settings.usb.sample_format!="pcm24"&&atmos_settings.usb.sample_format!="pcm16")) {
+        reason="USB input requires exact 48kHz/240-frame Opus and pcm24 or pcm16; no fallback";return false;
+      }
+      profile.source_kind="user_mode_usb";profile.usb=atmos_settings.usb;profile.source_path=profile.usb.endpoint;
+      profile.usb_launch=usb_launch_settings(atmos_settings);
+      profile.usb.format.channels = usb_channels;
+      profile.usb.format.channel_mask = usb_mask;
+      profile.usb.format.container_bits=profile.usb.sample_format=="pcm24"?32:16;profile.usb.format.valid_bits=profile.usb.sample_format=="pcm24"?24:16;
+      if(!profile.usb.format.valid()||!usb_session_t::configured(profile.usb_launch,reason))return false;
+      if(!config.delivery)config.delivery=std::make_shared<delivery_state_t>();
+    }
+    config.session_bitrate = profile.bitrate;
+    config.validated = std::make_shared<const session_profile_t>(std::move(profile));
+    return true;
+  }
 
   /**
    * @brief Encode one interleaved stereo or 5.1 float PCM frame as an AC-3-family access unit.
@@ -245,11 +341,14 @@ namespace audio {
   };
 
   void encodeThread(sample_queue_t samples, config_t config, void *channel_data) {
-    auto packets = mail::man->queue<packet_t>(mail::audio_packets);
-    auto stream = stream_configs[map_stream(config.channels, config.flags[config_t::HIGH_QUALITY])];
-    if (config.flags[config_t::CUSTOM_SURROUND_PARAMS]) {
-      apply_surround_params(stream, config.customStreamParams);
+    auto packets = acquire_packet_queue<packet_t>(mail::man,mail::audio_packets,configured_packet_queue_policy());
+    std::string error_message;
+    if (!prepare_session(config, error_message)) {
+      BOOST_LOG(error) << "Audio session rejected: " << error_message;
+      samples->stop();
+      return;
     }
+    const auto &profile = *config.validated;
 
     // Encoding takes place on this thread
     platf::set_thread_name("audio::encode");
@@ -294,35 +393,28 @@ namespace audio {
       return;
     }
 
-    opus_t opus {opus_multistream_encoder_create(
-      stream.sampleRate,
-      stream.channelCount,
-      stream.streams,
-      stream.coupledStreams,
-      stream.mapping,
-      OPUS_APPLICATION_RESTRICTED_LOWDELAY,
-      nullptr
-    )};
+    opus_encoder_t opus;
+    if (!opus.initialize(profile, error_message)) {
+      BOOST_LOG(error) << "Couldn't initialize Opus: " << error_message;
+      samples->stop();
+      return;
+    }
+    BOOST_LOG(info) << "Opus initialized: " << profile.sample_rate / 1000 << " kHz, "
+                    << profile.channels << " channels, " << profile.bitrate / 1000
+                    << " kbps (total), LOWDELAY CBR, " << opus.version();
 
-    opus_multistream_encoder_ctl(opus.get(), OPUS_SET_BITRATE(stream.bitrate));
-    opus_multistream_encoder_ctl(opus.get(), OPUS_SET_VBR(0));
-
-    BOOST_LOG(info) << "Opus initialized: "sv << stream.sampleRate / 1000 << " kHz, "sv
-                    << stream.channelCount << " channels, "sv
-                    << stream.bitrate / 1000 << " kbps (total), LOWDELAY"sv;
-
-    auto frame_size = config.packetDuration * stream.sampleRate / 1000;
+    auto frame_size = profile.frame_size;
     while (auto sample = samples->pop()) {
       buffer_t packet {1400};
 
       if (webrtc_stream::has_active_sessions() && channel_data == nullptr) {
-        webrtc_stream::submit_audio_frame(*sample, stream.sampleRate, stream.channelCount, frame_size);
+        webrtc_stream::submit_audio_frame(*sample, profile.sample_rate, profile.channels, frame_size);
       }
 
-      int bytes = opus_multistream_encode_float(opus.get(), sample->data(), frame_size, std::begin(packet), (opus_int32) packet.size());
+      int bytes = opus.encode(*sample, {std::begin(packet), packet.size()}, error_message);
       if (bytes < 0) {
-        BOOST_LOG(error) << "Couldn't encode audio: "sv << opus_strerror(bytes);
-        packets->stop();
+        BOOST_LOG(error) << "Couldn't encode audio: " << error_message;
+        samples->stop();
 
         return;
       }
@@ -332,16 +424,247 @@ namespace audio {
     }
   }
 
+  // Project Atmos owns a format lease and the existing routing context; the
+  // isolated native/synthetic 12ch paths do not. There is no extra PCM queue:
+  // source -> production encoder -> existing production packet queue.
+  static void capture_discrete(safe::mail_t mail, const config_t &config, void *channel_data) {
+    auto shutdown = mail->event<bool>(mail::shutdown);
+    auto stop = util::fail_guard([&] { shutdown->raise(true); });
+    auto packets = acquire_packet_queue<packet_t>(mail::man,mail::audio_packets,configured_packet_queue_policy());
+    auto retire_delivery = util::fail_guard([&] {
+      // First join any sender still using this session. A packet popped just
+      // before this close keeps the shared gate and must skip its raw pointer.
+      config.delivery->close();
+      packets->discard_if([&](const packet_t &packet) { return packet.delivery == config.delivery; });
+    });
+    const auto &profile = *config.validated;
+    static source_admission_t source_admission;
+    auto source_lease = source_admission.try_acquire();
+    if (!source_lease) {
+      BOOST_LOG(error) << profile.channels << "ch source already in use; refusing a second source owner";
+      return;
+    }
+    const bool fixed_ingress = profile.source_kind=="user_mode_usb";
+    if (profile.source_kind == "user_mode_usb" && profile.usb.format.channels != static_cast<unsigned>(profile.channels)) {
+      BOOST_LOG(error) << "USB capture channel count differs from negotiated encoder profile";
+      return;
+    }
+    usb_lab_metrics lab_metrics(profile.usb.format);
+    if (fixed_ingress) packets->preallocate();
+    std::shared_ptr<usb_session_t> managed_usb;
+    auto live_usb=profile.usb;
+    const auto stop_owned_usb = [&] {
+      if (managed_usb && !managed_usb->stop()) {
+        BOOST_LOG(error) << "Vibe Speakers USB session cleanup incomplete: " << managed_usb->error();
+      }
+    };
+    auto restore_usb = util::fail_guard(stop_owned_usb);
+    if(profile.source_kind=="user_mode_usb") {
+      std::string start_error;
+      managed_usb=usb_session_t::acquire(profile.usb_launch,profile.usb.format,start_error,[&]{return shutdown->peek();});
+      if(!managed_usb) {
+        BOOST_LOG(error)<<"Vibe Speakers USB owned session could not start: "<<start_error;return;
+      }
+      live_usb=managed_usb->source();
+    }
+    opus_encoder_t encoder;
+    std::string error_message;
+    if (!encoder.initialize(profile, error_message)) {
+      BOOST_LOG(error) << profile.channels << "ch encoder initialization failed: " << error_message;
+      return;
+    }
+    auto usb=std::make_unique<usb_source_t>(live_usb);
+    if(!usb->connect()){BOOST_LOG(error)<<"Vibe Speakers USB unavailable: "<<usb->error();return;}
+    usb_mmcss_t usb_mmcss;
+    auto revert_usb_mmcss=util::fail_guard([&] {
+      if(usb_mmcss.status().registered){
+        const bool reverted=usb_mmcss.close();const auto& m=usb_mmcss.status();
+        BOOST_LOG(info)<<"USB encoder MMCSS thread="<<m.thread_id<<" task="<<m.task_index<<" registered="<<m.registered<<" reverted="<<reverted<<" revert_error="<<m.revert_error;
+        if(!reverted)BOOST_LOG(error)<<"USB encoder MMCSS restoration failed; capture thread is ending";
+      }
+    });
+    if(usb&&!usb_mmcss.start()){
+      BOOST_LOG(error)<<"USB encoder MMCSS Audio registration failed: "<<usb_mmcss.status().register_error;return;
+    }
+    auto [initial_depth, capacity] = packets->occupancy();
+    if(usb&&capacity!=4){BOOST_LOG(error)<<"USB production packet queue capacity is not the required four blocks";return;}
+    BOOST_LOG(info) << "Audio source=" << profile.source_kind << " 48kHz Float32 channels=" << profile.channels << " streams=" << profile.streams << " coupled=" << profile.coupled << ", 5ms CBR "
+                    << profile.bitrate << " bps; " << encoder.version()
+                    << "; PCM queue=0, packet queue capacity=" << capacity * 240 << " frames/" << capacity * 5
+                    << " ms (capacity, not latency), current=" << initial_depth * 240 << " frames";
+    platf::set_thread_name("audio::discrete714");
+    if(!usb)platf::adjust_thread_priority(platf::thread_priority_e::high);
+    std::vector<float> pcm(static_cast<std::size_t>(profile.channels)*240);
+    std::array<std::uint8_t, 1400> inline_packet {};
+    std::uint64_t delivered = 0, timeouts = 0, overflow = 0, late = 0;
+    std::uint64_t usb_as0_count=0, usb_prior_blocks=0, usb_prior_timeouts=0, usb_first_frame=0;
+    usb_recovery_limit_t recovery_limit;
+    std::uint64_t usb_overflows=0, usb_resyncs=0, usb_lost_frames=0;
+    bool awaiting_overflow=false;
+    std::chrono::steady_clock::time_point overflow_deadline{};
+    double usb_prior_max_age=0;
+    std::size_t high_water = initial_depth;
+    auto metrics = util::fail_guard([&] {
+      if(usb){const auto& s=usb->statistics();BOOST_LOG(info)<<"Vibe Speakers USB blocks="<<usb_prior_blocks+s.blocks<<" timeouts="<<usb_prior_timeouts+s.read_timeouts
+        <<" rejected="<<s.protocol_errors<<" stale="<<s.stale_blocks<<" disconnects="<<s.disconnects<<" max_usb_receive_age_ms="<<std::max(usb_prior_max_age,s.maximum_age_ms)
+        <<" clean_as0_boundaries="<<usb_as0_count<<" confirmed_queue_overflows="<<usb_overflows<<" recovered_input_boundaries="<<usb_resyncs
+        <<" observed_lost_native_frames="<<usb_lost_frames<<" final_epoch="<<usb->metadata().epoch<<" first_native_frame_in_final_epoch="<<usb_first_frame;}
+      const auto [depth, unused_capacity] = packets->occupancy();
+      BOOST_LOG(info) << profile.channels << "ch source stopped: frames=" << delivered * 240 << " source_timeouts=" << timeouts
+                      << " requested_opus_bitrate=" << profile.bitrate << " child_codec_bitrate=" << encoder.child_bitrate()
+                      << " packet_budget_verified=" << encoder.packet_budget_verified() << " effective_packet_bitrate=" << encoder.effective_packet_bitrate()
+                      << " queue_overflows=" << overflow << " rejected_packets=" << overflow << " late_blocks=" << late
+                      << " queue_current_frames=" << depth * 240 << " queue_high_water_frames=" << high_water * 240
+                      << " queue_capacity_frames=" << capacity * 240
+                      << " queue_age_samples=" << config.delivery->queue_age_count()
+                      << " queue_age_mean_ms=" << config.delivery->queue_age_mean_ms()
+                      << " queue_age_max_ms=" << config.delivery->queue_age_max_ms();
+    });
+    using clock = std::chrono::steady_clock;
+    source_timing_t timing {clock::now()};
+    for (;;) {
+      if (shutdown->peek()) {
+        if (usb) {
+          // The authenticated input pipe can be idle after a drained AS0.
+          // Keep its handle alive until the owner has signaled its own stop,
+          // restored the render roles and joined the bridge. Error exits
+          // elsewhere keep the usual pipe-disconnect evidence.
+          stop_owned_usb();
+          restore_usb.disable();
+        }
+        break;
+      }
+      unsigned skipped_packets=0;
+      if(awaiting_overflow && clock::now()>=overflow_deadline){
+        BOOST_LOG(error)<<"USB overflow successor produced no qualified block; ending RTSP session";break;
+      }
+      {
+        const auto status=usb->sample(pcm);
+        const auto action=policy::sample_action(status);
+        if (action==policy::sample_action_e::retry) {
+          ++timeouts;
+          const auto progress=timing.usb_timeout(usb->statistics().blocks!=0,clock::now());
+          if(progress==source_timing_t::progress_e::retry)continue;
+          BOOST_LOG(error) << profile.source_kind << " " << profile.channels << "ch input timed out for two seconds";
+          break;
+        }
+        if (status==policy::sample_status_e::interrupted) {
+          BOOST_LOG(info) << profile.source_kind << " " << profile.channels << "ch stream completed; draining " << delivered << " encoded packets";
+          const auto result=config.delivery->wait_for(delivered,200ms,[&]{return shutdown->peek();});
+          if(result!=drain_result_e::complete){
+            BOOST_LOG(warning)<<profile.source_kind<<" packet drain incomplete, ending capture";
+            break;
+          }
+          const bool lost=usb&&usb->end_reason()==usb_end_reason_e::confirmed_queue_overflow;
+          if(usb && (usb->end_reason()==usb_end_reason_e::terminal_as0||lost) && !shutdown->peek()){
+            const auto& old=usb->statistics(); const auto& last=usb->metadata();
+            if(lost){
+              ++usb_overflows;
+              BOOST_LOG(error)<<"Vibe Speakers USB confirmed queue overflow: old_nonce="<<usb->session().header.nonce[0]<<":"<<usb->session().header.nonce[1]
+                <<" epoch="<<last.epoch<<" old_last_sequence="<<last.blockSequence<<" old_last_native_end="<<last.firstFrame+240;
+              if(!recovery_limit.admit(last.lastReceiveQpc,last.qpcFrequency)){
+                BOOST_LOG(error)<<"USB repeated overflow; ending RTSP session";break;
+              }
+            }
+            BOOST_LOG(info)<<"Vibe Speakers USB input boundary overflow="<<lost<<" epoch="<<last.epoch<<" nonce="<<usb->session().header.nonce[0]<<":"<<usb->session().header.nonce[1]
+              <<" first_native_frame="<<usb_first_frame<<" last_native_frame_exclusive="<<last.firstFrame+240
+              <<" blocks="<<old.blocks<<" encoder_lookahead_frames="<<encoder.lookahead()<<" network_packets_delivered="<<delivered;
+            // One input boundary within a continuing RTSP session. The sender's
+            // packet sequence, timebase, crypto and FEC remain continuous.
+            try {
+              if(!encoder.start_usb_epoch(error_message)){
+                BOOST_LOG(error)<<"Could not initialize the next USB input encoder: "<<error_message;break;
+              }
+              auto next=std::make_unique<usb_source_t>(live_usb);
+              const auto stopping=[&]{return shutdown->peek();};
+              const bool connected=lost?next->connect_after_overflow(*usb,stopping):next->connect_after_as0(*usb,stopping);
+              if(!connected){
+                if(!shutdown->peek())BOOST_LOG(error)<<"USB input rearm failed: "<<next->error();
+                break;
+              }
+              if(!lost)++usb_as0_count;
+              awaiting_overflow=lost;overflow_deadline=clock::now()+2s;
+              usb_prior_blocks+=old.blocks;usb_prior_timeouts+=old.read_timeouts;
+              usb_prior_max_age=std::max(usb_prior_max_age,old.maximum_age_ms);
+              usb=std::move(next);usb_first_frame=0;
+              lab_metrics.next_section();
+            }catch(const std::exception& e){
+              BOOST_LOG(error)<<"USB input rearm failed: "<<e.what();break;
+            }
+            BOOST_LOG(info)<<"Vibe Speakers USB rearmed on the same endpoint, nonce="<<usb->session().header.nonce[0]<<":"<<usb->session().header.nonce[1];
+            continue;
+          }
+          break;
+        }
+        if (action!=policy::sample_action_e::emit) {
+          BOOST_LOG(error) << profile.source_kind << " " << profile.channels << "ch stopped: " << usb->error();
+          break;
+        }
+        if(usb && usb->statistics().blocks==1){
+          usb_first_frame=usb->metadata().firstFrame;
+          if(awaiting_overflow){
+            const auto gap=usb->lost_native_frames(), missing=gap/240;
+            const auto next=static_cast<std::uint16_t>(delivered+usb_lost_frames/240);
+            const bool can_continue=gap&&gap%240==0 && missing<=6 && delivered>=8 &&
+                transport::representable_loss(next,static_cast<unsigned>(missing));
+            usb_lost_frames+=gap;
+            BOOST_LOG(warning)<<"Vibe Speakers USB overflow successor nonce="<<usb->session().header.nonce[0]<<":"<<usb->session().header.nonce[1]
+              <<" epoch="<<usb->metadata().epoch<<" first_native_frame="<<usb_first_frame<<" gap_frames="<<gap
+              <<" wire_continuation="<<can_continue<<" rtsp_restart_required="<<!can_continue;
+            if(!can_continue)break;
+            ++usb_resyncs;skipped_packets=static_cast<unsigned>(missing);awaiting_overflow=false;
+          }
+        }
+      }
+      timing.input_received(clock::now());
+      buffer_t packet;
+      if (!fixed_ingress) packet = buffer_t {1400};
+      const auto destination = fixed_ingress ? std::span<std::uint8_t>(inline_packet) :
+                                              std::span<std::uint8_t>(packet.begin(), packet.size());
+      const auto lab_begin = lab_metrics.enabled() ? usb_lab_metrics::now() : 0;
+      const auto bytes = encoder.encode(pcm, destination, error_message);
+      const auto lab_end=lab_begin?usb_lab_metrics::now():0;
+      if (bytes < 0) {
+        BOOST_LOG(error) << profile.channels << "ch encode failed: " << error_message;
+        break;
+      }
+      bool queued;
+      if (fixed_ingress) queued = packets->try_raise(channel_data, std::span<const std::uint8_t>(inline_packet.data(), bytes), config.delivery,skipped_packets);
+      else {
+        packet.fake_resize(bytes);
+        queued = packets->try_raise(channel_data, std::move(packet), config.delivery);
+      }
+      if (!queued) {
+        ++overflow;
+        BOOST_LOG(error) << profile.channels << "ch packet queue full/stopped; ending session without dropping a FEC shard";
+        break;
+      }
+      ++delivered;
+      if(usb&&lab_metrics.enabled())lab_metrics.record(usb->metadata(),usb->receive_qpc(),lab_begin,lab_end,usb_lab_metrics::now(),pcm);
+      const auto depth = packets->occupancy().first;
+      high_water = std::max(high_water, depth);
+      if (!fixed_ingress && delivered % 200 == 0) BOOST_LOG(info) << "12ch queue current=" << depth * 240 << " frames/" << depth * 5 << " ms";
+    }
+  }
+
   void capture(safe::mail_t mail, config_t config, void *channel_data) {
     auto shutdown_event = mail->event<bool>(mail::shutdown);
     if (!config::audio.stream) {
       shutdown_event->view();
       return;
     }
-    auto stream = stream_configs[map_stream(config.channels, config.flags[config_t::HIGH_QUALITY])];
-    if (config.flags[config_t::CUSTOM_SURROUND_PARAMS]) {
-      apply_surround_params(stream, config.customStreamParams);
+    std::string error_message;
+    if (!prepare_session(config, error_message)) {
+      BOOST_LOG(error) << "Audio session rejected before capture: " << error_message;
+      shutdown_event->raise(true);
+      return;
     }
+    if (config.validated->source_kind=="user_mode_usb") {
+      capture_discrete(mail, config, channel_data);
+      return;
+    }
+    const auto &profile = *config.validated;
+    opus_stream_config_t stream {profile.sample_rate, profile.channels, profile.streams, profile.coupled, profile.mapping.data(), profile.bitrate};
 
     auto ref = get_audio_ctx_ref();
     if (!ref) {
@@ -476,10 +799,12 @@ namespace audio {
   }
 
   audio_ctx_ref_t get_audio_ctx_ref() {
+    if (discrete_source_enabled()) return {};
     return context_manager().acquire();
   }
 
   std::shared_ptr<void> capture_before_display_change() {
+    if (discrete_source_enabled()) return {};
 #ifdef _WIN32
     return context_manager().before_display_change(config::audio.stream);
 #else
@@ -487,8 +812,8 @@ namespace audio {
 #endif
   }
 
-  void app_termination_requested() { context_manager().app_termination_requested(); }
-  void app_started() { context_manager().app_started(); }
+  void app_termination_requested() { if (!discrete_source_enabled()) context_manager().app_termination_requested(); }
+  void app_started() { if (!discrete_source_enabled()) context_manager().app_started(); }
   void audio_owner_acquired() { context_manager().owner_acquired(); }
   void audio_owner_released() { context_manager().owner_released(); }
 
@@ -579,7 +904,7 @@ namespace audio {
       params.coupledStreams,
       {}
     };
-    std::copy_n(params.mapping, custom.mapping.size(), custom.mapping.begin());
+    std::copy_n(params.mapping, params.channelCount, custom.mapping.begin());
     const auto selected = policy::apply_custom_layout(base, custom);
     stream.channelCount = selected.channels;
     stream.streams = selected.streams;

@@ -1734,6 +1734,12 @@ jobs:
           $allPe = @(Get-ChildItem -LiteralPath $extractDir -Recurse -File |
             Where-Object { $_.Extension -in '.exe', '.dll' })
 
+          $vibeBridge = @($allPe | Where-Object Name -ieq 'VibeUsbBridge.exe')
+          foreach ($file in $vibeBridge) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne 'Valid') { $failures.Add('VibeUsbBridge signature is not valid') }
+          }
+
           foreach ($name in $firstParty) {
             $hits = @($allPe | Where-Object { $_.Name -ieq $name })
             if ($hits.Count -eq 0) {

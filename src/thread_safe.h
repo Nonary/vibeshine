@@ -367,6 +367,13 @@ namespace safe {
         _clear_on_overflow {clear_on_overflow} {
     }
 
+    // Call at source setup, before sampling. push/pop/erase/reset retain this
+    // capacity; bounded try_raise never allocates backing storage afterwards.
+    void preallocate() {
+      std::lock_guard ul {_lock};
+      _queue.reserve(_max_elements);
+    }
+
     /// Replace a matching pending item in place, preserving other producers'
     /// order. For independent snapshots whose older values may be discarded.
     template<class Predicate>
@@ -467,6 +474,12 @@ namespace safe {
       _poll_state.set_ready(true);
       _cv.notify_all();
       return true;
+    }
+
+    // Snapshot only; use try_raise() for the atomic capacity decision.
+    std::pair<std::size_t, std::uint32_t> occupancy() {
+      std::lock_guard ul {_lock};
+      return {_queue.size(), _max_elements};
     }
 
     // Remove one producer's stale messages without disturbing other items

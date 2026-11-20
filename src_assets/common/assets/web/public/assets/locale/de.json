@@ -420,6 +420,13 @@
     "amd_vbaq": "AMF-Varianz-basierte Adaptive Quantisierung (VBAQ)",
     "amd_vbaq_desc": "Das menschliche visuelle System ist in stark strukturierten Bereichen normalerweise weniger empfindlich gegenüber Artefakten. Im VBAQ-Modus kennzeichnet die Pixelvarianz die Komplexität räumlicher Texturen, sodass der Encoder glatteren Bereichen mehr Bits zuweisen kann. VBAQ ist standardmäßig aktiviert. Bei Auto bleibt die Eigenschaft ungesetzt, sodass die ausgewählte AMF-Nutzungsvoreinstellung sie festlegen kann.",
     "apply_note": "Klicken Sie auf 'Anwenden', um Vibeshine neu zu starten und Änderungen anzuwenden. Dies wird alle laufenden Sitzungen beenden.",
+    "audio_usb_sample_format": "Bit depth",
+    "audio_usb_source": "Vibe Speakers",
+    "audio_714_source": "Audio capture",
+    "audio_714_source_desc": "",
+    "audio_714_off": "Default",
+    "audio_714_pcm24": "24-bit",
+    "audio_714_pcm16": "16-bit",
     "audio_format": "Audio-Streamformat",
     "audio_format_desc": "Wähle Opus oder ein Dolby-Format für kompatible Clients. Wenn Dolby nicht verfügbar ist oder vom Client nicht akzeptiert wird, wird Opus verwendet.",
     "audio_format_opus": "Opus (Standard)",
@@ -960,7 +967,10 @@
     "dd_validation_mixed_final_required": "Geben Sie bei gemischten Zuordnungen mindestens ein Endfeld an.",
     "dd_validation_resolution": "Ungültiges Format. Verwenden Sie BREITExHÖHE, z. B. {example} (x oder ×).",
     "dd_validation_refresh_rate": "Ungültige Bildwiederholrate. Verwenden Sie eine positive Zahl, z. B. 60 oder 59.94.",
-    "dd_manual_enforcement_notice": "Die unten aufgeführten Überschreibungen sind deaktiviert, solange eine manuelle Auflösung oder Bildwiederholrate erzwungen wird. Manuelle Bildwiederholraten werden erzwungen angewendet und überschreiben die spielabhängige Umschaltung der Bildwiederholrate auf virtuellen Bildschirmen."
+    "dd_manual_enforcement_notice": "Die unten aufgeführten Überschreibungen sind deaktiviert, solange eine manuelle Auflösung oder Bildwiederholrate erzwungen wird. Manuelle Bildwiederholraten werden erzwungen angewendet und überschreiben die spielabhängige Umschaltung der Bildwiederholrate auf virtuellen Bildschirmen.",
+    "audio_usb_sample_format_desc": "",
+    "vibe_ready": "Bereit",
+    "vibe_status_failed": "Vibe-Speakers-Status nicht verfügbar"
   },
   "index": {
     "description": "Vibeshine ist ein selbst gehosteter Game-Stream-Host für Moonlight.",

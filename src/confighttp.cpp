@@ -48,6 +48,7 @@
 #include "host_stream_control.h"
 #include "update.h"
 #include "confighttp.h"
+#include "audio_usb_session.h"
 #include "crypto.h"
 #include "file_handler.h"
 #include "globals.h"
@@ -2841,6 +2842,11 @@ namespace confighttp {
     send_response(response, nlohmann::json::parse(metadata));
   }
 
+  void getVibeSpeakersStatus(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) return;
+    send_response(response, nlohmann::json::parse(audio::usb_session_t::availability_json()));
+  }
+
   void getMetadata(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
       return;
@@ -3129,6 +3135,10 @@ namespace confighttp {
       std::stringstream config_stream;
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
+      if (!input_tree.is_object()) {
+        bad_request(response, request, "POST body must be a JSON object");
+        return;
+      }
       normalize_adapter_config_pair(input_tree);
       std::set<std::string> changed_keys;
       for (const auto &[k, v] : input_tree.items()) {
@@ -3141,7 +3151,10 @@ namespace confighttp {
         // we should migrate the config file to straight json and get rid of all this nonsense
         config_stream << k << " = " << (v.is_string() ? v.get<std::string>() : v.dump()) << std::endl;
       }
-      file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
+      if (file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str()) != 0) {
+        service_unavailable(response, "Unable to save configuration file");
+        return;
+      }
 
 #ifdef _WIN32
       reconcile_vulkan_hdr_layer_from_body(input_tree);
@@ -3250,7 +3263,10 @@ namespace confighttp {
       for (const auto &kv : current) {
         config_stream << kv.first << " = " << kv.second << std::endl;
       }
-      file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
+      if (file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str()) != 0) {
+        service_unavailable(response, "Unable to save configuration file");
+        return;
+      }
 
 #ifdef _WIN32
       reconcile_vulkan_hdr_layer_from_body(patch_tree);
@@ -5985,6 +6001,7 @@ namespace confighttp {
     register_api_route("^/api/vigembus/install$", "POST", installViGEmBus);
     register_api_route("^/api/apps/purge_autosync$", "POST", purgeAutoSyncedApps);
 #if defined(_WIN32) || defined(__linux__)
+    register_api_route("^/api/vibe-speakers/status$", "GET", getVibeSpeakersStatus);
     register_api_route("^/api/frame-limiter/status$", "GET", getFrameLimiterStatus);
 #endif
     register_api_route("^/api/steam/status$", "GET", getSteamStatus);

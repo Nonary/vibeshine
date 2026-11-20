@@ -42,8 +42,8 @@ namespace stream::broadcast_runtime {
   template<class Packet>
   class mail_packet_queue_t final: public packet_queue_t {
   public:
-    mail_packet_queue_t(const safe::mail_t &mail, std::string_view id):
-        _queue {mail->queue<Packet>(id)} {
+    mail_packet_queue_t(const safe::mail_t &mail, std::string_view id, std::uint32_t capacity=32,bool clear_on_overflow=true):
+        _queue {mail->queue<Packet>(id,capacity,clear_on_overflow)} {
     }
 
     void reset() override {
@@ -80,15 +80,16 @@ namespace stream::broadcast_runtime {
   };
 
   template<class VideoPacket, class AudioPacket>
-  packet_queues_t packet_queues(safe::mail_t mail, std::string_view shutdown, std::string_view video, std::string_view audio) {
+  packet_queues_t packet_queues(safe::mail_t mail, std::string_view shutdown, std::string_view video, std::string_view audio,
+                               std::uint32_t audio_capacity=32,bool audio_clear_on_overflow=true) {
     return {
       mail,
       std::string {shutdown},
       [mail, id = std::string {video}] {
         return std::make_unique<mail_packet_queue_t<VideoPacket>>(mail, id);
       },
-      [mail, id = std::string {audio}] {
-        return std::make_unique<mail_packet_queue_t<AudioPacket>>(mail, id);
+      [mail, id = std::string {audio},audio_capacity,audio_clear_on_overflow] {
+        return std::make_unique<mail_packet_queue_t<AudioPacket>>(mail, id,audio_capacity,audio_clear_on_overflow);
       }
     };
   }

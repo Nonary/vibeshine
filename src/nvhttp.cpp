@@ -43,6 +43,7 @@
 // local includes
 #include "app_display_policy.h"
 #include "audio.h"
+#include "audio_protocol.h"
 #include "config.h"
 #include "confighttp.h"
 #include "host_stream_control.h"
@@ -2321,6 +2322,45 @@ namespace nvhttp {
     return it->second;
   }
 
+  audio::display_change_hold_t::capture_f audio_snapshot_for_request(const args_t &args) {
+    const auto info = audio::protocol::parse_uint32(get_arg(args, "surroundAudioInfo", "196610"));
+    // Discrete sources are explicitly bound and must never enter the shared
+    // context, including indirect lazy captures during display/config changes.
+    return audio::startup::snapshot_callback(config::audio_714_startup_settings(),
+      info ? static_cast<int>(*info & 0xFFFFU) : 0, audio::capture_before_display_change);
+  }
+
+  bool prepare_required_audio_source(const args_t& args, std::shared_ptr<void>& pending_hold) {
+    if(config::audio_714_startup_settings().source!="vibe_usb")return true;
+    const auto info=audio::protocol::parse_uint32(get_arg(args,"surroundAudioInfo","196610"));
+    if(!info)return false;
+    const auto channels=*info&0xFFFFU;
+    const auto mask=channels==12?audio::protocol::discrete_wave_mask:*info>>16;
+    return audio::retain_required_source([channels,mask]{return audio::prepare_usb_before_launch(channels,mask);},pending_hold);
+  }
+
+  bool validate_requested_audio(const args_t &args, pt::ptree &tree) {
+    const auto info = audio::protocol::parse_uint32(get_arg(args, "surroundAudioInfo", "196610"));
+    if (args.count("surroundAudioInfo") > 1 || args.count("surroundParams") > 1 || !info ||
+        !audio::protocol::valid_launch_audio(*info, get_arg(args, "surroundParams", ""))) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "Invalid audio layout or surround parameters");
+      return false;
+    }
+    if ((*info & 0xFFFFU) == 12) {
+      std::string reason;
+      if (!audio::discrete_714_available(reason)) {
+        BOOST_LOG(warning) << "unavailable_12ch: " << reason;
+        tree.put("root.resume", 0);
+        tree.put("root.<xmlattr>.status_code", 503);
+        tree.put("root.<xmlattr>.status_message", "unavailable_12ch: no explicitly selected compatible source");
+        return false;
+      }
+    }
+    return true;
+  }
+
   bool save_state_snapshot_locked(const client_t &client, const bool allow_missing_state = false) {
     // The caller owns statefile::state_mutex(). Authorization-expanding
     // callers also keep client_mutex locked until this write succeeds or their
@@ -3513,7 +3553,7 @@ namespace nvhttp {
     launch_session->framegen_refresh_multiplier = 1;
     launch_session->framegen_fixed_refresh = false;
     launch_session->enable_sops = util::from_view(get_arg(args, "sops", "0"));
-    launch_session->surround_info = (int) util::from_view(get_arg(args, "surroundAudioInfo", "196610"));
+    launch_session->surround_info = audio::protocol::parse_uint32(get_arg(args, "surroundAudioInfo", "196610")).value_or(0U);
     launch_session->surround_params = (get_arg(args, "surroundParams", ""));
     launch_session->continuous_audio = util::from_view(get_arg(args, "continuousAudio", "0"));
     launch_session->gcmap = (int) util::from_view(get_arg(args, "gcmap", "0"));
@@ -4529,7 +4569,8 @@ namespace nvhttp {
 #endif
     // Lazy until the authorized normal stream reaches a display boundary.
     // Keep this copy through response/config rollback after metadata unwinds.
-    audio::display_change_hold_t request_audio_hold {audio::capture_before_display_change};
+    auto args = request->parse_query_string();
+    audio::display_change_hold_t request_audio_hold {audio_snapshot_for_request(args)};
     pt::ptree tree;
     bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
@@ -4548,7 +4589,6 @@ namespace nvhttp {
       }
     });
 
-    auto args = request->parse_query_string();
     if (
       args.find("rikey"s) == std::end(args) ||
       args.find("rikeyid"s) == std::end(args) ||
@@ -4569,6 +4609,8 @@ namespace nvhttp {
       tree.put("root.<xmlattr>.status_message", "A paired TLS client identity is required");
       return;
     }
+
+    if (!validate_requested_audio(args, tree)) return;
 
     auto appid_str = get_arg(args, "appid", "0");
     auto appuuid_str = get_arg(args, "appuuid", "");
@@ -5210,6 +5252,10 @@ launch_session->exact_target_hold.reset();
     }
 #endif
     request_audio_hold.attach(launch_session->audio_context_guard);
+    if(!prepare_required_audio_source(args,launch_session->audio_context_guard)){
+      tree.put("root.<xmlattr>.status_code",503);
+      tree.put("root.<xmlattr>.status_message","Vibe Speakers could not prepare the requested audio profile. Check Audio settings and setup status.");return;
+    }
     std::optional<std::string> pending_output_override;
 #ifdef __APPLE__
     auto launch_display_guard = util::fail_guard([]() {
@@ -5549,7 +5595,8 @@ launch_session->exact_target_hold.reset();
 #endif
     // Lazy until the authorized normal stream reaches a display boundary.
     // Keep this copy through response/config rollback after metadata unwinds.
-    audio::display_change_hold_t request_audio_hold {audio::capture_before_display_change};
+    auto args = request->parse_query_string();
+    audio::display_change_hold_t request_audio_hold {audio_snapshot_for_request(args)};
     pt::ptree tree;
     bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
@@ -5590,7 +5637,6 @@ launch_session->exact_target_hold.reset();
       return;
     }
 
-    auto args = request->parse_query_string();
     if (
       args.find("rikey"s) == std::end(args) ||
       args.find("rikeyid"s) == std::end(args)
@@ -5608,6 +5654,8 @@ launch_session->exact_target_hold.reset();
       tree.put("root.<xmlattr>.status_message", "A paired TLS client identity is required");
       return;
     }
+
+    if (!validate_requested_audio(args, tree)) return;
 
     std::unique_lock normal_transition_lock {normal_http_app_transition_mutex, std::defer_lock};
     if (normal_app_transition) {
@@ -5782,6 +5830,10 @@ launch_session->exact_target_hold.reset();
     }
 #endif
     request_audio_hold.attach(launch_session->audio_context_guard);
+    if(!prepare_required_audio_source(args,launch_session->audio_context_guard)){
+      tree.put("root.<xmlattr>.status_code",503);
+      tree.put("root.<xmlattr>.status_message","Vibe Speakers could not prepare the requested audio profile. Check Audio settings and setup status.");return;
+    }
     launch_session->secondary_game_client = secondary_game_client;
 #ifdef _WIN32
     if (!exclusive_retained_catalog_owner && retained_resume_owner_eligible &&

@@ -8,6 +8,26 @@ import {
   settingError,
 } from '../utils/settings.ts';
 import { settingsFields } from '../configs/settingsSchema.ts';
+
+test('USB source is a separate managed route with preserved legacy choices', async () => {
+  const { settingsDefaults, restartRequiredKeys } = await import('../configs/settingsSchema.ts');
+  assert.equal(settingsDefaults.audio_714_source, 'off');
+  assert.deepEqual(settingsFields.get('audio_714_source')?.options?.map((item) => item.value),
+    ['off', 'vibe_usb']);
+  assert.equal(settingsDefaults.audio_usb_sample_format, 'pcm24');
+  for (const name of ['sample_format']) {
+    const key = `audio_usb_${name}`;
+    const field = settingsFields.get(key);
+    assert.ok(field);
+    assert.equal(field.platform, 'windows');
+    assert.deepEqual(field.visibleWhen, { key: 'audio_714_source', equals: 'vibe_usb' });
+    assert.ok(!field.restartRequired && !restartRequiredKeys.has(key));
+  }
+  for (const key of ['audio_sink', 'virtual_sink', 'audio_sink_capture_only', 'install_steam_audio_drivers'])
+    assert.deepEqual(settingsFields.get(key)?.visibleWhen, { key: 'audio_714_source', notIn: ['vibe_usb'] });
+  for (const key of ['audio_714_endpoint', 'audio_714_pipe', 'audio_usb_controller_instance', 'audio_usb_bridge_executable'])
+    assert.equal(settingsFields.has(key), false);
+});
 import {
   NETWORK_PORT_MAX,
   NETWORK_PORT_MIN,
