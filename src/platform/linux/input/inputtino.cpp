@@ -110,7 +110,8 @@ namespace platf {
   }
 
   void gamepad_attributes(input_t &input, const steam_controller_attributes_t &attributes) {
-    // No UHID backend presents a Steam Controller, so there is nothing to apply them to.
+    auto raw = (input_raw_t *) input.get();
+    platf::gamepad::attributes(raw, attributes);
   }
 
   platform_caps::caps_t get_capabilities() {
@@ -118,8 +119,8 @@ namespace platf {
     // TODO: if has_uinput
     caps |= platform_caps::pen_touch;
 
-    // Both Sony virtual controllers expose a touchpad. Auto can select either.
-    if (config::input.gamepad == "ds4"sv || config::input.gamepad == "ds5"sv || config::input.gamepad == "auto"sv) {
+    // Both Sony virtual controllers and the Steam Controller expose touchpads. Auto can select any of them.
+    if (config::input.gamepad == "ds4"sv || config::input.gamepad == "ds5"sv || config::input.gamepad == "steam"sv || config::input.gamepad == "auto"sv) {
       caps |= platform_caps::controller_touch;
     }
 

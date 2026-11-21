@@ -153,6 +153,7 @@ export function getConfigSelectOptions(
         ds4: 'config.gamepad_ds4',
         ds5: 'config.gamepad_ds5',
         switch: 'config.gamepad_switch',
+        steam: 'config.gamepad_steam',
         x360: 'config.gamepad_x360',
         xone: 'config.gamepad_xone',
         vhf: 'config.gamepad_vhf',
@@ -166,7 +167,7 @@ export function getConfigSelectOptions(
       };
       const prioritizedByPlatform: Record<string, string[]> = {
         freebsd: ['switch', 'xone'],
-        linux: ['xone', 'ds4', 'ds5', 'switch'],
+        linux: ['xone', 'ds4', 'ds5', 'switch', 'steam'],
         windows: [
           'x360',
           'ds4',

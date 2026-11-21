@@ -357,6 +357,14 @@ file(GLOB_RECURSE INPUTTINO_SOURCES
         ${CMAKE_SOURCE_DIR}/src/platform/linux/input/inputtino*.cpp)
 list(APPEND PLATFORM_TARGET_FILES ${INPUTTINO_SOURCES})
 
+# The Steam Controller (2026) profile uses libvirtualgamepad's portable, header-only device
+# model (sc26_usb.h): report descriptor, report encoders and the control-channel responder.
+# Nothing else of libvirtualgamepad is compiled on Linux (its protocol header needs <windows.h>).
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/third-party/libvirtualgamepad/include/libvirtualgamepad/sc26_usb.h")
+    message(FATAL_ERROR "third-party/libvirtualgamepad is missing sc26_usb.h. Initialize the submodule.")
+endif()
+include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/third-party/libvirtualgamepad/include")
+
 # build libevdev before the libinputtino target
 if(EXTERNAL_PROJECT_LIBEVDEV_USED)
     add_dependencies(libinputtino libevdev)

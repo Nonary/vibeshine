@@ -21,7 +21,8 @@ namespace platf::gamepad {
     XboxOneWired,  ///< Xbox One Wired Controller
     DualShock4Wired,  ///< DualShock 4 Wired Controller
     DualSenseWired,  ///< DualSense Wired Controller
-    SwitchProWired  ///< Switch Pro Wired Controller
+    SwitchProWired,  ///< Switch Pro Wired Controller
+    SteamControllerWired  ///< Steam Controller (2026), wired
   };
 
   int alloc(input_raw_t *raw, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue);
@@ -35,6 +36,8 @@ namespace platf::gamepad {
   void motion(input_raw_t *raw, const gamepad_motion_t &motion);
 
   void battery(input_raw_t *raw, const gamepad_battery_t &battery);
+
+  void attributes(input_raw_t *raw, const steam_controller_attributes_t &attributes);
 
   std::vector<supported_gamepad_t> &supported_gamepads(input_t *input);
 }  // namespace platf::gamepad

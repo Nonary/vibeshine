@@ -393,7 +393,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             @endcode</td>
     </tr>
     <tr>
-        <td rowspan="6">Choices</td>
+        <td rowspan="14">Choices</td>
         <td>ds4</td>
         <td>DualShock 4 controller (PS4)
             @note{This option applies to Windows and Linux. On Linux it uses UHID and includes
@@ -408,6 +408,15 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>switch</td>
         <td>Switch Pro controller
             @note{This option applies to FreeBSD and Linux only.}</td>
+    </tr>
+    <tr>
+        <td>steam</td>
+        <td>Steam Controller (2026)
+            @note{This option applies to Linux only. It uses UHID and presents a wired Steam
+            Controller to every client: Steam sees both trackpads, the grips and back buttons,
+            motion sensors and battery, and its pad haptics are sent back to clients that replay
+            them. `auto` selects it for clients that report a Steam Controller with the Steam
+            extensions. See [Steam Controller](steam_controller.md).}</td>
     </tr>
     <tr>
         <td>vhf</td>

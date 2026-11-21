@@ -69,7 +69,7 @@ test('capture options follow the host platform', () => {
 test('gamepad options follow the host platform', () => {
   assert.deepEqual(
     gamepadOptionsForPlatform('linux').map((option) => option.value),
-    ['auto', 'xone', 'ds4', 'ds5', 'switch'],
+    ['auto', 'xone', 'ds4', 'ds5', 'switch', 'steam'],
   );
   assert.deepEqual(
     gamepadOptionsForPlatform('windows').map((option) => option.value),
@@ -91,7 +91,7 @@ test('gamepad options follow the host platform', () => {
   for (const getOptions of [getConfigSelectOptions, getLegacyConfigSelectOptions]) {
     assert.deepEqual(
       getOptions('gamepad', context).map((option) => option.value),
-      ['auto', 'xone', 'ds4', 'ds5', 'switch'],
+      ['auto', 'xone', 'ds4', 'ds5', 'switch', 'steam'],
     );
   }
   assert.deepEqual(settingsFields.get('ds4_back_as_touchpad_click')?.platform, ['windows', 'linux']);
@@ -123,7 +123,7 @@ test('both production settings models offer the composite DualSense only on Wind
     }
     assert.deepEqual(
       getOptions('gamepad', { ...context, platform: 'linux' }).map((candidate) => candidate.value),
-      ['auto', 'xone', 'ds4', 'ds5', 'switch'],
+      ['auto', 'xone', 'ds4', 'ds5', 'switch', 'steam'],
     );
     assert.ok(
       getOptions('gamepad', { ...context, currentValue: 'future_controller' }).some(

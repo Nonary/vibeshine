@@ -9,6 +9,9 @@ with two trackpads, capacitive grips and stick touch, motion sensors, a
 battery and pad haptics, instead of the DualSense approximation it would get
 otherwise.
 
+On Linux the host creates the same controller through UHID instead; see the
+Linux (UHID) section below.
+
 ## Selection
 
 | `gamepad` setting | Steam Controller client gets |
@@ -124,6 +127,51 @@ a libvirtualgamepad that defines them and ships a driver that offers the
 profile; an installed driver without the profile falls back as described
 above.
 
+## Linux (UHID)
+
+On Linux the host creates the controller through `/dev/uhid`
+(`src/platform/linux/input/inputtino_sc26.cpp`) as a wired Steam Controller
+(28de:1302, version 0x0307), with the report descriptor and the
+control-channel responder from libvirtualgamepad's `sc26_usb.h`. The kernel
+binds `hid-generic`; Steam opens the device through hidraw (the usual
+`steam-devices` udev rule gives the seat user access), runs its handshake on
+feature report 1 and lists it as a Steam Controller. The host needs read and
+write access to `/dev/uhid`, as for the PlayStation profiles.
+
+| `gamepad` setting | Steam Controller client gets |
+|---|---|
+| `auto` | the Steam Controller for an `LI_CTYPE_STEAM` client that advertises grip sense, Steam haptics or SC26 buttons; other clients keep their usual profile |
+| `steam` | the Steam Controller for every client |
+
+If the device cannot be created the slot falls back to the DualSense and the
+log says why.
+
+* **Input.** Buttons, sticks, triggers, both trackpads (dual or split, as
+  above), grips, stick touch, motion and battery map as on Windows. The
+  state report (0x42) goes out on a fixed 4 ms clock (250 Hz, the IMU rate)
+  and never in reaction to input: Steam's stick test stalls on bursty
+  reports. The battery report (0x43) follows every 3.5 s, as on the real
+  unit. Start and Back use the bits SDL's driver reads them from, and the
+  paddles map to R4, L4, R5, L5 in client order.
+* **Feedback.** Haptic output reports 0x80 to 0x85 go to a client with
+  `LI_CCAP_STEAM_HAPTIC` as control packet `0x5504`; any other client gets
+  rumble synthesized from them. Settings writes go to a client with
+  `LI_CCAP_STEAM_SETTINGS` as `0x5505`.
+* **Attributes.** The `SS_STEAM_CONTROLLER_ATTRIBUTES` packet updates the
+  firmware and bootloader build times, board revision, capabilities, build id
+  and serials the device reports. Until it arrives the device reports the
+  build time of the controller firmware Steam ships at the time of writing
+  (0x6AE90BC5): Steam's hardware updater lists a wired controller for an
+  update whenever its build time differs from the bundled file's, a newer one
+  included, so only that value keeps Steam from offering an update for the
+  virtual device. With a newer Steam firmware the notice comes back until the
+  constant (`steam_firmware_build_time`) is bumped.
+* **Control channel.** The device answers the commands Steam's handshake and
+  configuration use. Every other command, firmware updates included (0x90
+  enters the bootloader), fails with `EIO` and is logged once per command, so
+  a firmware update started from Steam while streaming fails without reaching
+  the client.
+
 ## Tests
 
 * `tests/unit/platform/windows/test_vhf_gamepad_policy.cpp`: profile
@@ -136,3 +184,8 @@ above.
   `test_vhf_feedback_retirement.py`, `test_vhf_fallback.py`,
   `test_sc26_buttons.py`, `test_steam_attributes_forward.py`: see
   `tests/input/README.md`.
+* `tests/unit/platform/linux/test_sc26_policy.cpp`: the Linux selection
+  rule, button mapping, input encoding, dual and split touch, motion and
+  battery, the control channel (handshake accepted, firmware and calibration
+  commands refused, no stale reply), the attribute defaults and updates, and
+  the haptic and settings forwarding. It needs no `/dev/uhid`.

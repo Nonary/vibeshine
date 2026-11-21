@@ -6,6 +6,12 @@
 #include <boost/locale.hpp>
 #include <inputtino/input.hpp>
 #include <libevdev/libevdev.h>
+#include <unistd.h>
+
+// standard includes
+#include <algorithm>
+#include <cerrno>
+#include <cstring>
 
 // local includes
 #include "inputtino_common.h"
@@ -70,6 +76,42 @@ namespace platf::gamepad {
     return inputtino::PS5Joypad::create({.name = inputtino_name_for_seat("Sunshine PS5 (virtual) pad"sv), .vendor_id = 0x054C, .product_id = 0x0CE6, .version = 0x8111, .device_phys = device_mac, .device_uniq = device_mac});
   }
 
+  auto create_sc26(const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue, std::shared_ptr<joypad_state> gamepad) {
+    sc26_joypad_t::options_t options;
+    options.sc26_explicit = (metadata.capabilities & LI_CCAP_SC26_BUTTONS) != 0;
+    options.dual_touchpad = (metadata.capabilities & LI_CCAP_DUAL_TOUCHPAD) != 0;
+    // One serial per slot, so Steam tells several virtual controllers apart and keeps each
+    // one's settings; the real controller's serial replaces it once its attributes arrive.
+    options.serial = std::format("LVGSC26{:04}", std::clamp(id.globalIndex, 0, 9999));
+
+    const auto idx = id.clientRelativeIndex;
+    if (metadata.capabilities & LI_CCAP_STEAM_HAPTIC) {
+      // Every report as it came: Steam re-sends the same click to keep a buzz going.
+      options.on_haptic = [feedback_queue, idx](const sc26::haptic_report_t &haptic) {
+        static_cast<void>(platf::raise_gamepad_feedback(*feedback_queue, gamepad_feedback_msg_t::make_steam_haptic(idx, haptic.length, haptic.report)));
+      };
+    } else {
+      options.on_rumble = [feedback_queue, idx, gamepad](int low_freq, int high_freq) {
+        static_cast<void>(platf::raise_gamepad_feedback_deduped(*feedback_queue, gamepad_feedback_msg_t::make_rumble(idx, low_freq, high_freq), gamepad->last_rumble));
+      };
+    }
+    if (metadata.capabilities & LI_CCAP_STEAM_SETTINGS) {
+      options.on_settings = [feedback_queue, idx](const sc26::settings_chunk_t &chunk) {
+        if (!platf::raise_gamepad_feedback(*feedback_queue, gamepad_feedback_msg_t::make_steam_settings(idx, chunk.command, chunk.count, chunk.triples))) {
+          BOOST_LOG(warning) << "Steam Controller: feedback queue full, dropping a settings write ("sv << int(chunk.count) << " triples)"sv;
+        }
+      };
+    }
+
+    return sc26_joypad_t::create({
+                                   .name = inputtino_name_for_seat("Valve Software Steam Controller"sv),
+                                   .vendor_id = lvg::sc26_usb::vendor_id,
+                                   .product_id = lvg::sc26_usb::product_id,
+                                   .version = lvg::sc26_usb::version,
+                                 },
+                                 std::move(options));
+  }
+
   int alloc(input_raw_t *raw, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
     ControllerType selectedGamepadType;
 
@@ -85,6 +127,9 @@ namespace platf::gamepad {
     } else if (config::input.gamepad == "switch"sv) {
       BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Nintendo Pro controller (manual selection)"sv;
       selectedGamepadType = SwitchProWired;
+    } else if (config::input.gamepad == "steam"sv) {
+      BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Steam Controller (manual selection)"sv;
+      selectedGamepadType = SteamControllerWired;
     } else if (metadata.type == LI_CTYPE_XBOX) {
       BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox One controller (auto-selected by client-reported type)"sv;
       selectedGamepadType = XboxOneWired;
@@ -94,6 +139,9 @@ namespace platf::gamepad {
     } else if (metadata.type == LI_CTYPE_NINTENDO) {
       BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Nintendo Pro controller (auto-selected by client-reported type)"sv;
       selectedGamepadType = SwitchProWired;
+    } else if (sc26::is_steam_controller_client(metadata.type, metadata.capabilities)) {
+      BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Steam Controller (auto-selected by client-reported type)"sv;
+      selectedGamepadType = SteamControllerWired;
     } else if (config::input.motion_as_ds4 && (metadata.capabilities & (LI_CCAP_ACCEL | LI_CCAP_GYRO))) {
       BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be DualShock 5 controller (auto-selected by motion sensor presence)"sv;
       selectedGamepadType = DualSenseWired;
@@ -179,6 +227,23 @@ namespace platf::gamepad {
           BOOST_LOG(warning) << "Unable to create virtual DualShock 4 controller: " << ds4.getErrorMessage();
           return -1;
         }
+      case SteamControllerWired:
+        {
+          auto sc26_pad = create_sc26(id, metadata, feedback_queue, gamepad);
+          if (sc26_pad) {
+            // The client streams motion only when asked; the state report carries it at 250 Hz.
+            static_cast<void>(platf::raise_gamepad_feedback(*feedback_queue, gamepad_feedback_msg_t::make_motion_event_state(id.clientRelativeIndex, LI_MOTION_TYPE_ACCEL, sc26::motion_rate_hz)));
+            static_cast<void>(platf::raise_gamepad_feedback(*feedback_queue, gamepad_feedback_msg_t::make_motion_event_state(id.clientRelativeIndex, LI_MOTION_TYPE_GYRO, sc26::motion_rate_hz)));
+            gamepad->joypad = std::make_unique<joypads_t>(std::move(*sc26_pad));
+            raw->gamepads[id.globalIndex] = std::move(gamepad);
+            BOOST_LOG(warning) << "Gamepad " << id.globalIndex
+                               << " (Steam Controller): do not start a Steam Controller firmware update from Steam while streaming. "sv
+                               << "It would target this virtual controller, which refuses it; update the real controller with it connected directly to a PC running Steam."sv;
+            return 0;
+          }
+          BOOST_LOG(warning) << "Unable to create virtual Steam Controller: " << sc26_pad.getErrorMessage() << "; falling back to DualSense"sv;
+        }
+        [[fallthrough]];
       case DualSenseWired:
         {
           auto ds5 = create_ds5(id.globalIndex);
@@ -256,7 +321,9 @@ namespace platf::gamepad {
     if (!gamepad) {
       return;
     }
-    if (std::holds_alternative<ds4_joypad_t>(*gamepad->joypad)) {
+    if (std::holds_alternative<sc26_joypad_t>(*gamepad->joypad)) {
+      std::get<sc26_joypad_t>(*gamepad->joypad).touch(touch.eventType, touch.pointerId, touch.touchpadIndex, touch.x, touch.y, touch.pressure);
+    } else if (std::holds_alternative<ds4_joypad_t>(*gamepad->joypad)) {
       auto &ds4 = std::get<ds4_joypad_t>(*gamepad->joypad);
       if (touch.pressure > 0.5) {
         ds4.place_finger(touch.pointerId, touch.x * ds4_joypad_t::touchpad_width, touch.y * ds4_joypad_t::touchpad_height);
@@ -277,7 +344,9 @@ namespace platf::gamepad {
     if (!gamepad) {
       return;
     }
-    if (std::holds_alternative<ds4_joypad_t>(*gamepad->joypad)) {
+    if (std::holds_alternative<sc26_joypad_t>(*gamepad->joypad)) {
+      std::get<sc26_joypad_t>(*gamepad->joypad).set_motion(motion.motionType, motion.x, motion.y, motion.z);
+    } else if (std::holds_alternative<ds4_joypad_t>(*gamepad->joypad)) {
       auto &ds4 = std::get<ds4_joypad_t>(*gamepad->joypad);
       switch (motion.motionType) {
         case LI_MOTION_TYPE_ACCEL:
@@ -304,7 +373,9 @@ namespace platf::gamepad {
     if (!gamepad) {
       return;
     }
-    if (std::holds_alternative<ds4_joypad_t>(*gamepad->joypad)) {
+    if (std::holds_alternative<sc26_joypad_t>(*gamepad->joypad)) {
+      std::get<sc26_joypad_t>(*gamepad->joypad).set_battery(battery.state, battery.percentage);
+    } else if (std::holds_alternative<ds4_joypad_t>(*gamepad->joypad)) {
       ds4_joypad_t::battery_state_e state;
       switch (battery.state) {
         case LI_BATTERY_STATE_CHARGING:
@@ -345,6 +416,17 @@ namespace platf::gamepad {
     }
   }
 
+  void attributes(input_raw_t *raw, const steam_controller_attributes_t &attributes) {
+    if (attributes.id.globalIndex < 0 || attributes.id.globalIndex >= static_cast<int>(raw->gamepads.size())) {
+      return;
+    }
+    auto gamepad = raw->gamepads[attributes.id.globalIndex];
+    if (!gamepad || !std::holds_alternative<sc26_joypad_t>(*gamepad->joypad)) {
+      return;
+    }
+    std::get<sc26_joypad_t>(*gamepad->joypad).set_attributes(attributes);
+  }
+
   std::vector<supported_gamepad_t> &supported_gamepads(input_t *input) {
     if (!input) {
       static std::vector gps {
@@ -353,6 +435,7 @@ namespace platf::gamepad {
         supported_gamepad_t {"ds4", false, ""},
         supported_gamepad_t {"ds5", false, ""},
         supported_gamepad_t {"switch", false, ""},
+        supported_gamepad_t {"steam", false, ""},
       };
 
       return gps;
@@ -362,6 +445,10 @@ namespace platf::gamepad {
     auto ds5 = create_ds5(-1);  // Index -1 will result in a random MAC virtual device, which is fine for probing
     auto switchPro = create_switch();
     auto xOne = create_xbox_one();
+    // Probing by creating a device would make a Steam Controller appear in Steam for a moment;
+    // the profile needs nothing but /dev/uhid.
+    const bool uhid_usable = access("/dev/uhid", R_OK | W_OK) == 0;
+    const std::string uhid_error = uhid_usable ? std::string {} : std::string {"/dev/uhid: "} + std::strerror(errno);
 
     static std::vector gps {
       supported_gamepad_t {"auto", true, ""},
@@ -369,6 +456,7 @@ namespace platf::gamepad {
       supported_gamepad_t {"ds4", static_cast<bool>(ds4), !ds4 ? ds4.getErrorMessage() : ""},
       supported_gamepad_t {"ds5", static_cast<bool>(ds5), !ds5 ? ds5.getErrorMessage() : ""},
       supported_gamepad_t {"switch", static_cast<bool>(switchPro), !switchPro ? switchPro.getErrorMessage() : ""},
+      supported_gamepad_t {"steam", uhid_usable, uhid_error},
     };
 
     for (auto &[name, is_enabled, reason_disabled] : gps) {
