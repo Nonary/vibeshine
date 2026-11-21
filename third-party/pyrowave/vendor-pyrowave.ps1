@@ -20,8 +20,8 @@ param(
     [string]$Destination = (Join-Path $PSScriptRoot "pyrowave"),
     [string]$PatchDir = (Join-Path $PSScriptRoot "patches"),
     [string]$WorkDir = (Join-Path ([System.IO.Path]::GetTempPath()) "pyrowave-vendor"),
-    [string]$PyroWaveCommit = "186f0393b77f7755953b5ecde994bb1cec2e4155",
-    [string]$GraniteCommit = "b6cffd5ce81f540f0855e6778428483e14763d9b"
+    [string]$PyroWaveCommit = "502a3b52a39312ab82c85b1e2fc0e746faee91a4",
+    [string]$GraniteCommit = "fb178c8080d163419e8d20f10715c61c53c1ec9b"
 )
 
 $ErrorActionPreference = "Stop"
@@ -132,15 +132,29 @@ Granite:         $GraniteCommit (https://github.com/Themaister/Granite)
 volk:            $(& git -C $graniteSrc rev-parse HEAD:third_party/volk)
 vulkan-headers:  $(& git -C $graniteSrc rev-parse HEAD:third_party/khronos/vulkan-headers)
 
-The PyroWave bitstream carries no version field. The host and the client must be
-built from the same pyrowave commit; the RTSP handshake advertises it as
-PYROWAVE_BITSTREAM_ID in pyrowave_protocol.h.
+This is the PyroWave SDK 1.0 API (pyrowave_create_device_by_compat takes a global
+queue priority; the encoder entry points are encode_gpu*). The PyroWave bitstream
+carries no version field. The host and the client must speak the same bitstream;
+the RTSP handshake advertises it as PYROWAVE_BITSTREAM_ID in pyrowave_protocol.h.
+That ID stays 186f0393b77f7755953b5ecde994bb1cec2e4155, the
+last commit before 1.0: the quantizer, dequantizer, block-packing and rate-control
+resolve shaders are byte-identical, so 1.0 emits the 186f0393 stream format.
 
-Local patch 0010-deterministic-record-padding.patch zeroes decoder-ignored
-sign bits and word-alignment tails on the GPU so identical coefficients produce
-identical records. It changes no decoded values or
-Vulkan feature requirements. scripts/regenerate-pyrowave-block-packing.py
-refreshes only the packing program, preserving all other programs/reflection.
+Local patches (applied in name order):
+  0002  4:4:4 encoder payload buffer sizing.
+  0003  decoder rejects a short block instead of reading past it.
+  0010  deterministic-record-padding zeroes decoder-ignored sign bits and
+        word-alignment tails on the GPU so identical coefficients produce
+        identical records. It changes no decoded values or Vulkan feature
+        requirements. scripts/regenerate-pyrowave-block-packing.py refreshes only
+        the packing program, preserving all other programs/reflection.
+  0011  Linux: DMA-BUF memory import duplicates its input FD before Vulkan
+        allocation and the original is consumed only after image creation
+        succeeds. Failure leaves the input FD owned by the caller, including
+        failures after memory allocation. No bitstream changes. Not used by the
+        Windows build.
+The earlier 0001 encoder-buffer-pool patch is gone: 1.0 keeps the meta and
+bitstream buffers per frame context.
 "@ | Set-Content -Encoding utf8 (Join-Path (Split-Path $Destination) "VENDOR.txt")
 
 Write-Host "PyroWave vendored into $Destination"
