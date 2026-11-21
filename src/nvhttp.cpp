@@ -975,10 +975,15 @@ namespace nvhttp {
         };
       };
 
+      const auto shutdown = mail::process_shutdown_event();
       bool probe_complete = false;
       auto caps = video::advertised_encoder_capabilities(false, &probe_complete, &adapter_identity);
       if (probe_complete) {
         return publish(std::move(caps), true, "matching-cache");
+      }
+
+      if (shutdown && shutdown->peek()) {
+        return publish(std::move(caps), false, "shutdown");
       }
 
       // Session starts publish their pending owner while holding this gate.
@@ -1000,6 +1005,9 @@ namespace nvhttp {
         return publish(std::move(caps), false, "active-or-stopping-session");
       }
 
+      if (shutdown && shutdown->peek()) {
+        return publish(std::move(caps), false, "shutdown");
+      }
       auto ensure_result = VDISPLAY::ensure_display(idle_virtual_required_adapter);
       auto cleanup_probe_display = util::fail_guard([&ensure_result]() {
         VDISPLAY::cleanup_ensure_display(ensure_result);
