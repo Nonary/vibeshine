@@ -15,7 +15,7 @@ import { storeToRefs } from 'pinia';
 
 const { t } = useI18n();
 const store = useConfigStore();
-const { config, isWindows10Host } = storeToRefs(store);
+const { config, metadata, isWindows10Host } = storeToRefs(store);
 const platform = computed(() => (config.value as any)?.platform || '');
 const ddConfigDisabled = computed(
   () => (config.value as any)?.dd_configuration_option === 'disabled',
@@ -31,7 +31,13 @@ const virtualDisplayDriverStatus = computed(() => ({
   '-2': t('config.virtual_display_driver_status_version_incompatible'),
   '-3': t('config.virtual_display_driver_status_watchdog_failed'),
 }));
-const vdisplay = computed(() => (config.value as any)?.vdisplay || 0);
+// Read the runtime observation, not an editable config default. Only the
+// backend's explicit numeric OK value establishes readiness.
+const vdisplay = computed(() => {
+  const code = metadata.value.virtual_display_driver?.status_code;
+  return typeof code === 'number' && Number.isInteger(code) ? code : 1;
+});
+const driverReady = computed(() => vdisplay.value === 0);
 const currentDriverStatus = computed(
   () =>
     virtualDisplayDriverStatus.value[
@@ -114,27 +120,31 @@ const vulkanHdrLayerEnabled = computed<boolean>({
     store.updateOption('vulkan_hdr_layer', enabled);
   },
 });
-const selectedVirtualDisplayDriverName = computed(() =>
-  useSudoVdaDriver.value
+const observedSudoVdaDriver = computed(() => {
+  const active = metadata.value.virtual_display_driver?.active;
+  return active === 'sudovda' || (active !== 'vibeshine' && useSudoVdaDriver.value);
+});
+const observedVirtualDisplayDriverName = computed(() =>
+  observedSudoVdaDriver.value
     ? t('config.virtual_display_driver_sudovda_name')
     : t('config.virtual_display_driver_vibeshine_name'),
 );
 const currentDriverStatusMessage = computed(() => {
-  if (!vdisplay.value) {
-    return useSudoVdaDriver.value
+  if (driverReady.value) {
+    return observedSudoVdaDriver.value
       ? t('config.virtual_display_status_sudovda_ready')
       : t('config.virtual_display_status_vibeshine_ready');
   }
 
   return t('config.virtual_display_status_driver_state', {
-    driver: selectedVirtualDisplayDriverName.value,
+    driver: observedVirtualDisplayDriverName.value,
     status: currentDriverStatus.value,
   });
 });
 const currentDriverStatusHint = computed(() =>
-  useSudoVdaDriver.value
-    ? t('config.virtual_display_status_hint_sudovda')
-    : t('config.virtual_display_status_hint_vibeshine'),
+  t('config.virtual_display_status_hint_observed', {
+    driver: observedVirtualDisplayDriverName.value,
+  }),
 );
 
 const virtualDisplayMode = computed<'disabled' | 'per_client' | 'shared'>({
@@ -311,13 +321,13 @@ function selectVirtualDisplayLayout(v: unknown) {
                   <div
                     class="px-4 py-3 rounded-md"
                     :class="[
-                      vdisplay ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success',
+                      driverReady ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning',
                     ]"
                   >
                     <i class="fa-solid fa-circle-info mr-2"></i>
                     {{ currentDriverStatusMessage }}
                   </div>
-                  <p v-if="vdisplay" class="text-[11px] opacity-70 mt-2 leading-snug">
+                  <p v-if="!driverReady" class="text-[11px] opacity-70 mt-2 leading-snug">
                     {{ currentDriverStatusHint }}
                   </p>
                   <div

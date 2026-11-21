@@ -5,6 +5,12 @@ import { http } from '@/http';
 // Metadata describing build/runtime info returned by /api/meta
 export interface MetaInfo {
   platform?: string;
+  virtual_display_driver?: {
+    configured?: string;
+    active?: string | null;
+    status?: string;
+    status_code?: number;
+  };
   linux?: { machine_host?: boolean };
   status?: boolean;
   version?: string;
@@ -377,6 +383,7 @@ export const useConfigStore = defineStore('config', () => {
   const _data = ref<ConfigData | null>(null); // only user/server values
   // Single meta object kept completely separate from user config
   const metadata = ref<MetaInfo>({});
+  let metadataRequestVersion = 0;
   const config = ref<ConfigState>(buildWrapper()); // wrapper with getters/setters for UI binding
   const version = ref(0); // increments only on real user changes
   // Track keys that should require manual save (no autosave)
@@ -992,6 +999,11 @@ export const useConfigStore = defineStore('config', () => {
     if (_data.value && !force) return config.value;
     loading.value = true;
     error.value = null;
+    const requestVersion = ++metadataRequestVersion;
+    // A failed refresh must not leave a stale successful driver observation.
+    const refreshedMetadata = { ...metadata.value };
+    delete refreshedMetadata.virtual_display_driver;
+    metadata.value = refreshedMetadata;
     try {
       const r = await http.get('/api/config');
       if (r.status !== 200) throw new Error('bad status ' + r.status);
@@ -1007,8 +1019,12 @@ export const useConfigStore = defineStore('config', () => {
           else if (raw === 'darwin' || raw.startsWith('mac')) norm = 'macos';
           else if (raw.startsWith('lin')) norm = 'linux';
           (m as any).platform = norm;
-          metadata.value = m;
-          applyOsAwareDefaults();
+          // An older response must not republish readiness after a newer
+          // refresh has invalidated it, even if that newer request fails.
+          if (requestVersion === metadataRequestVersion) {
+            metadata.value = m;
+            applyOsAwareDefaults();
+          }
         }
       } catch (_) {
         /* ignore */
