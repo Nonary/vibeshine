@@ -2572,15 +2572,6 @@ namespace nvhttp {
           );
         }
 
-        try {
-          parsed.remote_display_layout = remote_display_topology::normalize_layout(
-            nlohmann::json::parse(parsed.client.remote_display_layout_json)
-          );
-        } catch (...) {
-          parsed.remote_display_layout = remote_display_topology::normalize_layout(nlohmann::json {});
-        }
-        parsed.client.remote_display_layout_json = parsed.remote_display_layout.dump();
-
         std::vector<std::string> certificate_identities;
         std::vector<pairing_policy::paired_client_record_view_t> paired_client_records;
         if (!build_paired_client_records(
@@ -2591,6 +2582,18 @@ namespace nvhttp {
             )) {
           return std::nullopt;
         }
+
+        // The next normal save persists the repaired layout. Use all paired
+        // UUIDs, including disabled clients, and leave physical anchors alone.
+        std::unordered_set<std::string_view> paired_clients;
+        paired_clients.reserve(paired_client_records.size());
+        for (const auto &record : paired_client_records) {
+          paired_clients.insert(record.uuid);
+        }
+        parsed.remote_display_layout = remote_display_topology::reconcile_saved_layout(
+          nlohmann::json::parse(parsed.client.remote_display_layout_json, nullptr, false), paired_clients
+        );
+        parsed.client.remote_display_layout_json = parsed.remote_display_layout.dump();
         return parsed;
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Pairing state is malformed: "sv << e.what();
