@@ -279,8 +279,8 @@ namespace audio {
           return active_encoder.encode(sample, packet);
         },
         [] {
-          // Reserve enough room for the largest supported 640 kbit/s AC-3 access unit.
-          return buffer_t {4096};
+          // A 640 kbit/s AC-3 access unit at 48 kHz and 32 ms is at most 2560 bytes.
+          return buffer_t {MAX_DOLBY_PACKET_SIZE};
         },
         [&](const auto &sample, buffer_t packet, int bytes) {
           if (webrtc_stream::has_active_sessions() && channel_data == nullptr) {

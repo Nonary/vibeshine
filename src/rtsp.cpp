@@ -47,6 +47,7 @@ extern "C" {
 #endif
 #include "hardware_metrics_session.h"
 #include "rtsp.h"
+#include "rtsp_audio_policy.h"
 #include "rtsp_pending_policy.h"
 #include "stream.h"
 #include "sync.h"
@@ -2470,6 +2471,7 @@ namespace rtsp_stream {
         _hot_apply_gate.unlock();
         lifecycle_lock.unlock();
         server->post([server, socket = std::move(socket), session = std::move(session), sequence_number, startup_failed, startup_status, startup_error = std::move(startup_error),
+                      send_audio_codec_header = should_send_audio_codec_header(selected_audio_codec),
                       audio_codec_name = std::string(audio::dolby_codec_name(selected_audio_codec))]() mutable {
           OPTION_ITEM completion_option {};
           completion_option.option = const_cast<char *>("CSeq");
@@ -2486,9 +2488,11 @@ namespace rtsp_stream {
           } else {
             OPTION_ITEM audio_codec_option {};
             std::string audio_codec_header {"X-SS-Audio-Codec"};
-            audio_codec_option.option = audio_codec_header.data();
-            audio_codec_option.content = audio_codec_name.data();
-            completion_option.next = &audio_codec_option;
+            if (send_audio_codec_header) {
+              audio_codec_option.option = audio_codec_header.data();
+              audio_codec_option.content = audio_codec_name.data();
+              completion_option.next = &audio_codec_option;
+            }
             respond(socket->sock, *session, &completion_option, 200, "OK", sequence_number, {});
           }
 

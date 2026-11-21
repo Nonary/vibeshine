@@ -12,9 +12,12 @@
 #include "utility.h"
 
 #include <bitset>
+#include <cstddef>
 #include <string_view>
 
 namespace audio {
+  constexpr std::size_t MAX_DOLBY_PACKET_SIZE = 2560;  ///< Maximum 640 kbit/s AC-3 access unit at 48 kHz.
+
   enum stream_config_e : int {
     STEREO,  ///< Stereo
     HIGH_STEREO,  ///< High stereo
