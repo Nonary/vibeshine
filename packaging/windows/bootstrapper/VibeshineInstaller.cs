@@ -7406,6 +7406,7 @@ namespace VibeshineInstaller {
           "sunshine_state.json",
           "sunshine_state.json.bak",
           "vibeshine_state.json",
+          "vibeshine_state.json.bak",
           "virtual_display_cache.json",
           "nvprefs_undo.json",
           "sunshine_playnite.log",
