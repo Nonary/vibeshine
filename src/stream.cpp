@@ -48,6 +48,7 @@ extern "C" {
 #include "hardware_metrics_session.h"
 #include "host_stats.h"
 #include "haptics_gain.h"
+#include "host_cursor.h"
 #include "input.h"
 #include "jthread.h"
 #include "logging.h"
@@ -591,6 +592,20 @@ namespace stream {
       return 0;
     }
 
+    // Client-side cursor traffic: reliable, on its own channel so a large shape
+    // never delays the reliable feedback on channel 0.
+    int send_cursor(const std::string_view &payload, net::peer_t peer) {
+      auto packet = enet_packet_create(payload.data(), payload.size(), ENET_PACKET_FLAG_RELIABLE);
+      if (!packet) return -1;
+      if (enet_peer_send(peer, host_cursor_protocol::channel, packet)) {
+        enet_packet_destroy(packet);
+
+        return -1;
+      }
+
+      return 0;
+    }
+
     void flush() {
       enet_host_flush(_host.get());
     }
@@ -740,6 +755,13 @@ namespace stream {
       std::array<std::atomic_bool, platf::MAX_GAMEPADS> vigem_rumble_send_success_logged {};
       std::array<std::atomic_bool, platf::MAX_GAMEPADS> vigem_rumble_send_failure_logged {};
       safe::mail_raw_t::event_t<video::hdr_info_t> hdr_queue;
+
+      // Client-side cursor (control thread only). The geometry follows the same
+      // touch-port event the input worker maps absolute input with.
+      host_cursor::session_state_t cursor;
+      safe::mail_raw_t::event_t<input::touch_port_t> cursor_geometry_events;
+      std::uint64_t cursor_geometry_generation = 0;
+      host_cursor::geometry_t cursor_geometry;
     } control;
 
     std::uint32_t launch_session_id;
@@ -1619,6 +1641,69 @@ namespace stream {
     return 0;
   }
 
+  host_cursor::geometry_t cursor_geometry_from_port(const input::touch_port_t &port) {
+    return {
+      bool(port),
+      port.offset_x,
+      port.offset_y,
+      port.width,
+      port.height,
+      port.client_offsetX,
+      port.client_offsetY,
+      port.scalar_inv,
+    };
+  }
+
+  /**
+   * @brief Send a subscribed client the cursor shapes and state it has not had yet.
+   * @param session The session, on the control thread.
+   * @param snapshot The tracker snapshot for this pass of the control loop.
+   */
+  void send_cursor_updates(session_t *session, const host_cursor::snapshot_t &snapshot) {
+    auto &cursor = session->control.cursor;
+    if (!cursor.subscribed || !session->control.peer) {
+      return;
+    }
+
+    if (auto port = session->control.cursor_geometry_events->view_if_newer(session->control.cursor_geometry_generation)) {
+      session->control.cursor_geometry = cursor_geometry_from_port(*port);
+    }
+
+    const auto update = host_cursor::plan_update(cursor, snapshot, session->control.cursor_geometry, display_cursor, host_cursor::compositing_required(), std::chrono::steady_clock::now());
+
+    std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(host_cursor_protocol::control_header_size + host_cursor_protocol::shape_header_size + host_cursor_protocol::max_chunk_bytes) + crypto::cipher::tag_size>
+      encrypted_payload;
+    auto &server = session->broadcast_ref->control_server;
+    const auto send = [&](const std::vector<std::uint8_t> &plaintext) {
+      auto payload = encode_control(session, std::string_view {reinterpret_cast<const char *>(plaintext.data()), plaintext.size()}, encrypted_payload);
+      if (payload.empty() || server.send_cursor(payload, session->control.peer)) {
+        if (host_cursor::note_send_failed(cursor)) {
+          BOOST_LOG(warning) << "Client-side cursor: couldn't send to client, resyncing"sv;
+        }
+        return false;
+      }
+      return true;
+    };
+
+    for (std::size_t i = 0; i < update.shapes.size(); ++i) {
+      const auto &shape = *update.shapes[i];
+      for (const auto &chunk : host_cursor_protocol::encode_shape(update.shape_ids[i], shape.width, shape.height, shape.hotspot_x, shape.hotspot_y, shape.bgra)) {
+        if (!send(chunk)) return;
+      }
+      BOOST_LOG(debug) << "Client-side cursor: sent shape "sv << update.shape_ids[i] << " ("sv << shape.width << 'x' << shape.height << ')';
+    }
+
+    if (update.state) {
+      if (!send(host_cursor_protocol::encode_state(*update.state))) return;
+      BOOST_LOG(verbose) << "Client-side cursor: state seq="sv << update.state->seq << " flags=0x"sv
+                         << util::hex(update.state->flags).to_string_view() << " shape="sv << update.state->shape_id;
+    }
+
+    if (update.state || !update.shapes.empty()) {
+      host_cursor::note_sent(cursor);
+    }
+  }
+
   /**
    * @brief Log adaptive pacing decisions. Called only when something changed, never per frame.
    * @param events What the controller reports since its last call.
@@ -1715,6 +1800,28 @@ namespace stream {
         // Standard pings show the client is alive and sending control traffic.
         std::lock_guard lg {session->video.adaptive_pacing_mutex};
         session->video.adaptive_pacing.on_ping(std::chrono::steady_clock::now(), payload);
+      }
+    });
+
+    // Client-side cursor: subscription, who draws the cursor, and shape resends.
+    server->map(host_cursor_protocol::control_packet_type, [](session_t *session, const std::string_view &payload) {
+      const auto control = host_cursor_protocol::parse_control({reinterpret_cast<const std::uint8_t *>(payload.data()), payload.size()});
+      if (!control || !host_cursor::tracker::supported()) {
+        BOOST_LOG(debug) << "Client-side cursor: ignoring control message ("sv << payload.size() << " bytes)"sv;
+        return;
+      }
+      auto &cursor = session->control.cursor;
+      const bool was_subscribed = cursor.subscribed;
+      const bool drew = cursor.client_draws;
+      host_cursor::apply_control(cursor, *control);
+      if (cursor.subscribed && !cursor.tracker_handle) {
+        cursor.tracker_handle = host_cursor::tracker::acquire();
+      } else if (!cursor.subscribed) {
+        cursor.tracker_handle.reset();
+      }
+      if (was_subscribed != cursor.subscribed || drew != cursor.client_draws) {
+        BOOST_LOG(info) << "Client-side cursor: client "sv << (cursor.subscribed ? "subscribed"sv : "unsubscribed"sv)
+                        << ", client draws the cursor: "sv << (cursor.client_draws ? "yes"sv : "no"sv);
       }
     });
 
@@ -2027,6 +2134,10 @@ namespace stream {
       bool has_processless_live_session = false;
       bool haptics_client = false;
       bool has_game_session_pending_or_draining = false;
+      std::size_t cursor_sessions = 0;
+      std::size_t cursor_client_drawing = 0;
+      // One snapshot per pass, so every session's state and the compositing decision agree.
+      const auto cursor_snapshot = host_cursor::tracker::latest();
 
       {
         auto lg = server->_sessions.lock();
@@ -2050,6 +2161,8 @@ namespace stream {
           // haptic click or a rumble stop must not sit for up to 150 ms.
           haptics_client |= (session->config.mlFeatureFlags & ML_FF_HAPTICS_PCM) != 0 ||
                             input::has_gamepad(session->input);
+          // Cursor state is sent from this loop too and must not wait 150 ms.
+          haptics_client |= session->control.cursor.subscribed;
 
           if (now > session->pingTimeout) {
             auto address = session->control.peer ? platf::from_sockaddr((sockaddr *) &session->control.peer->address.address) : session->control.expected_peer_address;
@@ -2102,6 +2215,7 @@ namespace stream {
               game_runtime_active,
               session->remote_role
             );
+          ++cursor_sessions;
 
           // Remember if we have a session that's waiting for a peer to connect to the
           // control stream. This ensures the clients are properly notified even when
@@ -2151,6 +2265,12 @@ namespace stream {
               send_hdr_mode(session, std::move(hdr_info));
             }
 
+            // A state the client cannot draw from already says COMPOSITED, and the
+            // session does not count as drawing, so frames blend the cursor again
+            // from the next one.
+            send_cursor_updates(session, cursor_snapshot);
+            cursor_client_drawing += host_cursor::draws_cursor(session->control.cursor);
+
             // The sample period (500 ms) is longer than this loop's ENet wait.
             tick_adaptive_pacing(session, now);
           }
@@ -2158,6 +2278,18 @@ namespace stream {
           ++pos;
         })
       }
+
+      // Frames keep the cursor unless every session, including any still waiting for
+      // its peer, draws it itself and can. A WebRTC stream shares the captured frames
+      // and has no cursor channel, so its capture counts as a session that does not.
+      const bool cursor_compositing = host_cursor::compute_compositing_required(
+        cursor_sessions + (webrtc_stream::has_capture_active() ? 1 : 0),
+        cursor_client_drawing
+      );
+      if (cursor_compositing != host_cursor::compositing_required()) {
+        BOOST_LOG(debug) << "Client-side cursor: host "sv << (cursor_compositing ? "draws"sv : "stops drawing"sv) << " the cursor into the video"sv;
+      }
+      host_cursor::set_compositing_required(cursor_compositing);
 
 #ifdef _WIN32
       if (session::running_sessions.load(std::memory_order_relaxed) > 0) {
@@ -2182,6 +2314,8 @@ namespace stream {
       // is not moving.
       server->iterate(haptics_client ? 5ms : 150ms);
     }
+
+    host_cursor::set_compositing_required(true);
 
     // Let all remaining connections know the server is shutting down
     // reason: graceful termination
@@ -4447,6 +4581,7 @@ namespace stream {
       session->control.connect_data = launch_session.control_connect_data;
       session->control.feedback_queue = mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback, platf::GAMEPAD_FEEDBACK_QUEUE_CAPACITY, false);
       session->control.hdr_queue = mail->event<video::hdr_info_t>(mail::hdr);
+      session->control.cursor_geometry_events = mail->event<input::touch_port_t>(mail::touch_port);
       session->control.legacy_input_enc_iv = launch_session.iv;
       session->control.cipher = crypto::cipher::gcm_t {
         launch_session.gcm_key,

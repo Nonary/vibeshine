@@ -250,6 +250,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/fullscreen_detector.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/game_activity.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/game_activity.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/cursor_tracker.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/cursor_tracker.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/input.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_base.cpp"
@@ -356,6 +358,7 @@ list(PREPEND PLATFORM_LIBRARIES
         pdh
         powrprof
         setupapi
+        shcore
         shlwapi
         shell32
         crypt32
