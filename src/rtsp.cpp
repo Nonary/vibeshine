@@ -917,7 +917,7 @@ namespace rtsp_stream {
     void reconcile_abandoned_monitor_locked(const std::shared_ptr<launch_session_t> &pending) {
       if (pending && pending->role == remote_session::role_e::monitor && !pending->client_uuid.empty() &&
           !pending->monitor_stream_published) {
-        remote_session::notify_monitor_transport_lost(pending->client_uuid, pending->role_generation);
+        nvhttp::end_remote_monitor_transport(pending->client_uuid, pending->role_generation);
       }
     }
 
@@ -1358,7 +1358,9 @@ namespace rtsp_stream {
       return out;
     }
 
-    client_disconnect_result_t disconnect_client(const std::string &client_uuid, const bool graceful) {
+    client_disconnect_result_t disconnect_client(
+      const std::string &client_uuid, const bool graceful, const std::function<void()> &before_removal
+    ) {
       host_stream_control::activity_guard_t activity;
       if (!activity) return {};
       if (client_uuid.empty()) {
@@ -1370,6 +1372,10 @@ namespace rtsp_stream {
       std::vector<std::shared_ptr<launch_session_t>> removed_pending_sessions;
       client_disconnect_result_t result;
       [[maybe_unused]] bool vulkan_hdr_layer_active = false;
+      // Startup publishes under this gate. Scan both registries before a
+      // pending launch can become a running stream, then join outside the gate.
+      std::unique_lock lifecycle_lock {nvhttp::stream_lifecycle_mutex()};
+      if (before_removal) before_removal();
       {
         std::lock_guard lock {pending_launches_mutex};
         for (auto it = pending_launches.begin(); it != pending_launches.end();) {
@@ -1404,6 +1410,7 @@ namespace rtsp_stream {
 #ifdef _WIN32
       set_vulkan_hdr_layer_streaming_active(vulkan_hdr_layer_active);
 #endif
+      lifecycle_lock.unlock();
 
       for (auto &slot : to_cleanup) {
         stream::session::mark_client_disconnected(*slot);
@@ -1612,6 +1619,12 @@ namespace rtsp_stream {
     return server.has_pending_launch_or_startup(expire_pending);
   }
 
+  bool has_pending_monitor_launch(std::string_view client_uuid, std::uint64_t generation) {
+    const auto pending = server.pending_launch(static_cast<std::uint32_t>(generation));
+    return pending && pending->role == remote_session::role_e::monitor && !pending->monitor_stream_published &&
+           pending->client_uuid == client_uuid && pending->role_generation == generation;
+  }
+
   void set_vulkan_hdr_layer_pending_stream(bool active) {
     server.set_pending_vulkan_hdr_layer_stream(active);
   }
@@ -1656,9 +1669,11 @@ namespace rtsp_stream {
     return disconnect_client_sessions_with_result(client_uuid).disconnected;
   }
 
-  client_disconnect_result_t disconnect_client_sessions_with_result(const std::string &client_uuid, const bool graceful) {
+  client_disconnect_result_t disconnect_client_sessions_with_result(
+    const std::string &client_uuid, const bool graceful, const std::function<void()> &before_removal
+  ) {
     server.clear(false);
-    return server.disconnect_client(client_uuid, graceful);
+    return server.disconnect_client(client_uuid, graceful, before_removal);
   }
 
   int send(tcp::socket &sock, const std::string_view &sv) {
@@ -2356,15 +2371,16 @@ namespace rtsp_stream {
         if (!admitted || !pending_launch ||
             pending_launch->id != launch_session->id ||
             pending_launch->unique_id != launch_session->unique_id ||
+            (pending_launch->role == remote_session::role_e::monitor && pending_launch->monitor_stream_published) ||
             !server->retain_pending_runtime_holds(launch_session)) {
-          // The launch may have timed out or been canceled while this worker
-          // waited for lifecycle ownership. Never resurrect that stale request.
+          // A queued startup may outlive its reservation. A published monitor
+          // must also reject a second ANNOUNCE while awaiting control attach.
           server->post([server, socket = std::move(socket), session = std::move(session), sequence_number]() mutable {
             OPTION_ITEM completion_option {};
             completion_option.option = const_cast<char *>("CSeq");
             auto completion_seqn = std::to_string(sequence_number);
             completion_option.content = const_cast<char *>(completion_seqn.c_str());
-            BOOST_LOG(info) << "Discarding canceled or expired RTSP startup request.";
+            BOOST_LOG(info) << "Discarding canceled, expired or duplicate RTSP startup request.";
             respond(socket->sock, *session, &completion_option, 503, "Service Unavailable", sequence_number, {});
             server->shutdown_socket(*socket);
           });
@@ -2391,18 +2407,31 @@ namespace rtsp_stream {
         bool startup_failed = true;
         bool failed_before_control_registration = false;
         std::string startup_error;
+        const bool session_ids = (config.mlFeatureFlags & ML_FF_SESSION_ID_V1) != 0;
+        const bool monitor_transport_conflict = pending_launch->role == remote_session::role_e::monitor &&
+                                                !nvhttp::can_start_remote_monitor(client_uuid, pending_launch->role_generation, session_ids);
 
-        try {
-          stream_session = stream::session::alloc(config, *launch_session);
-          const int start_result = stream::session::start(*stream_session, remote_address);
-          startup_failed = start_result != 0;
-          // The explicit -1 return is before control registration. Exceptions
-          // may occur later and must not retire a potentially started session.
-          failed_before_control_registration = start_result == -1;
-        } catch (const std::exception &e) {
-          startup_error = e.what();
-        } catch (...) {
-          startup_error = "unknown exception";
+        if (monitor_transport_conflict) {
+          // Legacy control and A/V setup use the source address. Multiple
+          // monitor connections under this pairing need distinct session IDs.
+          startup_error = "Running multiple Remote Monitor screens requires a client with session ID support.";
+          server->retire_failed_monitor_start_locked(launch_session);
+          if (pending_launch->new_monitor_display) {
+            nvhttp::end_remote_monitor_transport(client_uuid, pending_launch->role_generation, "Remote Monitor transport is incompatible");
+          }
+        } else {
+          try {
+            stream_session = stream::session::alloc(config, *launch_session);
+            const int start_result = stream::session::start(*stream_session, remote_address);
+            startup_failed = start_result != 0;
+            // The explicit -1 return is before control registration. Exceptions
+            // may occur later and must not retire a potentially started session.
+            failed_before_control_registration = start_result == -1;
+          } catch (const std::exception &e) {
+            startup_error = e.what();
+          } catch (...) {
+            startup_error = "unknown exception";
+          }
         }
 
         const bool stream_hdr_enabled = activates_vulkan_hdr_layer_for_stream(config.monitor);
@@ -2411,7 +2440,10 @@ namespace rtsp_stream {
           // Cancellation can then find and synchronously join every started
           // session instead of racing the posted RTSP response callback.
           server->insert(stream_session, client_uuid, stream_session && stream_hdr_enabled);
-          if (pending_launch->role == remote_session::role_e::monitor) pending_launch->monitor_stream_published = true;
+          if (pending_launch->role == remote_session::role_e::monitor) {
+            pending_launch->monitor_stream_published = true;
+            nvhttp::notify_remote_monitor_started(pending_launch->client_uuid, pending_launch->role_generation, session_ids);
+          }
         }
         if (failed_before_control_registration) server->retire_failed_monitor_start_locked(launch_session);
         if (startup_failed) server->set_pending_vulkan_hdr_layer_stream(false);

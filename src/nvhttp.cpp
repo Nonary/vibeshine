@@ -110,6 +110,14 @@ namespace nvhttp {
       std::uint64_t generation {};
       std::string client_uuid;
       std::optional<remote_session::monitor_profile_t> monitor_profile;
+      std::string display_uuid;
+      std::size_t monitor_slot {};
+      remote_session::monitor_slot_state_e monitor_state {};
+      std::optional<crypto::sha256_t> launch_fingerprint;
+      std::string rtsp_scheme;
+      bool session_ids {};
+      std::string release_after_drain;
+      bool unpair_after_drain {};
     };
 
     std::mutex remote_role_owners_mutex;
@@ -133,6 +141,33 @@ namespace nvhttp {
       return std::string {uuid} + ':' + std::to_string(static_cast<unsigned int>(role));
     }
 
+    std::vector<remote_role_owner_t> remote_monitor_owners(std::string_view client_uuid) {
+      std::vector<remote_role_owner_t> monitors;
+      std::lock_guard lock {remote_role_owners_mutex};
+      for (const auto &[_, owner] : remote_role_owners) {
+        if (owner.role == remote_session::role_e::monitor && owner.client_uuid == client_uuid) monitors.push_back(owner);
+      }
+      std::ranges::sort(monitors, {}, &remote_role_owner_t::monitor_slot);
+      return monitors;
+    }
+
+    auto find_monitor_owner_locked(std::string_view client_uuid, std::uint64_t generation) {
+      return std::ranges::find_if(remote_role_owners, [&](const auto &entry) {
+        const auto &owner = entry.second;
+        return owner.role == remote_session::role_e::monitor && owner.client_uuid == client_uuid && owner.generation == generation;
+      });
+    }
+
+    std::string remote_monitor_display_uuid(const std::string &client_uuid, std::size_t slot) {
+      if (slot == 0) return client_uuid;
+      const auto digest = crypto::hash(std::format("remote-monitor:{}:{}", client_uuid, slot));
+      uuid_util::uuid_t uuid {};
+      std::copy_n(digest.begin(), sizeof(uuid.b8), uuid.b8);
+      uuid.b8[6] = (uuid.b8[6] & 0x0f) | 0x80;
+      uuid.b8[8] = (uuid.b8[8] & 0x3f) | 0x80;
+      return uuid.string();
+    }
+
     struct remote_role_gate_snapshot_t {
       remote_session::owner_t owner;
       bool active {};
@@ -144,35 +179,39 @@ namespace nvhttp {
       {
         std::lock_guard lock {remote_role_owners_mutex};
         result.active = !remote_role_owners.empty();
-        for (const auto role : {remote_session::role_e::monitor, remote_session::role_e::input}) {
-          const auto it = remote_role_owners.find(remote_role_owner_key(uuid, role));
-          if (it == remote_role_owners.end()) continue;
-          caller_owner = it->second;
-          break;
+        for (const auto &[_, owner] : remote_role_owners) {
+          if (owner.role == remote_session::role_e::monitor && owner.client_uuid == uuid &&
+              (!caller_owner || owner.monitor_slot < caller_owner->monitor_slot)) caller_owner = owner;
+        }
+        if (!caller_owner) {
+          const auto input = remote_role_owners.find(remote_role_owner_key(uuid, remote_session::role_e::input));
+          if (input != remote_role_owners.end()) caller_owner = input->second;
         }
       }
       if (!caller_owner) return result;
       result.owner.role = caller_owner->role;
       if (caller_owner->role == remote_session::role_e::monitor) {
-        const auto state = remote_session::monitor_runtime_snapshot(uuid, caller_owner->generation);
+        const auto state = remote_session::monitor_runtime_snapshot(caller_owner->display_uuid, caller_owner->generation);
         result.owner.retained = state.accepted;
         result.owner.ready = state.ready;
         result.owner.retryable = state.retryable;
         if (!state.output.empty()) result.owner.output = state.output;
+        const auto &profile = caller_owner->monitor_profile;
+        result.owner.builtin_monitor = profile && !profile->target &&
+                                       remote_session::identify(0, profile->uuid) == remote_session::control_e::monitor;
       }
       return result;
     }
 
-    std::optional<remote_session::monitor_profile_t> retained_monitor_profile(std::string_view uuid) {
+    void remember_remote_monitor(remote_role_owner_t owner) {
       std::lock_guard lock {remote_role_owners_mutex};
-      const auto it = remote_role_owners.find(remote_role_owner_key(uuid, remote_session::role_e::monitor));
-      return it == remote_role_owners.end() ? std::nullopt : it->second.monitor_profile;
+      const auto key = remote_role_owner_key(owner.display_uuid, owner.role);
+      remote_role_owners.insert_or_assign(key, std::move(owner));
     }
 
-    void remember_remote_owner(std::string_view uuid, remote_session::role_e role, std::uint64_t generation,
-      std::optional<remote_session::monitor_profile_t> monitor_profile = std::nullopt) {
+    void remember_remote_owner(std::string_view uuid, remote_session::role_e role, std::uint64_t generation) {
       std::lock_guard lock {remote_role_owners_mutex};
-      remote_role_owners.insert_or_assign(remote_role_owner_key(uuid, role), remote_role_owner_t {role, generation, std::string {uuid}, std::move(monitor_profile)});
+      remote_role_owners.insert_or_assign(remote_role_owner_key(uuid, role), remote_role_owner_t {role, generation, std::string {uuid}});
     }
 
     std::optional<std::uint64_t> remote_owner_generation(std::string_view uuid, remote_session::role_e role) {
@@ -190,15 +229,6 @@ namespace nvhttp {
       }
       remote_role_owners.erase(it);
       return true;
-    }
-
-    void forget_remote_client(std::string_view uuid) {
-      {
-        std::lock_guard lock {remote_role_owners_mutex};
-        remote_role_owners.erase(remote_role_owner_key(uuid, remote_session::role_e::monitor));
-        remote_role_owners.erase(remote_role_owner_key(uuid, remote_session::role_e::input));
-      }
-      remote_session::clear_app_replacement_confirmation(uuid);
     }
 
     bool has_stream_session_activity(bool expire_pending = true) {
@@ -246,9 +276,94 @@ namespace nvhttp {
     }
   }
 
-  void notify_remote_monitor_released(const std::string_view client_uuid, const std::uint64_t generation) {
-    forget_remote_owner(client_uuid, remote_session::role_e::monitor, generation);
+  bool can_start_remote_monitor(const std::string_view client_uuid, const std::uint64_t generation, const bool session_ids) {
+    std::lock_guard lock {remote_role_owners_mutex};
+    using state = remote_session::monitor_slot_state_e;
+    return std::ranges::none_of(remote_role_owners, [&](const auto &entry) {
+      const auto &peer = entry.second;
+      return peer.role == remote_session::role_e::monitor && peer.client_uuid == client_uuid &&
+             peer.generation != generation &&
+             (peer.monitor_state == state::streaming || peer.monitor_state == state::stopping) &&
+             (!session_ids || !peer.session_ids);
+    });
   }
+
+  void notify_remote_monitor_started(const std::string_view client_uuid, const std::uint64_t generation, const bool session_ids) {
+    std::lock_guard lock {remote_role_owners_mutex};
+    const auto it = find_monitor_owner_locked(client_uuid, generation);
+    if (it != remote_role_owners.end() && it->second.monitor_state == remote_session::monitor_slot_state_e::starting) {
+      it->second.session_ids = session_ids;
+      it->second.monitor_state = remote_session::monitor_slot_state_e::streaming;
+    }
+  }
+
+  void notify_remote_monitor_stopping(const std::string_view client_uuid, const std::uint64_t generation) {
+    std::lock_guard lock {remote_role_owners_mutex};
+    const auto it = find_monitor_owner_locked(client_uuid, generation);
+    if (it != remote_role_owners.end()) it->second.monitor_state = remote_session::monitor_slot_state_e::stopping;
+  }
+
+  bool end_remote_monitor_transport(const std::string_view client_uuid, const std::uint64_t generation, const std::string_view release_reason) {
+    std::string display_uuid;
+    std::string reason {release_reason};
+    bool unpair = false;
+    {
+      std::lock_guard lock {remote_role_owners_mutex};
+      const auto it = find_monitor_owner_locked(client_uuid, generation);
+      if (it == remote_role_owners.end()) return !release_reason.empty();
+      auto &owner = it->second;
+      display_uuid = owner.display_uuid;
+      owner.monitor_state = remote_session::monitor_slot_state_e::retained;
+      owner.launch_fingerprint.reset();
+      if (reason.empty()) reason = owner.release_after_drain;
+      unpair = owner.unpair_after_drain;
+    }
+    if (unpair) {
+      remote_session::notify_monitor_unpair(display_uuid);
+    } else if (reason.empty()) {
+      remote_session::notify_monitor_transport_lost(display_uuid, generation);
+      return false;
+    } else if (!remote_session::release_monitor(display_uuid, generation, reason)) {
+      return false;
+    }
+    return forget_remote_owner(display_uuid, remote_session::role_e::monitor, generation);
+  }
+
+  namespace {
+    // Called under the lifecycle gate after RTSP cancellation. A session may
+    // already be detached from the RTSP registry while its capture drains.
+    bool request_remote_monitor_release(std::string_view client_uuid, std::uint64_t generation, std::string_view reason, bool unpair = false) {
+      {
+        std::lock_guard lock {remote_role_owners_mutex};
+        const auto it = find_monitor_owner_locked(client_uuid, generation);
+        if (it == remote_role_owners.end()) return true;
+        auto &owner = it->second;
+        owner.unpair_after_drain |= unpair;
+        using state = remote_session::monitor_slot_state_e;
+        if (owner.monitor_state == state::streaming || owner.monitor_state == state::stopping) {
+          owner.release_after_drain = reason;
+          return true;
+        }
+      }
+      return end_remote_monitor_transport(client_uuid, generation, reason);
+    }
+
+    void unpair_remote_monitors(std::string_view uuid) {
+      std::unique_lock lifecycle_lock {stream_lifecycle_mutex()};
+      const auto monitors = remote_monitor_owners(uuid);
+      if (std::ranges::none_of(monitors, [&](const auto &owner) { return owner.display_uuid == uuid; })) {
+        remote_session::notify_monitor_unpair(uuid);
+      }
+      for (const auto &owner : monitors) {
+        request_remote_monitor_release(uuid, owner.generation, "Remote Monitor client unpaired", true);
+      }
+      {
+        std::lock_guard lock {remote_role_owners_mutex};
+        remote_role_owners.erase(remote_role_owner_key(uuid, remote_session::role_e::input));
+      }
+      remote_session::clear_app_replacement_confirmation(uuid);
+    }
+  }  // namespace
 
   bool has_remote_role_owner() {
     std::lock_guard lock {remote_role_owners_mutex};
@@ -264,8 +379,8 @@ namespace nvhttp {
       }
     }
     for (const auto &owner : monitors) {
-      if (!remote_session::monitor_runtime_snapshot(owner.client_uuid, owner.generation).accepted) {
-        forget_remote_owner(owner.client_uuid, owner.role, owner.generation);
+      if (!remote_session::monitor_runtime_snapshot(owner.display_uuid, owner.generation).accepted) {
+        forget_remote_owner(owner.display_uuid, owner.role, owner.generation);
       }
     }
   }
@@ -4651,32 +4766,33 @@ namespace nvhttp {
           return;
         }
         const auto role = synthetic_control == remote_session::control_e::disconnect_input ? remote_session::role_e::input : remote_session::role_e::monitor;
-        const auto generation = remote_owner_generation(identity.uuid, role);
-        if (!generation) {
-          tree.put("root.resume", 0);
-          tree.put("root.<xmlattr>.status_code", 409);
-          tree.put("root.<xmlattr>.status_message", "Remote session generation is no longer owned by this caller");
-          return;
-        }
-        (void) rtsp_stream::disconnect_remote_role_session(identity.uuid, role, *generation, true);
         if (role == remote_session::role_e::monitor) {
-          // Stop exact-output capture before removing its owned VDD. The join
-          // publishes transport loss first; this explicit generation-matched
-          // release then removes only the caller's display.
-          if (!remote_session::release_monitor(identity.uuid, *generation, "Disconnect Monitor")) {
+          bool released = true;
+          for (const auto &monitor : remote_monitor_owners(identity.uuid)) {
+            (void) rtsp_stream::disconnect_remote_role_session(identity.uuid, role, monitor.generation, true);
+            released = request_remote_monitor_release(identity.uuid, monitor.generation, "Disconnect Monitor") && released;
+          }
+#if defined(_WIN32) || defined(__linux__)
+          cleanup_virtual_display_if_idle_locked();
+#endif
+          if (!released) {
             tree.put("root.resume", 0);
             tree.put("root.gamesession", 0);
             tree.put("root.<xmlattr>.status_code", 503);
             tree.put("root.<xmlattr>.status_message", "Remote Monitor display release is retained for retry");
             return;
           }
+        } else {
+          const auto generation = remote_owner_generation(identity.uuid, role);
+          if (!generation) {
+            tree.put("root.resume", 0);
+            tree.put("root.<xmlattr>.status_code", 409);
+            tree.put("root.<xmlattr>.status_message", "Remote session generation is no longer owned by this caller");
+            return;
+          }
+          (void) rtsp_stream::disconnect_remote_role_session(identity.uuid, role, *generation, true);
+          forget_remote_owner(identity.uuid, role, *generation);
         }
-        forget_remote_owner(identity.uuid, role, *generation);
-#if defined(_WIN32) || defined(__linux__)
-        if (role == remote_session::role_e::monitor) {
-          cleanup_virtual_display_if_idle_locked();
-        }
-#endif
         const auto completion = *remote_session::successful_control_completion(synthetic_control);
         tree.put("root.resume", 0);
         tree.put("root.<xmlattr>.status_code", completion.status_code);
@@ -4691,8 +4807,7 @@ namespace nvhttp {
           resume(host_audio, std::move(response), std::move(request), current_appid, true, true, trace_id);
           return;
         }
-        if (decision.resume_role != remote_session::role_e::monitor ||
-            !remote_owner_generation(identity.uuid, remote_session::role_e::monitor)) {
+        if (decision.resume_role != remote_session::role_e::monitor) {
           tree.put("root.resume", 0);
           tree.put("root.<xmlattr>.status_code", 404);
           tree.put("root.<xmlattr>.status_message", "No running game or retained Remote Monitor belongs to this caller");
@@ -4732,8 +4847,9 @@ namespace nvhttp {
       }
       const bool no_active_sessions =
         !has_stream_session_activity() && proc::proc.current_app_id() <= 0;
-      const auto retained_profile = retained_monitor_profile(identity.uuid);
       const bool monitor_request = synthetic_control != remote_session::control_e::input;
+      const auto monitors = monitor_request ? remote_monitor_owners(identity.uuid) : std::vector<remote_role_owner_t> {};
+      const auto retained_profile = monitors.empty() ? std::nullopt : monitors.front().monitor_profile;
       const auto builtin_uuid = remote_session::synthetic(
         monitor_request ? remote_session::control_e::monitor : remote_session::control_e::input
       ).uuid;
@@ -4764,6 +4880,54 @@ namespace nvhttp {
         return;
       }
 #endif
+      const auto succeed = [&](std::string_view rtsp_scheme) {
+        tree.put("root.<xmlattr>.status_code", 200);
+        tree.put("root.sessionUrl0", std::format("{}{}:{}", rtsp_scheme, net::addr_to_url_escaped_string(request->local_endpoint().address()), static_cast<int>(net::map_port(rtsp_stream::RTSP_SETUP_PORT))));
+        tree.put("root.gamesession", 1);
+      };
+      std::size_t monitor_slot = 0;
+      bool new_monitor_display = false;
+      std::optional<crypto::sha256_t> launch_fingerprint;
+      std::string display_uuid;
+      if (monitor_profile) {
+        using state = remote_session::monitor_slot_state_e;
+        launch_fingerprint = crypto::hash(get_arg(args, "rikey", ""));
+        remote_session::monitor_slots_t slots {};
+        for (const auto &monitor : monitors) {
+          if (monitor.launch_fingerprint == launch_fingerprint) {
+            if (!paired_client_uuid_enabled(identity.uuid)) {
+              tree.put("root.<xmlattr>.status_code", 403);
+              tree.put("root.<xmlattr>.status_message", "Paired client authorization was revoked before stream admission");
+            } else if (monitor.monitor_state == state::starting &&
+                       rtsp_stream::has_pending_monitor_launch(identity.uuid, monitor.generation)) {
+              succeed(monitor.rtsp_scheme);
+            } else {
+              tree.put("root.<xmlattr>.status_code", 409);
+              tree.put("root.<xmlattr>.status_message", "Remote Monitor launch is no longer pending. Start a new connection to resume or add a screen.");
+            }
+            return;
+          }
+          slots[monitor.monitor_slot] = monitor.monitor_state;
+        }
+        const bool can_create = synthetic_control == remote_session::control_e::monitor && !removed_builtin &&
+                                (monitors.empty() || (requested_profile_uuid == builtin_uuid && !monitor_profile->target));
+        const auto selected_slot = remote_session::select_monitor_slot(slots, can_create);
+        if (!selected_slot) {
+          tree.put("root.resume", 0);
+          tree.put("root.<xmlattr>.status_code", 409);
+          tree.put("root.<xmlattr>.status_message", "No Remote Monitor screen is available to start or resume");
+          return;
+        }
+        if (!can_start_remote_monitor(identity.uuid, 0, true)) {
+          tree.put("root.resume", 0);
+          tree.put("root.<xmlattr>.status_code", 409);
+          tree.put("root.<xmlattr>.status_message", "The running Remote Monitor client does not support multiple screens.");
+          return;
+        }
+        monitor_slot = *selected_slot;
+        new_monitor_display = slots[monitor_slot] == state::empty;
+        display_uuid = remote_monitor_display_uuid(identity.uuid, monitor_slot);
+      }
       const auto client_settings = get_named_cert_by_uuid(identity.uuid);
       std::unordered_map<std::string, std::string> requested_runtime_overrides;
       if (monitor_profile) {
@@ -4833,6 +4997,7 @@ namespace nvhttp {
       launch_session->role_generation = launch_session->id;
       launch_session->role = synthetic_control == remote_session::control_e::input ? remote_session::role_e::input : remote_session::role_e::monitor;
       if (monitor_profile) launch_session->monitor_profile_uuid = monitor_profile->uuid;
+      launch_session->new_monitor_display = new_monitor_display;
       launch_session->host_audio = remote_session::uses_host_audio(launch_session->role);
       launch_session->continuous_audio = false;
       if (launch_session->role == remote_session::role_e::monitor) {
@@ -4853,12 +5018,12 @@ namespace nvhttp {
         const bool monitor_hdr_requested = rtsp_stream::effective_hdr_requested(*launch_session);
 #endif
         auto monitor = monitor_profile && monitor_profile->target ? remote_session::borrow_monitor_target(
-          identity.uuid, launch_session->role_generation, *monitor_profile->target,
+          display_uuid, launch_session->role_generation, *monitor_profile->target,
           {launch_session->width, launch_session->height, launch_session->client_display_refresh_millihz ?
             launch_session->client_display_refresh_millihz : launch_session->exact_requested_refresh_millihz,
             monitor_hdr_requested}, launch_session->output_name_override) : remote_session::activate_or_resume_monitor(
-          identity.uuid,
-          identity.name,
+          display_uuid,
+          monitor_slot == 0 ? identity.name : std::format("{} ({})", identity.name, monitor_slot + 1),
           mode,
           monitor_hdr_requested,
           launch_session->role_generation
@@ -4867,7 +5032,18 @@ namespace nvhttp {
           // Publish retryable ownership as well as ready ownership. This makes
           // the reduced Resume/Disconnect Monitor catalogue reachable after a
           // failed apply, and the next Resume retries with a new generation.
-          remember_remote_owner(identity.uuid, launch_session->role, launch_session->role_generation, monitor_profile);
+          const bool starting = monitor.ready && !monitor.output.empty();
+          remember_remote_monitor({
+            .role = launch_session->role,
+            .generation = launch_session->role_generation,
+            .client_uuid = identity.uuid,
+            .monitor_profile = monitor_profile,
+            .display_uuid = display_uuid,
+            .monitor_slot = monitor_slot,
+            .monitor_state = starting ? remote_session::monitor_slot_state_e::starting : remote_session::monitor_slot_state_e::retained,
+            .launch_fingerprint = starting ? launch_fingerprint : std::nullopt,
+            .rtsp_scheme = launch_session->rtsp_url_scheme,
+          });
         }
         if (!monitor.ready || monitor.output.empty()) {
           tree.put("root.resume", 0);
@@ -4892,9 +5068,7 @@ namespace nvhttp {
       stream::session::arm_shared_runtime_cleanup(launch_session->virtual_display_guid_bytes);
       if (!paired_client_uuid_enabled(launch_session->client_uuid)) {
         if (launch_session->role == remote_session::role_e::monitor) {
-          if (remote_session::release_monitor(identity.uuid, launch_session->role_generation, "Paired client authorization revoked")) {
-            forget_remote_owner(identity.uuid, launch_session->role, launch_session->role_generation);
-          }
+          end_remote_monitor_transport(identity.uuid, launch_session->role_generation, "Paired client authorization revoked");
 launch_session->exact_target_hold.reset();
 #if defined(_WIN32) || defined(__linux__)
           cleanup_virtual_display_if_idle_locked();
@@ -4907,9 +5081,7 @@ launch_session->exact_target_hold.reset();
       }
       if (!rtsp_stream::launch_session_raise(launch_session)) {
         if (launch_session->role == remote_session::role_e::monitor) {
-          if (remote_session::release_monitor(identity.uuid, launch_session->role_generation, "RTSP admission rejected")) {
-            forget_remote_owner(identity.uuid, launch_session->role, launch_session->role_generation);
-          }
+          end_remote_monitor_transport(identity.uuid, launch_session->role_generation, "RTSP admission rejected");
 launch_session->exact_target_hold.reset();
 #if defined(_WIN32) || defined(__linux__)
           cleanup_virtual_display_if_idle_locked();
@@ -4924,9 +5096,7 @@ launch_session->exact_target_hold.reset();
       if (launch_session->role != remote_session::role_e::monitor) {
         remember_remote_owner(identity.uuid, launch_session->role, launch_session->role_generation);
       }
-      tree.put("root.<xmlattr>.status_code", 200);
-      tree.put("root.sessionUrl0", std::format("{}{}:{}", launch_session->rtsp_url_scheme, net::addr_to_url_escaped_string(request->local_endpoint().address()), static_cast<int>(net::map_port(rtsp_stream::RTSP_SETUP_PORT))));
-      tree.put("root.gamesession", 1);
+      succeed(launch_session->rtsp_url_scheme);
       return;
     }
     std::unique_lock normal_transition_lock {normal_http_app_transition_mutex};
@@ -6868,8 +7038,7 @@ launch_session->exact_target_hold.reset();
     }
     for (const auto &client : clients) {
       (void) rtsp_stream::disconnect_client_sessions(client.uuid);
-      remote_session::notify_monitor_unpair(client.uuid);
-      forget_remote_client(client.uuid);
+      unpair_remote_monitors(client.uuid);
     }
 #if defined(_WIN32) || defined(__linux__)
     cleanup_virtual_display_if_idle();
@@ -6987,8 +7156,7 @@ launch_session->exact_target_hold.reset();
       auto admission_barrier = acquire_stream_start_lifecycle_lock();
     }
     (void) rtsp_stream::disconnect_client_sessions(std::string {uuid});
-    remote_session::notify_monitor_unpair(uuid);
-    forget_remote_client(uuid);
+    unpair_remote_monitors(uuid);
 #if defined(_WIN32) || defined(__linux__)
     cleanup_virtual_display_if_idle();
 #endif
@@ -7081,13 +7249,17 @@ launch_session->exact_target_hold.reset();
   bool disconnect_client(const std::string &uuid) {
     host_stream_control::activity_guard_t activity;
     if (!activity) return false;
-    // Capture the generation before stopping transport. The join path may
-    // retain it for Resume, while a newer launch admitted after this point
-    // must never be released by this disconnect request.
-    const auto monitor_generation = config::video.remote_monitor_disconnect_on_client_disconnect ?
-                                      remote_owner_generation(uuid, remote_session::role_e::monitor) :
-                                      std::nullopt;
-    const auto disconnect = rtsp_stream::disconnect_client_sessions_with_result(uuid, true);
+    const bool release_monitors = config::video.remote_monitor_disconnect_on_client_disconnect;
+    std::vector<std::uint64_t> monitor_generations;
+    const auto disconnect = rtsp_stream::disconnect_client_sessions_with_result(uuid, true, [&] {
+      // Capture retained and live ownership under the same lifecycle gate as
+      // RTSP removal. Later launches must survive this disconnect.
+      if (release_monitors) {
+        for (const auto &monitor : remote_monitor_owners(uuid)) {
+          monitor_generations.push_back(monitor.generation);
+        }
+      }
+    });
     // The result is the pending-map removal linearization point. Never look
     // up the current Input owner here: a newer generation may have been
     // admitted after the RTSP critical section and must survive.
@@ -7100,23 +7272,16 @@ launch_session->exact_target_hold.reset();
     }
 
     bool monitor_disconnected = false;
-    if (monitor_generation) {
+    if (!monitor_generations.empty()) {
       std::unique_lock lifecycle_lock {stream_lifecycle_mutex()};
-      // An active session may already have released this generation while it
-      // joined above. Recheck under the lifecycle gate so this path handles
-      // only retained/pending ownership and never repeats or reaches into a
-      // newer Remote Monitor launch.
-      if (remote_owner_generation(uuid, remote_session::role_e::monitor) != monitor_generation) {
-        return disconnect.disconnected;
-      }
-      const bool released = remote_session::release_monitor(uuid, *monitor_generation, "Paired client disconnected");
-      if (released) {
-        forget_remote_owner(uuid, remote_session::role_e::monitor, *monitor_generation);
+      // Release retained owners and reservations canceled by this disconnect.
+      // The captured generations exclude launches admitted after removal.
+      for (const auto generation : monitor_generations) {
+        monitor_disconnected = request_remote_monitor_release(uuid, generation, "Paired client disconnected") || monitor_disconnected;
       }
 #if defined(_WIN32) || defined(__linux__)
       cleanup_virtual_display_if_idle_locked();
 #endif
-      monitor_disconnected = released;
     }
     return disconnect.disconnected || monitor_disconnected;
   }

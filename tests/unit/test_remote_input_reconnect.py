@@ -40,11 +40,19 @@ def fixture(root):
 std::unordered_map<std::string, remote_role_owner_t> remote_role_owners;\n'''
     owners += '\n'.join(function(nv, signature) for signature in (
         'std::string remote_role_owner_key(',
+        'std::vector<remote_role_owner_t> remote_monitor_owners(',
+        'auto find_monitor_owner_locked(',
         'remote_role_gate_snapshot_t remote_role_gate_snapshot_for_client(',
+        'void remember_remote_monitor(',
         'void remember_remote_owner(',
         'std::optional<std::uint64_t> remote_owner_generation(',
         ('bool' if 'bool forget_remote_owner(' in nv else 'void') + ' forget_remote_owner(',
         'void notify_remote_input_transport_lost(',
+        'bool can_start_remote_monitor(',
+        'void notify_remote_monitor_started(',
+        'void notify_remote_monitor_stopping(',
+        'bool end_remote_monitor_transport(',
+        'bool request_remote_monitor_release(',
         'bool has_remote_role_owner()',
     ))
     methods = function(rtsp, 'struct pending_launch_t {') + ';\n'
@@ -61,6 +69,7 @@ std::unordered_map<std::string, remote_role_owner_t> remote_role_owners;\n'''
         'void expire_pending_locked(',
         'void notify_expired_pending(',
         'void expire_pending()',
+        'std::shared_ptr<launch_session_t> pending_launch(',
         'bool has_pending_launches()',
         'bool has_pending_launch_or_startup(',
         'bool disconnect_remote_role(',
@@ -70,7 +79,7 @@ std::unordered_map<std::string, remote_role_owner_t> remote_role_owners;\n'''
     start = nv.index('      std::unique_lock normal_transition_lock', start)
     replacement = nv[start:nv.index('      const bool no_active_sessions =', start)]
     start = nv.index('      const bool no_active_sessions =', start)
-    runtime_idle = nv[start:nv.index('      const auto retained_profile =', start)]
+    runtime_idle = nv[start:nv.index('      const bool monitor_request =', start)]
     start = nv.index('      bool runtime_overrides_applied = false;', start)
     runtime_apply = function(nv[start:], '      if (no_active_sessions) {')
     matches = '\n'.join(function(stream, signature) for signature in (
@@ -78,7 +87,9 @@ std::unordered_map<std::string, remote_role_owner_t> remote_role_owners;\n'''
     ))
     start = rtsp.index('        std::shared_ptr<stream::session_t> stream_session;')
     startup_gate = rtsp[start:rtsp.index('        server->post([server, socket', start)]
+    replay_check = function(rtsp, 'bool has_pending_monitor_launch(')
     return (template.replace('/* @OWNERS@ */', owners).replace('/* @RTSP_METHODS@ */', methods)
+            .replace('/* @REPLAY_CHECK@ */', replay_check)
             .replace('/* @DISPATCH@ */', dispatch).replace('/* @REPLACEMENT@ */', replacement)
             .replace('/* @RUNTIME_IDLE@ */', runtime_idle).replace('/* @RUNTIME_APPLY@ */', runtime_apply)
             .replace('/* @MATCHES@ */', matches).replace('/* @STARTUP_GATE@ */', startup_gate))
