@@ -417,6 +417,10 @@ const virtualDisplayCustomizationFields = (): SettingsField[] => [
     descriptionKey: 'ui.settings.fields.wayland_hdr_compatibility.description',
     visibleWhen: { key: 'virtual_display_mode', notEquals: 'disabled' },
   }),
+  boolean('virtual_display_keep_while_paused', {
+    platform: 'macos',
+    visibleWhen: { key: 'virtual_display_mode', notEquals: 'disabled' },
+  }),
 ];
 
 const remoteMonitorFields = (): SettingsField[] => [
@@ -630,7 +634,7 @@ export const settingsCategories: SettingsCategory[] = [
           extendedField('qsv_preset', { encoderFamily: 'intel', platform: 'windows' }),
           extendedField('amd_quality', { encoderFamily: 'amd', platform: 'windows' }),
           number('fec_percentage', {
-            min: 1,
+            min: 0,
             max: 255,
             step: 1,
             labelKey: 'ui.settings.fields.fec_percentage.label',
@@ -664,7 +668,7 @@ export const settingsCategories: SettingsCategory[] = [
               descriptionKey:
                 'ui.settings.fields.dd_paused_virtual_display_timeout_secs.description',
               warningKey: 'ui.settings.fields.dd_paused_virtual_display_timeout_secs.warning',
-              platform: ['windows', 'linux'],
+              platform: ['windows', 'linux', 'macos'],
               visibleWhen: { key: 'dd_config_revert_on_disconnect', equals: false },
             },
           ),
@@ -805,7 +809,7 @@ export const settingsCategories: SettingsCategory[] = [
           number('dd_paused_virtual_display_timeout_secs', {
             min: 0,
             step: 1,
-            platform: ['windows', 'linux'],
+            platform: ['windows', 'linux', 'macos'],
           }),
           text('dd_snapshot_restore_hotkey_modifiers', { platform: 'windows' }),
           text('end_stream_hotkey', { platform: 'windows' }),
@@ -979,7 +983,7 @@ export const settingsCategories: SettingsCategory[] = [
           number('minimum_fps_target', { min: 0, max: 1000, step: 0.1 }),
           extendedField('min_threads', { min: 1, step: 1 }),
           number('qp', { min: 0, max: 51, step: 1 }),
-          number('fec_percentage', { min: 1, max: 255, step: 1 }),
+          number('fec_percentage', { min: 0, max: 255, step: 1 }),
           number('video_max_batch_size_kb', { min: 1, step: 1 }),
           number('pyrowave_critical_fec_percentage', {
             min: 0,
@@ -1069,6 +1073,7 @@ export const settingsCategories: SettingsCategory[] = [
           extendedField('update_check_interval'),
           text('sunshine_name', { placeholderKey: 'ui.settings.placeholders.host_name' }),
           boolean('system_tray'),
+          boolean('lid_close_ends_streams', { platform: 'macos' }),
           boolean('notify_pre_releases'),
           select('min_log_level', [
             option('0', 'ui.settings.options.log_level.verbose'),
@@ -1147,6 +1152,7 @@ export const settingsDefaults: Record<string, unknown> = {
   virtual_display_mode: 'per_client',
   virtual_display_layout: 'exclusive',
   virtual_display_max_clients: 4,
+  virtual_display_keep_while_paused: true,
   remote_monitor_mute_audio: false,
   remote_monitor_disconnect_on_stream_end: false,
   remote_monitor_disconnect_on_client_disconnect: false,
@@ -1248,6 +1254,7 @@ export const settingsDefaults: Record<string, unknown> = {
   csrf_allowed_origins: '',
   system_tray: true,
   notify_pre_releases: true,
+  lid_close_ends_streams: true,
   min_log_level: 2,
   global_prep_cmd: [],
   session_history_enabled: true,

@@ -20,8 +20,8 @@ assert custom.find('.//w:CustomAction[@Id="BlockLegacySunshine"]',ns).get('Error
 repair=custom.find('.//w:CustomAction[@Id="RepairInstallRoot"]',ns)
 assert repair.attrib['Execute']=='deferred' and repair.attrib['Impersonate']=='no' and repair.attrib['Return']=='ignore'
 assert custom.find('.//w:CustomAction[@Id="SetRepairInstallRoot"]',ns).attrib['Property']=='RepairInstallRoot'
-assert seq.find('.//Custom[@Action="RepairInstallRoot"]').attrib['Before']=='SetInstallSudovda'
-assert seq.find('.//Custom[@Action="SetInstallSudovda"]').attrib['After']=='InstallFiles'
+assert seq.find('.//Custom[@Action="RepairInstallRoot"]').attrib['Before']=='SetInstallBundledDrivers'
+assert seq.find('.//Custom[@Action="SetInstallBundledDrivers"]').attrib['After']=='InstallFiles'
 assert seq.find('.//Custom[@Action="SetRepairInstallRoot"]').attrib['Before']=='RepairInstallRoot'
 assert seq.find('.//Custom[@Action="RepairInstallRoot"]').text=='NOT REMOVE'
 for old in ('AskUninstallLegacySunshine','WaitForLegacyUninstall'):

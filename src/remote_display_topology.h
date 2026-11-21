@@ -9,7 +9,10 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace remote_display_topology {
@@ -76,6 +79,10 @@ namespace remote_display_topology {
     // A false result retains ownership for retry; shared normal-game outputs
     // and captures still prevent removal.
     std::function<bool(const std::string &client_uuid)> terminate_owned_display;
+    // Optional desktop footprint of a client display in the given mode, for
+    // platforms whose desktop coordinates aren't capture pixels (a Retina
+    // display at 3840x2160 occupies 1920x1080 points). Mode reporting stays native.
+    std::function<std::optional<std::pair<int, int>>(const std::string &client_uuid, const mode_t &mode)> layout_size;
   };
 
   struct activation_result_t {
@@ -109,6 +116,8 @@ namespace remote_display_topology {
   nlohmann::json normalize_layout(const nlohmann::json &layout);
   // Remove a deleted client's placement and detach direct dependent anchors.
   nlohmann::json remove_client_from_layout(const nlohmann::json &layout, const std::string &client_uuid);
+  // Reconcile an older saved layout against the complete pairing snapshot.
+  nlohmann::json reconcile_saved_layout(const nlohmann::json &layout, const std::unordered_set<std::string_view> &paired_clients);
   bool validate_layout(const nlohmann::json &layout, const std::vector<std::string> &known_clients, const std::vector<std::string> &known_physical_ids, std::string &error);
 
   class coordinator_t {

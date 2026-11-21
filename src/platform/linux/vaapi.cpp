@@ -249,6 +249,11 @@ namespace va {
         av_dict_set_int(options, "low_power", 1, 0);
       } else {
         BOOST_LOG(info) << "Using normal encoding mode"sv;
+        // The common encoder options request low_power=1. Drivers that only expose
+        // VAEntrypointEncSlice (e.g. radeonsi) have no LP entrypoint, so FFmpeg fails the
+        // first open with "No usable encoding entrypoint found". Request the entrypoint
+        // we actually selected so the first attempt succeeds instead of the fallback retry.
+        av_dict_set_int(options, "low_power", 0, 0);
       }
 
       VAConfigAttrib rc_attr = {VAConfigAttribRateControl};
@@ -612,11 +617,12 @@ namespace va {
       return false;
     }
 
-    if (video::active_hevc_mode > 1 && !query(display.get(), VAProfileHEVCMain)) {
+    const int hevc_mode = video::hevc_mode_for_capture();
+    if (hevc_mode > 1 && !query(display.get(), VAProfileHEVCMain)) {
       return false;
     }
 
-    if (video::active_hevc_mode > 2 && !query(display.get(), VAProfileHEVCMain10)) {
+    if (hevc_mode > 2 && !query(display.get(), VAProfileHEVCMain10)) {
       return false;
     }
 

@@ -25,6 +25,12 @@
 namespace config {
   constexpr int SUNSHINE_VIRTUAL_DISPLAY_MAX_PERMANENT_COUNT = 4;
 
+  // Valid range for the packetsize limit (stream_t::packetsize)
+  constexpr int PACKETSIZE_MIN = 200;
+  constexpr int PACKETSIZE_MAX = 65535;
+  constexpr int PACKETSIZE_SMALL = 500;
+  constexpr int PACKETSIZE_LARGE = 1456;
+
   // track modified config options
   inline std::unordered_map<std::string, std::string> modified_config_settings;
   // when a stream is active, we defer some settings until all sessions end
@@ -153,6 +159,7 @@ namespace config {
 
     virtual_display_mode_e virtual_display_mode;
     virtual_display_layout_e virtual_display_layout;
+    bool virtual_display_keep_while_paused;  ///< macOS: keep the virtual display, so the other displays stay off, while a game is paused.
 
     int virtual_display_max_clients;  ///< Shared normal-game/Remote Monitor client identity limit (1..8).
 
@@ -249,7 +256,7 @@ namespace config {
     } dd;
 
     int max_bitrate;  // Maximum bitrate, sets ceiling in kbps for bitrate requested from client
-    double minimum_fps_target;  ///< Lowest framerate that will be used when streaming. Range 0-1000, 0 = half of client's requested framerate.
+    double minimum_fps_target;  ///< Idle-frame timing target in FPS. Default 20, range 0-1000; 0 uses the capture/encoder path fallback (see configuration docs).
     bool wgc_pacing_smoothing;  ///< Smooth WGC delivered frame cadence under low-latency (Reflex) source caps by snapping the pacing-group re-anchor back onto the prior grid instead of the jittery arrival phase. Disable for byte-for-byte legacy pacing.
     bool wgc_direct_encoder_input;  ///< GPU encoders read the WGC helper's shared frame directly instead of a host-side snapshot copy made on the capture device.
   };
@@ -273,7 +280,7 @@ namespace config {
 
     std::string file_apps;
 
-    int fec_percentage;
+    int fec_percentage;  ///< Standard FEC percentage (0-255); 0 disables FEC.
     int video_max_batch_size_kb;
     bool pacing_batch_demand_limit;  ///< Experimental demand-based ordinary-video pacing quantum and batch sizing (default off).
     bool host_adaptive_pacing;  ///< Experimental loss-responsive packet spacing for ordinary video, never changing encoder bitrate or FPS (default off).
@@ -282,6 +289,14 @@ namespace config {
     // Video encryption settings for LAN and WAN streams
     int lan_encryption_mode;
     int wan_encryption_mode;
+
+    // Ceiling on video UDP payload pacing (kbps), including FEC, packet headers
+    // and encryption prefixes. Reject nominal demand that cannot fit; never
+    // raise the ceiling. 0 retains legacy/adaptive pacing without admission.
+    int pacing_max_bitrate_kbps;
+
+    // Limit the packetsize to avoid fragmentation on a low MTU link. 0 = off.
+    int packetsize;
   };
 
   struct nvhttp_t {
@@ -487,6 +502,7 @@ namespace config {
     int hardware_metrics_interval {1000};  ///< Minimum client sample interval, in milliseconds
     bool realtime_stats_enabled {true};  ///< Sample live host stats (CPU/GPU/RAM/VRAM) for the web UI
     int realtime_stats_poll_interval_ms {2000};  ///< Host stats sampler interval in milliseconds
+    bool lid_close_ends_streams {true};  ///< macOS: end streams when a MacBook's lid closes, even if the Mac stays awake.
   };
 
   extern video_t video;

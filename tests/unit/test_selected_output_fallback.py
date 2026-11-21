@@ -199,6 +199,7 @@ namespace rtsp_stream {
     std::optional<std::string> output_name_override;
     bool virtual_display = false, virtual_display_failed = false;
     bool virtual_display_preparation_override = false;
+    bool explicit_virtual_display_override = false;
     std::string virtual_display_device_id;
   };
 }

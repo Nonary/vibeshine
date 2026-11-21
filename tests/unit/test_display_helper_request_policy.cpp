@@ -1,32 +1,55 @@
 #include "src/platform/windows/display_helper_request_policy.h"
 
 #include <gtest/gtest.h>
+#include <utility>
 
 namespace policy = display_helper_integration::request_policy;
 
-TEST(DisplayHelperRequestPolicy, VerifyOnlyExtendedTargetsNeverPrepareTopologyOrPrimary) {
-  for (const auto layout : {policy::VirtualDisplayLayout::Extended, policy::VirtualDisplayLayout::ExtendedPrimary, policy::VirtualDisplayLayout::ExtendedIsolated, policy::VirtualDisplayLayout::ExtendedPrimaryIsolated}) {
+TEST(DisplayHelperRequestPolicy, EnabledPreparationAppliesTheSelectedVirtualLayout) {
+  using enum policy::VirtualDisplayLayout;
+  using Prep = policy::DevicePreparation;
+  using Option = policy::ConfigurationOption;
+  using Topology = std::vector<std::vector<std::string>>;
+  for (const auto &[layout, preparation] : {
+         std::pair {Exclusive, Prep::EnsureOnlyDisplay},
+         std::pair {Extended, Prep::EnsureActive},
+         std::pair {ExtendedPrimary, Prep::EnsurePrimary},
+         std::pair {ExtendedIsolated, Prep::EnsureActive},
+         std::pair {ExtendedPrimaryIsolated, Prep::EnsurePrimary},
+       }) {
+    const auto expected_topology = layout == Exclusive ? Topology {{"tablet"}} : Topology {{"physical"}, {"tablet"}};
+    for (const auto option : {Option::VerifyOnly, Option::EnsureActive, Option::EnsureOnlyDisplay}) {
+      const auto result = policy::evaluate({
+        .configuration_option = option,
+        .layout = layout,
+        .virtual_display = true,
+        .target_device_id = "tablet",
+        .topology_snapshot = {{"physical"}},
+      });
+      EXPECT_TRUE(result.dispatch);
+      EXPECT_EQ(result.device_preparation, preparation);
+      EXPECT_EQ(result.topology, expected_topology);
+    }
+  }
+}
+
+TEST(DisplayHelperRequestPolicy, DisabledPreparationSkipsEveryVirtualLayout) {
+  using enum policy::VirtualDisplayLayout;
+  for (const auto layout : {Exclusive, Extended, ExtendedPrimary, ExtendedIsolated, ExtendedPrimaryIsolated}) {
     const auto result = policy::evaluate({
-      .configuration_option = policy::ConfigurationOption::VerifyOnly,
+      .configuration_option = policy::ConfigurationOption::Disabled,
       .layout = layout,
       .virtual_display = true,
       .target_device_id = "tablet",
       .topology_snapshot = {{"physical"}},
     });
-    EXPECT_TRUE(result.dispatch);
-    EXPECT_EQ(result.device_preparation, policy::DevicePreparation::VerifyOnly);
+    EXPECT_FALSE(result.dispatch);
+    EXPECT_FALSE(result.device_preparation.has_value());
     EXPECT_TRUE(result.topology.empty());
   }
 }
 
-TEST(DisplayHelperRequestPolicy, ExplicitExclusiveAndAutomaticExtendedKeepTheirPolicies) {
-  const auto exclusive = policy::evaluate({
-    .configuration_option = policy::ConfigurationOption::VerifyOnly,
-    .virtual_display = true,
-    .target_device_id = "tablet",
-  });
-  EXPECT_EQ(exclusive.device_preparation, policy::DevicePreparation::EnsureOnlyDisplay);
-  EXPECT_EQ(exclusive.topology, (std::vector<std::vector<std::string>> {{"tablet"}}));
+TEST(DisplayHelperRequestPolicy, ExtendedPreparationKeepsActivePeers) {
   const auto extended = policy::evaluate({
     .configuration_option = policy::ConfigurationOption::EnsureActive,
     .layout = policy::VirtualDisplayLayout::Extended,

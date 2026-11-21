@@ -27,7 +27,10 @@ linux = (source / 'platform/linux/private_display.cpp').read_text()
 start = linux.index('    auto effective_video = config::video;')
 linux_fields = linux[start:linux.index('    const auto parsed = display_device::parse_configuration', start)]
 
-client_start = launch.index('    if (client_settings) {\n      launch_session->client_requests_virtual_display')
+client_fields_start = '    if (client_settings) {\n      apply_client_display_routing('
+if client_fields_start not in launch:
+    client_fields_start = '    if (client_settings) {\n      launch_session->client_requests_virtual_display'
+client_start = launch.index(client_fields_start)
 client_end = launch.index('    const auto scale_factor', client_start)
 client_fields = launch[client_start:client_end]
 app_start = launch.index('          launch_session->virtual_display = app_ctx->virtual_screen;')
@@ -47,6 +50,11 @@ marker = '    // Resolve display preparation after client and application fields
 if marker in launch:
     start = launch.index(marker)
     finalizer = launch[start:launch.index('    launch_session->framegen_refresh_rate.reset();', start)]
+routing = ''
+routing_marker = '  void apply_client_display_routing(rtsp_stream::launch_session_t &session, const named_cert_t &client)'
+if routing_marker in launch:
+    start = launch.index(routing_marker)
+    routing = launch[start:launch.index('  void apply_client_display_routing(', start + len(routing_marker))]
 start = helpers.index('  SessionDisplayConfigurationHelper::SessionDisplayConfigurationHelper(')
 constructor = helpers[start:helpers.index('  std::optional<display_device::Resolution>', start)]
 policy_include = '#include "src/session_display_policy.h"' if (source / 'session_display_policy.h').exists() else ''
@@ -69,7 +77,8 @@ namespace rtsp_stream {
 struct launch_session_t {
  bool virtual_display = false, client_requests_virtual_display = false;
  bool requested_resolution_only = false;
- bool virtual_display_preparation_override = false;
+ bool virtual_display_preparation_override = false;  // For replaying older source snapshots.
+ bool explicit_virtual_display_override = false;
  std::string virtual_display_device_id;
  std::optional<bool> client_virtual_display_override;
  std::optional<config::video_t::virtual_display_mode_e> virtual_display_mode_override;
@@ -105,9 +114,16 @@ auto parse_virtual_display_layout_override(const std::string &v) -> std::optiona
  if (v == "extended_primary") return E::extended_primary;
  return std::nullopt;
 }
+using named_cert_t = Client;
+""" + routing + r"""
 namespace nvhttp {
-std::unordered_map<std::string, std::string> client_overrides;
-auto get_client_config_overrides(const std::string &) { return client_overrides; }
+Client paired_client;
+auto get_client_config_overrides(const std::string &) { return paired_client.config_overrides; }
+""" + (r"""
+void apply_client_display_routing(rtsp_stream::launch_session_t &session, const std::string &) {
+  ::apply_client_display_routing(session, paired_client);
+}
+""" if routing else "") + r"""
 }
 struct SessionOptions { std::optional<std::string> client_uuid; };
 namespace util { int from_view(const std::string &v) { return std::stoi(v); } }
@@ -123,7 +139,7 @@ auto assemble_webrtc(Client client, App app) {
  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
  auto app_ctx = std::make_shared<App>(app);
  SessionOptions options {"paired-client"};
- nvhttp::client_overrides = client.config_overrides;
+ nvhttp::paired_client = client;
  (void) options;
 """ + web_fields + web_finalizer + r"""
  return launch_session;
@@ -157,8 +173,9 @@ int main() {
    if (helper.effective_video_config_.dd.configuration_option != expected) { std::cerr << "FAIL RTSP " << name << "\n"; ++failed; }
    ++count;
    if (linux_preparation(*session) != expected) { std::cerr << "FAIL Linux RTSP " << name << "\n"; ++failed; }
-   if (client.output_name_override.empty() && client.virtual_display_mode_override.empty() &&
-       client.virtual_display_layout_override.empty() && !client.always_use_virtual_display && args.empty()) {
+   if (args.empty() && (""" + ('true' if routing else r"""client.output_name_override.empty() &&
+       client.virtual_display_mode_override.empty() && client.virtual_display_layout_override.empty() &&
+       !client.always_use_virtual_display""") + r""")) {
      auto web_session = assemble_webrtc(client, app);
      web_session->virtual_display = virtual_target;
      display_helper_integration::helpers::SessionDisplayConfigurationHelper web_helper(config::video, *web_session);
@@ -168,7 +185,8 @@ int main() {
      if (linux_preparation(*web_session) != expected) { std::cerr << "FAIL Linux WebRTC " << name << "\n"; ++failed; }
    }
  };
- check("true inherited VerifyOnly", {}, {}, Prep::verify_only);
+ check("global VerifyOnly applies the virtual layout", {}, {}, Prep::ensure_active);
+ check("global VerifyOnly still applies to a physical target", {}, {}, Prep::verify_only, {}, false);
  ++count;
  if (assemble({}, {}, {})->requested_resolution_only) { std::cerr << "FAIL RTSP requested-resolution-only defaults false\n"; ++failed; }
  Client requested_resolution_client; requested_resolution_client.requested_resolution_only = true;
@@ -193,55 +211,97 @@ int main() {
  check("explicit virtualDisplay=1 beats global VerifyOnly", {}, {}, Prep::ensure_active, {{"virtualDisplay", "1"}});
  app = {}; app.dd_config_option_override = Prep::ensure_active;
  client = {}; client.config_overrides["dd_configuration_option"] = "verify_only";
- check("client generic beats dedicated app", client, app, Prep::verify_only);
+ check("client VerifyOnly beats a dedicated app policy on physical displays", client, app, Prep::verify_only, {}, false);
  app = {}; app.virtual_screen = true; app.dd_config_option_override = Prep::verify_only;
  check("app virtual choice beats app VerifyOnly", {}, app, Prep::ensure_active);
  client = {}; client.output_name_override = "physical";
- check("physical target keeps VerifyOnly", client, {}, Prep::verify_only);
+ check("physical target keeps VerifyOnly", client, {}, Prep::verify_only, {}, false);
  client = {}; client.virtual_display_mode_override = "disabled";
- check("disabled mode keeps VerifyOnly", client, {}, Prep::verify_only);
- check("explicit client disable keeps VerifyOnly", {}, {}, Prep::verify_only, {{"virtualDisplay", "0"}});
+ check("disabled virtual mode keeps physical VerifyOnly", client, {}, Prep::verify_only, {}, false);
+ check("explicit client virtual mode off keeps physical VerifyOnly", {}, {}, Prep::verify_only, {{"virtualDisplay", "0"}}, false);
  app = {}; app.config_overrides["dd_configuration_option"] = "ensure_active";
  client = {}; client.config_overrides["dd_configuration_option"] = "verify_only";
- check("client generic beats app generic", client, app, Prep::verify_only);
+ check("client generic beats app generic on physical displays", client, app, Prep::verify_only, {}, false);
  app = {}; app.dd_config_option_override = Prep::verify_only;
  client.config_overrides["dd_configuration_option"] = "ensure_primary";
- check("client generic activating policy beats dedicated app VerifyOnly", client, app, Prep::ensure_primary);
+ check("enabled client action delegates to the virtual layout", client, app, Prep::ensure_active);
+ check("client generic activating policy beats dedicated app VerifyOnly on physical", client, app, Prep::ensure_primary, {}, false);
  app = {}; app.virtual_screen = true; app.config_overrides["dd_configuration_option"] = "verify_only";
  check("app virtual choice beats app generic VerifyOnly", {}, app, Prep::ensure_active);
  client = {}; client.config_overrides["dd_configuration_option"] = "verify_only";
- check("client VerifyOnly beats app virtual choice", client, app, Prep::verify_only);
+ check("client VerifyOnly applies the app's virtual layout", client, app, Prep::ensure_active);
  client = {}; client.virtual_display_mode_override = "per_client";
  check("client virtual choice beats lower app generic VerifyOnly", client, app, Prep::ensure_active);
  client.config_overrides["dd_configuration_option"] = "verify_only";
- check("equal-tier client VerifyOnly remains explicit", client, app, Prep::verify_only);
+ check("client VerifyOnly applies its own virtual layout", client, app, Prep::ensure_active);
+ client = {};
+ client.config_overrides["dd_configuration_option"] = "disabled";
+ check("app virtual selection bypasses client Disabled", client, app, Prep::ensure_active);
+ check("physical fallback still honors client Disabled", client, app, Prep::disabled, {}, false);
+ app.dd_config_option_override = Prep::disabled;
+ check("app virtual selection bypasses app Disabled", {}, app, Prep::ensure_active);
+ client.virtual_display_mode_override = "per_client";
+ check("client virtual selection bypasses its own Disabled", client, {}, Prep::ensure_active);
+ config::video.dd.configuration_option = Prep::disabled;
+ check("host Disabled suppresses global virtual layout", {}, {}, Prep::disabled);
+ check("host Disabled still honors explicit app virtual selection", {}, app, Prep::ensure_active);
+ client = {}; client.virtual_display_layout_override = "extended_primary";
+ check("host Disabled still honors an explicit client layout", client, {}, Prep::ensure_active);
+ client = {}; client.always_use_virtual_display = true;
+ check("host Disabled still honors an explicit client virtual target", client, {}, Prep::ensure_active);
+ app = {}; app.virtual_display_layout_override = Layout::extended_primary;
+ check("host Disabled still honors an explicit app layout", {}, app, Prep::ensure_active);
+ const auto initial_override = assemble({}, app, {});
+ ++count;
+ if (proc::display_policy::effective_preparation(config::video.dd.configuration_option, *initial_override, true) != Prep::ensure_active) {
+   std::cerr << "FAIL explicit layout prepares the intended virtual display\n"; ++failed;
+ }
+ check("physical fallback preserves host Disabled", {}, app, Prep::disabled, {}, false);
+ client = {}; client.output_name_override = "physical";
+ check("client physical selection cannot enable automation for an automatic virtual fallback", client, app, Prep::disabled);
+ check("client wire physical selection cannot enable automation for an automatic virtual fallback",
+       {}, app, Prep::disabled, {{"virtualDisplay", "0"}});
+ auto recovery = assemble({}, {}, {});
+ recovery->virtual_display = true;
+ recovery->client_requests_virtual_display = true;
+ recovery->client_virtual_display_override = true;
+ recovery->virtual_display_mode_override = Mode::per_client;
+ ++count;
+ if (proc::display_policy::effective_preparation(config::video.dd.configuration_option, *recovery) != Prep::disabled) {
+   std::cerr << "FAIL retained display recovery cannot manufacture explicit intent\n"; ++failed;
+ }
+ config::video.dd.configuration_option = Prep::verify_only;
  app = {}; app.output_name_override = "sunshine:virtual_display";
  check("virtual failure retains physical VerifyOnly", {}, app, Prep::verify_only, {}, false);
  client = {}; client.virtual_display_mode_override = "disabled";
- check("client disabled beats lower app virtual target", client, app, Prep::verify_only);
+ check("client virtual mode off keeps physical VerifyOnly", client, app, Prep::verify_only, {}, false);
  client = {}; client.output_name_override = "physical";
  app = {}; app.virtual_display_layout_override = Layout::extended_primary;
  check("client physical beats lower app virtual layout", client, app, Prep::verify_only, {}, false);
  app = {}; app.dd_config_option_override = Prep::ensure_primary;
  app.config_overrides["dd_configuration_option"] = "verify_only";
- check("dedicated app prep wins same-app generic", {}, app, Prep::ensure_primary);
+ check("dedicated app prep wins same-app generic on physical", {}, app, Prep::ensure_primary, {}, false);
  namespace Policy = display_helper_integration::request_policy;
- for (const auto layout : {Layout::extended, Layout::extended_primary, Layout::extended_isolated, Layout::extended_primary_isolated}) {
-   app = {}; app.virtual_display_layout_override = layout;
-   auto session = assemble({}, app, {});
+ for (const auto layout : {Layout::exclusive, Layout::extended, Layout::extended_primary, Layout::extended_isolated, Layout::extended_primary_isolated}) {
+   config::video.virtual_display_layout = layout;
+   auto session = assemble({}, {}, {});
    session->virtual_display = true;
    display_helper_integration::helpers::SessionDisplayConfigurationHelper helper(config::video, *session);
    const auto prep = helper.effective_video_config_.dd.configuration_option;
    const auto result = Policy::evaluate({
-     .configuration_option = prep == Prep::verify_only ? Policy::ConfigurationOption::VerifyOnly : Policy::ConfigurationOption::EnsureActive,
+     .configuration_option = prep == Prep::ensure_active ? Policy::ConfigurationOption::EnsureActive : Policy::ConfigurationOption::Disabled,
      .layout = static_cast<Policy::VirtualDisplayLayout>(layout),
      .virtual_display = true,
      .target_device_id = "virtual",
      .topology_snapshot = {{"physical"}},
    });
-   const auto expected = layout == Layout::extended_primary || layout == Layout::extended_primary_isolated ? Policy::DevicePreparation::EnsurePrimary : Policy::DevicePreparation::EnsureActive;
+   const auto expected = layout == Layout::exclusive ? Policy::DevicePreparation::EnsureOnlyDisplay :
+                         (layout == Layout::extended_primary || layout == Layout::extended_primary_isolated) ?
+                           Policy::DevicePreparation::EnsurePrimary : Policy::DevicePreparation::EnsureActive;
+   const auto expected_topology = layout == Layout::exclusive ?
+      std::vector<std::vector<std::string>> {{"virtual"}} : std::vector<std::vector<std::string>> {{"physical"}, {"virtual"}};
    ++count;
-   if (result.device_preparation != expected || result.topology != (std::vector<std::vector<std::string>> {{"physical"}, {"virtual"}})) {
+   if (!result.dispatch || result.device_preparation != expected || result.topology != expected_topology) {
      std::cerr << "FAIL downstream layout preparation\n"; ++failed;
    }
  }

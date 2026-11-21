@@ -92,7 +92,6 @@ namespace platf::linux_private_display::handoff_policy {
   template<typename Json>
   std::optional<Json> adopt(const std::string &contents, const std::string &owner,
                             const context_t &context, const Json &current,
-                            const std::set<std::string> &managed_names,
                             const std::map<std::string, std::string> &current_identities) {
     if (!context.machine_host || context.role != "desktop" || context.boot_id.empty() ||
         context.generation == 0 || !snapshot_policy::valid(current)) return std::nullopt;
@@ -112,14 +111,16 @@ namespace platf::linux_private_display::handoff_policy {
       const auto previous_generation = handoff.at("generation").template get<std::uint64_t>();
       if (previous_generation == 0 || previous_generation == std::numeric_limits<std::uint64_t>::max() ||
           previous_generation + 1 != context.generation) return std::nullopt;
-      bool orphan = false;
       for (const auto &output : current["outputs"]) {
         const auto name = output.value("name", std::string {});
         if (!output.value("connected", false)) continue;
         if (!mode_policy::managed_connector_name(name) && output.value("enabled", false)) return std::nullopt;
-        orphan |= managed_names.contains(name) && mode_policy::managed_connector_name(name);
       }
-      if (!orphan) return std::nullopt;
+      // The compositor may retire its virtual connector before the desktop
+      // process reads the pending greeter record. The same-boot, adjacent
+      // generation and connected physical identity checks below still bind
+      // this transfer to the machine handoff; do not discard restore intent
+      // merely because there is no longer a managed orphan to observe.
       const auto identities = handoff.at("physical_identities").template get<std::map<std::string, std::string>>();
       return physical_identities_match(*snapshot, current, identities, current_identities) ? snapshot : std::nullopt;
     } catch (...) {

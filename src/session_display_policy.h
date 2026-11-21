@@ -28,13 +28,10 @@ namespace proc::display_policy {
     return preparation_e::disabled;
   }
 
-  /**
-   * @brief Identify an explicit virtual target or layout before preparation consumes it.
-   * @param session The display fields assembled so far for this session.
-   * @return The explicit virtual/physical choice, or no value for inheritance.
-   */
+  // Capture this after merging app and client settings, before output
+  // fallback or recovery populates the virtual-display fields.
   template <class Session>
-  std::optional<bool> virtual_display_override(const Session &session) {
+  bool has_virtual_display_override(const Session &session) {
     if (session.client_virtual_display_override) {
       return *session.client_virtual_display_override;
     }
@@ -46,66 +43,27 @@ namespace proc::display_policy {
       const auto first = output.find_first_not_of(" \t\r\n");
       if (first == std::string_view::npos) return false;
       output = output.substr(first, output.find_last_not_of(" \t\r\n") - first + 1);
-      // Both host drivers share this token; SudoVDA also accepts its legacy alias.
       return VDISPLAY::policy::is_virtual_display_selection(output, true);
     }
-    if (session.virtual_display_mode_override &&
-        *session.virtual_display_mode_override == config::video_t::virtual_display_mode_e::disabled) {
+    if (session.virtual_display_mode_override == config::video_t::virtual_display_mode_e::disabled) {
       return false;
     }
-    if (session.virtual_display || session.virtual_display_mode_override || session.virtual_display_layout_override) {
-      return true;
-    }
-    return std::nullopt;
-  }
-
-  /** @brief Resolved explicit preparation and a deferred virtual-only promotion. */
-  struct preparation_t {
-    std::optional<preparation_e> option;
-    bool virtual_override = false;
-  };
-
-  /**
-   * @brief Resolve Client -> Application -> Global preparation across representations.
-   * @param inherited Effective config fallback, including any runtime overrides.
-   * @param application Dedicated app preparation, falling back to its generic value.
-   * @param client Authenticated client's generic preparation.
-   * @param client_virtual Whether the client explicitly requests a virtual target/layout.
-   * @param session_virtual Whether the assembled session explicitly requests one.
-   * @return Ephemeral preparation and whether a higher virtual choice may lift VerifyOnly.
-   * @note An application's explicit virtual choice also lifts its own VerifyOnly;
-   *       a client preparation still takes precedence over an application choice.
-   */
-  inline preparation_t resolve_preparation(
-    const preparation_e inherited,
-    const std::optional<preparation_e> application,
-    const std::optional<preparation_e> client,
-    const bool client_virtual,
-    const bool session_virtual
-  ) {
-    const auto explicit_preparation = client ? client : application;
-    const int preparation_level = client ? 2 : application ? 1 : 0;
-    const int virtual_level = client_virtual ? 2 : session_virtual ? 1 : 0;
-    const bool virtual_choice_wins = virtual_level > preparation_level ||
-                                     (virtual_level == 1 && preparation_level == 1);
-    if (explicit_preparation.value_or(inherited) == preparation_e::verify_only && virtual_choice_wins) {
-      return {explicit_preparation, true};
-    }
-    return {explicit_preparation, false};
+    return session.virtual_display || session.virtual_display_mode_override.has_value() ||
+           session.virtual_display_layout_override.has_value();
   }
 
   /**
-   * @brief Apply virtual-only preparation after a virtual target is known.
+   * @brief Use layout preparation for explicit virtual overrides and enabled automation.
    * @param inherited Effective global preparation.
    * @param session Resolved session policy and current target state.
    * @param virtual_display_intended Whether this is the initial virtual creation request.
-   * @return Effective preparation, preserving physical fallback and true VerifyOnly.
+   * @return Effective preparation for the actual or intended display target.
    */
   template <class Session>
   preparation_e effective_preparation(const preparation_e inherited, const Session &session, const bool virtual_display_intended = false) {
     const auto option = session.dd_config_option_override.value_or(inherited);
-    if ((session.virtual_display || virtual_display_intended) && session.virtual_display_preparation_override &&
-        option == preparation_e::verify_only) {
+    if ((session.virtual_display || virtual_display_intended) &&
+        (session.explicit_virtual_display_override || option != preparation_e::disabled)) {
       // The virtual layout chooses EnsureActive/Primary/OnlyDisplay downstream.
       return preparation_e::ensure_active;
     }

@@ -442,6 +442,7 @@ def transport():
     methods = '\n'.join(function(pipes, signature) for signature in [
         'int client_wait_ms(',
         'std::wstring validated_data_pipe_name(',
+        'bool is_expected_connect_failure(',
         'std::unique_ptr<INamedPipe> NamedPipeFactory::create_client(\n',
         'winrt::file_handle NamedPipeFactory::create_client_pipe(',
         'std::unique_ptr<INamedPipe> AnonymousPipeFactory::create_client(\n',
@@ -554,6 +555,8 @@ namespace platf::dxgi {
     DWORD _expected_server_process_id = 0;
     void set_client_identification_only() {}
     void set_expected_server_process_id(DWORD pid) { _expected_server_process_id = pid; }
+    bool _quiet_connect_failures = false;
+    mutable DWORD _last_connect_error = 0;
     std::unique_ptr<INamedPipe> create_client(const std::string &, const std::function<bool()> &, Time);
     winrt::file_handle create_client_pipe(const std::wstring &, const std::function<bool()> &, Time) const;
   };

@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <charconv>
 #include <cstdint>
@@ -64,6 +65,6 @@ namespace platf::linux_private_display::mode_policy {
     const double requested_hz
   ) noexcept {
     return std::isfinite(available_hz) && std::isfinite(requested_hz) &&
-           std::abs(available_hz - requested_hz) < refresh_tolerance_hz;
+           std::abs(available_hz - requested_hz) < std::max(refresh_tolerance_hz, requested_hz * 0.00101);
   }
 }  // namespace platf::linux_private_display::mode_policy

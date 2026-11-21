@@ -923,6 +923,7 @@ namespace config {
 
     video_t::virtual_display_mode_e::per_client,  // virtual_display_mode
     video_t::virtual_display_layout_e::exclusive,  // virtual_display_layout
+    true,  // virtual_display_keep_while_paused
 
     4,  // virtual_display_max_clients
     false,  // remote_monitor_mute_audio
@@ -967,7 +968,7 @@ namespace config {
     },  // display_device
 
     0,  // max_bitrate
-    20,  // minimum_fps_target (0 = framerate)
+    20,  // minimum_fps_target (FPS; 0 uses the capture/encoder path fallback)
     true,  // wgc_pacing_smoothing
     true  // wgc_direct_encoder_input
   };
@@ -993,6 +994,9 @@ namespace config {
 
     ENCRYPTION_MODE_NEVER,  // lan_encryption_mode
     ENCRYPTION_MODE_OPPORTUNISTIC,  // wan_encryption_mode
+
+    0,  // pacing_max_bitrate_kbps (0 = legacy 1 Gbps Ethernet assumption)
+    0,  // packetsize (0 = off)
   };
 
   nvhttp_t nvhttp {
@@ -1727,6 +1731,7 @@ namespace config {
     int_between_f(vars, "nvenc_preset", video.nv.quality_preset, {1, 7});
     int_between_f(vars, "nvenc_vbv_increase", video.nv.vbv_percentage_increase, {0, 400});
     bool_f(vars, "nvenc_spatial_aq", video.nv.adaptive_quantization);
+    bool_f(vars, "nvenc_temporal_aq", video.nv.temporal_aq);
     generic_f(vars, "nvenc_split_encode", video.nv.split_encode_mode, nv::split_encode_mode_from_view);
     generic_f(vars, "nvenc_twopass", video.nv.two_pass, nv::twopass_from_view);
     bool_f(vars, "nvenc_h264_cavlc", video.nv.h264_cavlc);
@@ -1857,7 +1862,7 @@ namespace config {
     string_f(vars, "output_name", video.output_name);
 
     const auto virtual_display_mode_it = vars.find("virtual_display_mode");
-    const bool virtual_display_mode_specified =
+    [[maybe_unused]] const bool virtual_display_mode_specified =
       virtual_display_mode_it != vars.end() && !virtual_display_mode_it->second.empty();
     generic_f(vars, "virtual_display_mode", video.virtual_display_mode, virtual_display_mode_from_view);
 #ifdef _WIN32
@@ -1880,6 +1885,7 @@ namespace config {
 #endif
     generic_f(vars, "virtual_display_layout", video.virtual_display_layout, virtual_display_layout_from_view);
     int_between_f(vars, "virtual_display_max_clients", video.virtual_display_max_clients, {1, 8});
+    bool_f(vars, "virtual_display_keep_while_paused", video.virtual_display_keep_while_paused);
     bool_f(vars, "remote_monitor_mute_audio", video.remote_monitor_mute_audio);
     bool_f(vars, "remote_monitor_disconnect_on_stream_end", video.remote_monitor_disconnect_on_stream_end);
     bool_f(vars, "remote_monitor_disconnect_on_client_disconnect", video.remote_monitor_disconnect_on_client_disconnect);
@@ -2132,9 +2138,11 @@ namespace config {
     }
 #endif
 
-    int_between_f(vars, "fec_percentage", stream.fec_percentage, {1, 255});
+    int_between_f(vars, "fec_percentage", stream.fec_percentage, {0, 255});
     vars.erase("pyrowave_send_rate_mbps");
     int_between_f(vars, "pyrowave_critical_fec_percentage", stream.pyrowave_critical_fec_percentage, {0, 255});
+    int_between_f(vars, "pacing_max_bitrate_kbps", stream.pacing_max_bitrate_kbps, {0, 10000000});
+    int_between_f(vars, "packetsize", stream.packetsize, {0, PACKETSIZE_MAX});
     int_between_f(vars, "video_max_batch_size_kb", stream.video_max_batch_size_kb, {0, 64});
     bool_f(vars, "pacing_batch_demand_limit", stream.pacing_batch_demand_limit);
     bool_f(vars, "host_adaptive_pacing", stream.host_adaptive_pacing);
@@ -2195,6 +2203,7 @@ namespace config {
     bool_f(vars, "high_resolution_scrolling", input.high_resolution_scrolling);
     bool_f(vars, "native_pen_touch", input.native_pen_touch);
 
+    bool_f(vars, "lid_close_ends_streams", sunshine.lid_close_ends_streams);
     bool_f(vars, "notify_pre_releases", sunshine.notify_pre_releases);
     bool_f(vars, "system_tray", sunshine.system_tray);
 
@@ -2722,6 +2731,7 @@ namespace config {
         "nvenc_preset",
         "nvenc_twopass",
         "nvenc_spatial_aq",
+        "nvenc_temporal_aq",
         "nvenc_split_encode",
         "nvenc_vbv_increase",
         "nvenc_realtime_hags",

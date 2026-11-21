@@ -56,7 +56,7 @@ struct ptree {
 struct identity_t { std::string uuid; };
 identity_t resolve_client_identity_from_request(req_https_t) { return {paired ? requesting_uuid : ""}; }
 int get_verified_cert(req_https_t) { return paired; }
-namespace PERM { constexpr int launch = 1; }
+namespace PERM { [[maybe_unused]] constexpr int launch = 1; }
 bool has_client_perm(int cert, int) { return cert && permitted; }
 void log_permission_denied(std::string_view, std::string_view, int) {}
 std::string permission_denied_status_message(int, std::string_view) { return "denied"; }
@@ -147,6 +147,7 @@ with tempfile.TemporaryDirectory(prefix="cancel-after-exit-") as directory:
     src = pathlib.Path(directory) / "test.cpp"
     binary = pathlib.Path(directory) / "test"
     src.write_text(program)
-    subprocess.run(["g++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(root / "src"), str(src), "-o", str(binary)], check=True)
+    subprocess.run(["g++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread",
+                    "-I", str(root), "-iquote", str(root / "src"), str(src), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
 print("Production cancel admission: exited-app, repeated cancel, authentication, ownership and teardown checks passed")

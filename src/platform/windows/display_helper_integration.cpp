@@ -929,6 +929,12 @@ namespace {
   static std::atomic<std::int64_t> g_last_apply_completed_us {0};
   static std::atomic<std::uint64_t> g_last_apply_generation {0};
 
+  // Deadline of the most recent bounded stream-start APPLY in steady-clock
+  // microseconds, or zero when the most recent APPLY was unbounded. Capture
+  // start reads it so its own settling waits are deducted from the same budget
+  // instead of running after it has already expired.
+  static std::atomic<std::int64_t> g_stream_start_deadline_us {0};
+
   struct physical_settings_snapshot_t {
     display_device::DisplaySettingsSnapshot settings;
   };
@@ -1642,11 +1648,17 @@ namespace {
           } else if (wait_result == WAIT_TIMEOUT) {
             BOOST_LOG(warning) << "Display helper: process did not exit within "
                                << kHelperForceKillWaitMs
-                               << " ms after engine-switch termination; continuing with cleanup.";
+                               << " ms after engine-switch termination; refusing to reuse it.";
+            g_running_helper_legacy.reset();
+            note_helper_start_failure("engine-switch termination timeout");
+            return false;
           } else {
             DWORD wait_err = GetLastError();
             BOOST_LOG(warning) << "Display helper: wait after engine-switch termination failed (winerr="
-                               << wait_err << "); continuing with cleanup.";
+                               << wait_err << "); refusing to reuse it.";
+            g_running_helper_legacy.reset();
+            note_helper_start_failure("engine-switch termination wait failure");
+            return false;
           }
           g_running_helper_legacy.reset();
           if (!sleep_with_cancellation(
@@ -1690,56 +1702,58 @@ namespace {
           return false;
         }
 
-        if (platf::display_helper_client::send_ping_fast(
-              100,
-              operation_deadline)) {
-          BOOST_LOG(debug) << "Display helper hard restart skipped because existing helper accepted a fast ping.";
-          return true;
-        }
-        if (!platf::display_helper_client::reset_connection_cancellable(
-              cancellation_predicate,
-              operation_deadline)) {
-          return false;
-        }
-        BOOST_LOG(warning) << "Display helper hard restart requested because existing helper did not accept a fast ping.";
+        if (engine_matches) {
+          if (platf::display_helper_client::send_ping_fast(
+                100,
+                operation_deadline)) {
+            BOOST_LOG(debug) << "Display helper hard restart skipped because existing helper accepted a fast ping.";
+            return true;
+          }
+          if (!platf::display_helper_client::reset_connection_cancellable(
+                cancellation_predicate,
+                operation_deadline)) {
+            return false;
+          }
+          BOOST_LOG(warning) << "Display helper hard restart requested because existing helper did not accept a fast ping.";
 
-        BOOST_LOG(warning) << "Display helper: hard restart requested; terminating existing instance (pid=" << pid
-                           << ") with no grace period.";
-        if (!platf::display_helper_client::reset_connection_cancellable(
-              cancellation_predicate,
-              operation_deadline)) {
-          return false;
-        }
-        terminate_helper_process();
+          BOOST_LOG(warning) << "Display helper: hard restart requested; terminating existing instance (pid=" << pid
+                             << ") with no grace period.";
+          if (!platf::display_helper_client::reset_connection_cancellable(
+                cancellation_predicate,
+                operation_deadline)) {
+            return false;
+          }
+          terminate_helper_process();
 
-        DWORD wait_result = WAIT_TIMEOUT;
-        if (!wait_for_process_with_cancellation(
-              h,
-              kHelperForceKillWaitMs,
-              cancellation_predicate,
-              wait_result,
-              operation_deadline)) {
-          return false;
-        }
-        if (wait_result == WAIT_OBJECT_0) {
-          DWORD exit_code = 0;
-          GetExitCodeProcess(h, &exit_code);
-          BOOST_LOG(info) << "Display helper exited after forced termination (code=" << exit_code << ").";
-        } else if (wait_result == WAIT_TIMEOUT) {
-          BOOST_LOG(warning) << "Display helper: process did not exit within " << kHelperForceKillWaitMs
-                             << " ms after termination request; continuing with cleanup.";
-        } else {
-          DWORD wait_err = GetLastError();
-          BOOST_LOG(warning) << "Display helper: wait after termination failed (winerr=" << wait_err
-                             << "); continuing with cleanup.";
-        }
+          DWORD wait_result = WAIT_TIMEOUT;
+          if (!wait_for_process_with_cancellation(
+                h,
+                kHelperForceKillWaitMs,
+                cancellation_predicate,
+                wait_result,
+                operation_deadline)) {
+            return false;
+          }
+          if (wait_result == WAIT_OBJECT_0) {
+            DWORD exit_code = 0;
+            GetExitCodeProcess(h, &exit_code);
+            BOOST_LOG(info) << "Display helper exited after forced termination (code=" << exit_code << ").";
+          } else if (wait_result == WAIT_TIMEOUT) {
+            BOOST_LOG(warning) << "Display helper: process did not exit within " << kHelperForceKillWaitMs
+                               << " ms after termination request; continuing with cleanup.";
+          } else {
+            DWORD wait_err = GetLastError();
+            BOOST_LOG(warning) << "Display helper: wait after termination failed (winerr=" << wait_err
+                               << "); continuing with cleanup.";
+          }
 
-        // Small delay to reduce the chance of named pipe / mutex conflicts during rapid restart.
-        if (!sleep_with_cancellation(
-              std::chrono::milliseconds(100),
-              cancellation_predicate,
-              operation_deadline)) {
-          return false;
+          // Small delay to reduce the chance of named pipe / mutex conflicts during rapid restart.
+          if (!sleep_with_cancellation(
+                std::chrono::milliseconds(100),
+                cancellation_predicate,
+                operation_deadline)) {
+            return false;
+          }
         }
       } else {
         // Process exited; fall through to restart
@@ -2347,6 +2361,15 @@ namespace display_helper_integration {
       if (startup_deadline == std::chrono::steady_clock::time_point {}) {
         startup_deadline = std::chrono::steady_clock::now() + verification_timeout;
       }
+      // Publish the budget before any helper work so the capture thread's own
+      // post-APPLY settling waits share this deadline rather than starting a
+      // fresh window after it has expired. An unbounded APPLY clears it.
+      g_stream_start_deadline_us.store(
+        retry_policy == ApplyRetryPolicy::StreamStart ?
+          std::chrono::duration_cast<std::chrono::microseconds>(startup_deadline.time_since_epoch()).count() :
+          0,
+        std::memory_order_release
+      );
       const std::function<bool()> startup_cancellation_predicate = [&]() {
         return cancellation_requested(cancellation_predicate) ||
                (retry_policy == ApplyRetryPolicy::StreamStart &&
@@ -2637,6 +2660,15 @@ namespace display_helper_integration {
       return ApplyVerificationStatus::Verified;
     }
     return *result ? ApplyVerificationStatus::Unknown : ApplyVerificationStatus::Failed;
+  }
+
+  std::optional<std::chrono::milliseconds> remaining_stream_start_budget() {
+    const auto deadline_us = g_stream_start_deadline_us.load(std::memory_order_acquire);
+    if (deadline_us == 0) {
+      return std::nullopt;
+    }
+    const auto remaining_us = deadline_us - now_steady_us();
+    return std::chrono::milliseconds(remaining_us > 0 ? remaining_us / 1000 : 0);
   }
 
   bool reactivate_owned_virtual_display(

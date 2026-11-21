@@ -2917,31 +2917,6 @@ async function loadDisplayDevices(force = false): Promise<void> {
   }
 }
 
-const effectiveAppDisplayAction = computed(() =>
-  form.ddConfigurationOption || String(readConfigOverrides().dd_configuration_option || hostDisplayConfig.value?.dd_configuration_option || 'verify_only'),
-);
-
-const virtualDisplayLayoutBlocked = computed(() => {
-  const layout =
-    form.virtualDisplayLayout || hostDisplayConfig.value?.virtual_display_layout || 'exclusive';
-  const action = effectiveAppDisplayAction.value;
-  return (
-    displaySelection.value === 'virtual' &&
-    layout !== 'exclusive' &&
-    action === 'disabled'
-  );
-});
-
-function selectVirtualDisplayLayout(): void {
-  if (!form.virtualDisplayLayout) return;
-  if (
-    !form.ddConfigurationOption ||
-    ['verify_only', 'disabled'].includes(form.ddConfigurationOption)
-  ) {
-    form.ddConfigurationOption = 'ensure_active';
-  }
-}
-
 function applyDisplaySelection(selection: AppDisplaySelection): void {
   if (selection === 'physical') {
     const output = effectiveAppOutput();
@@ -4319,7 +4294,6 @@ onBeforeUnmount(() => {
                 id="app-display-layout"
                 v-model="form.virtualDisplayLayout"
                 class="vs-select"
-                @change="selectVirtualDisplayLayout"
               >
                 <option
                   v-if="optionIsCustom(virtualDisplayLayouts, form.virtualDisplayLayout)"
@@ -4340,6 +4314,7 @@ onBeforeUnmount(() => {
             </SettingRow>
           </template>
           <SettingRow
+            v-if="!isWindowsHost || displaySelection !== 'virtual'"
             :label="t('ui.application.fields.displayAction.label')"
             :description="t('ui.application.fields.displayAction.description')"
             control-id="app-display-configuration"
@@ -4366,23 +4341,9 @@ onBeforeUnmount(() => {
               </option>
             </select>
           </SettingRow>
-          <p v-if="displaySelection === 'virtual'" class="vs-field__helper">
-            {{ t('config.app_virtual_display_layout_action_hint') }}
+          <p v-if="isWindowsHost && displaySelection === 'virtual'" class="vs-field__helper">
+            {{ t('config.virtual_display_layout_override_hint') }}
           </p>
-          <p v-if="displaySelection === 'virtual' && effectiveAppDisplayAction === 'verify_only'" class="vs-field__helper">
-            {{ t('config.app_virtual_display_verify_override') }}
-          </p>
-          <InlineAlert
-            v-if="virtualDisplayLayoutBlocked"
-            tone="warning"
-            :title="t('config.app_virtual_display_layout_blocked')"
-            data-testid="app-display-layout-conflict"
-            announce="assertive"
-          >
-            <AppButton @click="form.ddConfigurationOption = 'ensure_active'">
-              {{ t('config.app_virtual_display_layout_enable') }}
-            </AppButton>
-          </InlineAlert>
         </div>
       </section>
 

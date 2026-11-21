@@ -315,6 +315,35 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### lid_close_ends_streams
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            End streams when a MacBook's lid closes. When the lid closes, the running app quits, or
+            the stream ends if no app is running.
+            @note{Turn this off to keep streaming with the lid closed. That only works while the Mac
+            stays awake, which is up to macOS (for example, a Mac on power with an external display)
+            or another utility that keeps it awake. Vibeshine doesn't change power settings or keep
+            the Mac awake itself, and it still ends streams when the Mac goes to sleep.}
+            @note{Applies to macOS only.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            lid_close_ends_streams = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 <!-- The update command mechanism was removed. Sunshine now only notifies about updates. -->
 
 ## Input
@@ -833,6 +862,11 @@ controller of another client. This option does not create or redirect controller
             When enabled, Sunshine will pass through native pen/touch events from Moonlight clients.
             <br>
             This can be useful to disable for older applications without native pen/touch support.
+            <br>
+            <br>
+            On macOS, a pen is posted as a tablet device, so apps that read pressure, tilt, and the eraser
+            see them. macOS has no public way to inject multi-touch, so a tap clicks, one or two fingers
+            scroll, and holding a finger before moving it drags. This needs the same Accessibility permission as mouse and keyboard input.
         </td>
     </tr>
     <tr>
@@ -1549,9 +1583,10 @@ relative monitor arrangement. Per-client directions can be saved under
 **Devices → Arrange client displays**. The editor supports left, right, above, below,
 alignment and gap, plus **Preserve / manual**. A saved direction or explicit
 manual rule takes precedence over isolated positioning for that client.
-`dd_configuration_option = verify_only` verifies the existing extended target
-and preserves topology and positions; use an automatic preparation option to
-apply a saved direction. Shared displays use the application layout.
+A virtual-display override on an app or paired client applies its layout and
+saved placement even when display automation is disabled. An inherited virtual
+display uses the host layout when display automation is enabled. Shared
+displays use the application layout.
 
 ### virtual_display_max_clients
 
@@ -1663,6 +1698,33 @@ Shared virtual targets and physical capture targets remain unsupported. A normal
 application can select a display using ordinary app routing, but follows the
 normal game lifecycle and does not acquire an independent monitor role alongside
 a running game.
+### virtual_display_keep_while_paused
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Keep the virtual display while a session is paused: when a client disconnects and the
+            game keeps running, the virtual display stays, and so do any displays turned off by the
+            exclusive layout, until the session resumes, the game quits, or
+            [dd_paused_virtual_display_timeout_secs](#dd_paused_virtual_display_timeout_secs) passes.
+            Turn it off to bring the displays back as soon as the stream ends.
+            @note{Applies to macOS only. Windows keeps a paused virtual display through its display helper.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            virtual_display_keep_while_paused = disabled
+            @endcode</td>
+    </tr>
+</table>
 
 ### remote_monitor_mute_audio
 
@@ -1720,11 +1782,11 @@ this option to replace the running app immediately. The default is `true`.
     <tr>
         <td rowspan="5">Choices</td>
         <td>disabled</td>
-        <td>Perform no additional configuration (disables all `dd_` configuration options).</td>
+        <td>Turn off display automation. Explicit virtual-display overrides on Windows still apply their layout.</td>
     </tr>
     <tr>
         <td>verify_only</td>
-        <td>Verify that display is active only (this is a mandatory step without any extra steps to verify display state).</td>
+        <td>Verify that a physical display is active. On Windows, virtual displays still follow the selected layout.</td>
     </tr>
     <tr>
         <td>ensure_active</td>
@@ -1742,11 +1804,11 @@ this option to replace the running app immediately. The default is `true`.
 
 Display preparation follows Client → Application → Global precedence. A client's
 `dd_configuration_option` override wins over the application's dedicated or generic
-preparation setting. A virtual-display selection or layout at a higher level can
-use its normal virtual layout preparation despite inherited `verify_only`.
-An explicit `verify_only` at the same or a higher level remains authoritative.
-These overrides are temporary for the session. If virtual-display creation falls
-back to a physical output, the virtual-only promotion is not applied.
+preparation setting. On Windows, an app or client that explicitly selects a
+virtual display or its layout applies that layout regardless of the preparation
+setting. An inherited virtual display applies its layout for every enabled
+action, including `verify_only`. A physical fallback uses the resolved physical
+display preparation setting.
 
 ### dd_resolution_option
 
@@ -2385,23 +2447,23 @@ These settings are host-wide and are not application runtime overrides.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Sunshine tries to save bandwidth when content on screen is static or a low framerate. Because many clients expect a constant stream of video frames, a certain amount of duplicate frames are sent when this happens. This setting controls the lowest effective framerate a stream can reach.
+            Sunshine tries to save bandwidth when content on screen is static or a low framerate. Because many clients expect a constant stream of video frames, a certain amount of duplicate frames are sent when this happens. This setting controls idle-frame timing, not a guaranteed delivered framerate. Leaving it unset uses 20 FPS. The configuration API returns saved keys only; an absent key does not mean zero.
         </td>
     </tr>
     <tr>
         <td>Default</td>
         <td colspan="2">@code{}
-            0
+            20
             @endcode</td>
     </tr>
     <tr>
-        <td rowspan="3">Choices</td>
+        <td rowspan="2">Choices</td>
         <td>0</td>
-        <td>Use half the stream's FPS as the minimum target.</td>
+        <td>Use the capture/encoder path fallback. Asynchronous encoders, including PyroWave, use one negotiated frame interval as the capture wait budget. macOS ScreenCaptureKit instead uses one fifth of the stream's FPS, with a minimum of 10 FPS, for its keepalive timing.</td>
     </tr>
     <tr>
-        <td>1-1000</td>
-        <td>Specify your own value. The real minimum may differ from this value.</td>
+        <td>Greater than 0, up to 1000</td>
+        <td>Specify the idle-frame timing target in FPS (positive values up to 1000, including fractions). PyroWave caps this target at the negotiated frame rate; its default of 20 gives a 50 ms capture wait at stream rates of 20 FPS or higher. Actual frame delivery depends on capture and encoding, so the effective minimum may differ.</td>
     </tr>
 </table>
 
@@ -3070,6 +3132,7 @@ These settings are host-wide and are not application runtime overrides.
         <td>Description</td>
         <td colspan="2">
             Percentage of error correcting packets per data packet in each video frame.
+            Set to <code>0</code> to disable standard forward error correction.
             PyroWave ignores this setting; its parity is controlled by `pyrowave_critical_fec_percentage`.
             @warning{Higher values can correct for more network packet loss,
             but at the cost of increasing bandwidth usage.}
@@ -3083,7 +3146,7 @@ These settings are host-wide and are not application runtime overrides.
     </tr>
     <tr>
         <td>Range</td>
-        <td colspan="2">1-255</td>
+        <td colspan="2">0-255</td>
     </tr>
     <tr>
         <td>Example</td>
@@ -5365,6 +5428,21 @@ Enables WGC pacing smoothing so capture re-anchors to the pacing grid instead of
 
 Lets GPU encoders read each Windows Graphics Capture frame directly from the capture helper's shared texture instead of from a host-side snapshot copy. This removes one full-frame GPU copy and one hand-off between the capture and encoder devices per frame, which shortens and steadies host processing latency. Defaults to `enabled`; set `disabled` to restore the previous copy path. Software encoding and DXGI capture are unaffected; `wgcc` (constant) capture and PyroWave always use the copy path.
 
+### nvenc_temporal_aq
+
+Enables NVIDIA temporal adaptive quantization when the encoder reports hardware support. Disabled by default.
+
+### pacing_max_bitrate_kbps
+
+Sets a ceiling in Kbps on the shared video UDP payload pacer, including RTP/packet headers, FEC and any video encryption prefix. It does not include audio/control traffic or IP/link headers, and is not a limit on instantaneous NIC serialization speed.
+
+Positive values reject a stream start or runtime bitrate increase when the combined nominal video demand cannot fit. Admission conservatively reserves per-frame padding and per-block FEC rounding/minimums at the negotiated bitrate and cadence; large IDR frames can still create temporary pacing debt. Reduce the requested video bitrate or explicitly raise the ceiling if admission fails. The host never raises this ceiling automatically. PyroWave keeps its adaptive policy, bounded by this ceiling when configured; admission conservatively allows its maximum critical/detail FEC.
+
+Positive pacing deadlines use cumulative datagram bit-time, including rates below one packet per millisecond. A single packet may take several milliseconds of budget; admission does not impose a one-packet/ms minimum. Long positive-cap waits use sleep requests of at most one millisecond between media cancellation checks.
+
+Set `0` to preserve the existing legacy/adaptive pacing behavior without this admission check.
+
+
 <div class="section_buttons">
 
 | Previous          |                            Next |
@@ -5421,3 +5499,7 @@ Allow enabled paired streaming clients to request hardware metrics v1 during the
 ### hardware_metrics_interval
 
 Minimum time between completed client hardware samples in milliseconds. Default: `1000`; range: `500`–`10000`. Samples are collected on request and shared between clients. Enabling the setting alone does not poll hardware.
+
+### packetsize
+
+Optional maximum negotiated video packet size in bytes. `0` (default) disables the override; valid nonzero values are `200` through `65535`. It only lowers the packet size requested by the client, never raises it. Use a smaller value for low-MTU routes where fragmentation is a problem. Smaller packets increase header and FEC overhead, so reduce the requested bitrate if necessary.

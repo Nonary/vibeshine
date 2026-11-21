@@ -295,26 +295,17 @@ an independent headless compositor or implement Remote Monitor topology there.
 
 #### Session display-preparation precedence
 
-`src/session_display_policy.h` resolves preparation when RTSP and WebRTC build
-launch metadata. Client generic `dd_configuration_option` overrides both dedicated
+RTSP and WebRTC resolve preparation when building launch metadata. Client
+generic `dd_configuration_option` overrides both dedicated
 and generic application preparation. Dedicated application preparation takes
 precedence over its same-application generic representation; unset fields inherit
 the effective global configuration.
 
-An explicit application/client virtual target, virtual mode, or virtual layout
-can lift a lower-level VerifyOnly preparation to the layout's normal preparation.
-For example, global VerifyOnly plus an application extended-primary virtual
-layout prepares the virtual display as primary. An explicit VerifyOnly at the
-same or a higher level remains authoritative. Without a higher virtual override,
-VerifyOnly still verifies an existing extended target without preparing topology.
-Physical selections and explicit client disables do not trigger this promotion.
-The explicit preparation and deferred virtual-only promotion are stored on the
-launch session; they never write into the configuration file or runtime/global
-settings. Windows configuration, monitor-position, and request helpers consume
-that same policy. Linux private-display mode parsing consumes the same effective
-preparation after reserving the virtual target. Promotion applies only while
-creating or configuring a virtual target; a fallback to physical capture retains
-VerifyOnly. WebRTC resolves it before virtual-output selection is consumed.
+On Windows, an explicit app or client virtual-display
+override owns the layout even when automation is disabled. Inherited virtual
+displays use their layout whenever automation is enabled. The launch session
+records explicit intent before output selection and carries it through recovery.
+Physical capture and physical fallback use the resolved preparation setting.
 These policy rules do not establish that a physical monitor honors a disable
 request; that requires separate runtime evidence.
 

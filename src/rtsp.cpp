@@ -123,6 +123,11 @@ namespace {
     }
   }
 }  // namespace
+#else
+namespace {
+  // The Vulkan HDR layer only exists on Windows.
+  void set_vulkan_hdr_layer_streaming_active(bool) {}
+}  // namespace
 #endif
 
 namespace rtsp_stream {
@@ -1226,9 +1231,7 @@ namespace rtsp_stream {
         _session_state->vulkan_hdr_layer_pending_stream = active;
         vulkan_hdr_layer_active = vulkan_hdr_layer_active_locked();
       }
-#ifdef _WIN32
       set_vulkan_hdr_layer_streaming_active(vulkan_hdr_layer_active);
-#endif
     }
 
     /**
@@ -1274,9 +1277,7 @@ namespace rtsp_stream {
         }
         vulkan_hdr_layer_active = vulkan_hdr_layer_active_locked();
       }
-#ifdef _WIN32
       set_vulkan_hdr_layer_streaming_active(vulkan_hdr_layer_active);
-#endif
 
       // Stop and join outside the lock
       for (auto &slot : to_cleanup) {
@@ -1298,9 +1299,7 @@ namespace rtsp_stream {
         _session_state->vulkan_hdr_layer_sessions.erase(session.get());
         vulkan_hdr_layer_active = vulkan_hdr_layer_active_locked();
       }
-#ifdef _WIN32
       set_vulkan_hdr_layer_streaming_active(vulkan_hdr_layer_active);
-#endif
     }
 
     /**
@@ -1326,9 +1325,7 @@ namespace rtsp_stream {
         _session_state->vulkan_hdr_layer_pending_stream = false;
         vulkan_hdr_layer_active = vulkan_hdr_layer_active_locked();
       }
-#ifdef _WIN32
       set_vulkan_hdr_layer_streaming_active(vulkan_hdr_layer_active);
-#endif
       if (has_uuid) {
         nvhttp::mark_client_last_seen(client_uuid);
       }
@@ -1407,9 +1404,7 @@ namespace rtsp_stream {
         }
         vulkan_hdr_layer_active = vulkan_hdr_layer_active_locked();
       }
-#ifdef _WIN32
       set_vulkan_hdr_layer_streaming_active(vulkan_hdr_layer_active);
-#endif
       lifecycle_lock.unlock();
 
       for (auto &slot : to_cleanup) {
@@ -2045,6 +2040,24 @@ namespace rtsp_stream {
 
       config.controlProtocolType = (int) util::from_view(args.at("x-nv-general.useReliableUdp"sv));
       config.packetsize = (int) util::from_view(args.at("x-nv-video[0].packetSize"sv));
+
+      // Limit the packetsize to avoid fragmentation with clients that cannot configure this value
+      if (config::stream.packetsize && config::stream.packetsize < config.packetsize) {
+        if (config::stream.packetsize < config::PACKETSIZE_MIN || config::stream.packetsize > config::PACKETSIZE_MAX) {
+          BOOST_LOG(warning) << "packetsize range: ["sv << config::PACKETSIZE_MIN << "-"sv << config::PACKETSIZE_MAX
+                             << "] invalid value: "sv << config::stream.packetsize;
+        } else {
+          if (config::stream.packetsize < config::PACKETSIZE_SMALL) {
+            BOOST_LOG(info) << "packetsize is small < "sv << config::PACKETSIZE_SMALL << " bytes, reduce bitrate if the stream breaks"sv;
+          } else if (config::stream.packetsize > config::PACKETSIZE_LARGE) {
+            BOOST_LOG(info) << "packetsize is large > "sv << config::PACKETSIZE_LARGE << " bytes, jumbo frames may be used"sv;
+          }
+
+          BOOST_LOG(info) << "packetsize limit: "sv << config.packetsize << " -> "sv << config::stream.packetsize << " bytes"sv;
+          config.packetsize = config::stream.packetsize;
+        }
+      }
+
       config.minRequiredFecPackets = (int) util::from_view(args.at("x-nv-vqos[0].fec.minRequiredFecPackets"sv));
       config.mlFeatureFlags = (int) util::from_view(args.at("x-ml-general.featureFlags"sv));
       config.audioQosType = (int) util::from_view(args.at("x-nv-aqos.qosTrafficType"sv));
@@ -2406,6 +2419,7 @@ namespace rtsp_stream {
         std::shared_ptr<stream::session_t> stream_session;
         bool startup_failed = true;
         bool failed_before_control_registration = false;
+        int startup_status = 500;
         std::string startup_error;
         const bool session_ids = (config.mlFeatureFlags & ML_FF_SESSION_ID_V1) != 0;
         const bool monitor_transport_conflict = pending_launch->role == remote_session::role_e::monitor &&
@@ -2424,9 +2438,13 @@ namespace rtsp_stream {
             stream_session = stream::session::alloc(config, *launch_session);
             const int start_result = stream::session::start(*stream_session, remote_address);
             startup_failed = start_result != 0;
-            // The explicit -1 return is before control registration. Exceptions
+            // Explicit startup/pacing rejection is before control registration. Exceptions
             // may occur later and must not retire a potentially started session.
-            failed_before_control_registration = start_result == -1;
+            failed_before_control_registration = start_result == -1 || start_result == stream::session::START_PACING_REJECTED;
+            if (start_result == stream::session::START_PACING_REJECTED) {
+              startup_status = 400;
+              startup_error = "Requested video demand cannot fit the configured pacing ceiling with FEC and packet headers";
+            }
           } catch (const std::exception &e) {
             startup_error = e.what();
           } catch (...) {
@@ -2447,7 +2465,11 @@ namespace rtsp_stream {
         }
         if (failed_before_control_registration) server->retire_failed_monitor_start_locked(launch_session);
         if (startup_failed) server->set_pending_vulkan_hdr_layer_stream(false);
-        server->post([server, socket = std::move(socket), session = std::move(session), sequence_number, startup_failed, startup_error = std::move(startup_error),
+        // A rejected start can hold the last broadcast reference. Release the
+        // lifecycle/config gates before its destructor joins the control thread.
+        _hot_apply_gate.unlock();
+        lifecycle_lock.unlock();
+        server->post([server, socket = std::move(socket), session = std::move(session), sequence_number, startup_failed, startup_status, startup_error = std::move(startup_error),
                       audio_codec_name = std::string(audio::dolby_codec_name(selected_audio_codec))]() mutable {
           OPTION_ITEM completion_option {};
           completion_option.option = const_cast<char *>("CSeq");
@@ -2460,7 +2482,7 @@ namespace rtsp_stream {
             } else {
               BOOST_LOG(error) << "Failed to start a streaming session: "sv << startup_error;
             }
-            respond(socket->sock, *session, &completion_option, 500, "Internal Server Error", sequence_number, {});
+            respond(socket->sock, *session, &completion_option, startup_status, startup_status == 400 ? "BAD REQUEST" : "Internal Server Error", sequence_number, {});
           } else {
             OPTION_ITEM audio_codec_option {};
             std::string audio_codec_header {"X-SS-Audio-Codec"};

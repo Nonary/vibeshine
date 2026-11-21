@@ -68,13 +68,27 @@ namespace display_helper_integration::request_policy {
     });
   }
 
+  DevicePreparation virtual_layout_preparation(const VirtualDisplayLayout layout) {
+    switch (layout) {
+      case VirtualDisplayLayout::Extended:
+      case VirtualDisplayLayout::ExtendedIsolated:
+        return DevicePreparation::EnsureActive;
+      case VirtualDisplayLayout::ExtendedPrimary:
+      case VirtualDisplayLayout::ExtendedPrimaryIsolated:
+        return DevicePreparation::EnsurePrimary;
+      case VirtualDisplayLayout::Exclusive:
+      default:
+        return DevicePreparation::EnsureOnlyDisplay;
+    }
+  }
+
   Result evaluate(const Input &input) {
     Result result;
     // A failed virtual-display attempt falls back to a physical target. An
     // explicitly selected HDR profile remains valid for that physical target.
     result.apply_hdr_profile_to_physical = input.hdr_profile_selected && !input.virtual_display;
 
-    if (input.virtual_display && input.target_device_id.empty()) {
+    if (input.virtual_display && (input.target_device_id.empty() || input.configuration_option == ConfigurationOption::Disabled)) {
       result.dispatch = false;
       return result;
     }
@@ -86,30 +100,8 @@ namespace display_helper_integration::request_policy {
       return result;
     }
 
-    if (input.virtual_display &&
-        input.configuration_option == ConfigurationOption::Disabled &&
-        is_extended(input.layout)) {
-      result.dispatch = false;
-    }
-
-    const bool verify_extended = input.virtual_display && is_extended(input.layout) &&
-                                 input.configuration_option == ConfigurationOption::VerifyOnly;
-    if (verify_extended) {
-      result.device_preparation = DevicePreparation::VerifyOnly;
-    } else if (input.virtual_display) {
-      switch (input.layout) {
-        case VirtualDisplayLayout::Exclusive:
-          result.device_preparation = DevicePreparation::EnsureOnlyDisplay;
-          break;
-        case VirtualDisplayLayout::Extended:
-        case VirtualDisplayLayout::ExtendedIsolated:
-          result.device_preparation = DevicePreparation::EnsureActive;
-          break;
-        case VirtualDisplayLayout::ExtendedPrimary:
-        case VirtualDisplayLayout::ExtendedPrimaryIsolated:
-          result.device_preparation = DevicePreparation::EnsurePrimary;
-          break;
-      }
+    if (input.virtual_display) {
+      result.device_preparation = virtual_layout_preparation(input.layout);
     }
 
     if (input.rtx_hdr_source_enabled && input.hdr_requested) {
@@ -121,7 +113,7 @@ namespace display_helper_integration::request_policy {
       result.applied_resolution = input.remapped_resolution;
     }
 
-    if (input.virtual_display && is_extended(input.layout) && !verify_extended) {
+    if (input.virtual_display && is_extended(input.layout)) {
       result.topology = input.topology_snapshot;
       if (!result.topology.empty() && !input.target_device_id.empty() && !contains_device(result.topology, input.target_device_id)) {
         result.topology.push_back({input.target_device_id});

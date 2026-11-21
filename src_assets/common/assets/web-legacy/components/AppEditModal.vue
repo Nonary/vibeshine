@@ -233,7 +233,7 @@
               </div>
             </div>
 
-            <div class="space-y-3">
+            <div v-if="displaySelection !== 'virtual'" class="space-y-3">
               <div class="flex items-center justify-between gap-3">
                 <span class="text-xs font-semibold uppercase tracking-wide opacity-70">
                   {{ t('config.dd_config_label') }}
@@ -248,23 +248,6 @@
                 </n-button>
               </div>
               <p class="text-[11px] opacity-70">{{ t('config.dd_config_hint') }}</p>
-              <p v-if="displaySelection === 'virtual'" class="text-[11px] opacity-70">
-                {{ t('config.app_virtual_display_layout_action_hint') }}
-              </p>
-              <p v-if="displaySelection === 'virtual' && effectiveAppDisplayAction === 'verify_only'">
-                {{ t('config.app_virtual_display_verify_override') }}
-              </p>
-              <div
-                v-if="virtualDisplayLayoutBlocked"
-                role="alert"
-                data-testid="app-display-layout-conflict"
-                class="space-y-2 rounded-md border border-amber-500 p-3"
-              >
-                <p>{{ t('config.app_virtual_display_layout_blocked') }}</p>
-                <n-button size="small" @click="form.ddConfigurationOption = 'ensure_active'">
-                  {{ t('config.app_virtual_display_layout_enable') }}
-                </n-button>
-              </div>
               <n-radio-group v-model:value="form.ddConfigurationOption" class="grid gap-2">
                 <n-radio
                   v-for="opt in appDdConfigurationOptions"
@@ -279,6 +262,7 @@
               v-if="displaySelection === 'virtual'"
               class="space-y-5 rounded-xl bg-light/40 dark:bg-dark/40 p-3 md:p-4"
             >
+              <p class="text-[11px] opacity-70">{{ t('config.virtual_display_layout_override_hint') }}</p>
               <div class="space-y-2">
                 <div class="flex items-center justify-between gap-3">
                   <span class="text-xs font-semibold uppercase tracking-wide opacity-70">
@@ -1992,33 +1976,10 @@ const appDdConfigurationOptions = computed(() => [
   { label: t('config.dd_config_ensure_only_display') as string, value: 'ensure_only_display' },
 ]);
 
-const effectiveAppDisplayAction = computed(() =>
-  form.value.ddConfigurationOption ||
-  form.value.configOverrides?.dd_configuration_option ||
-  (configStore.config as any)?.dd_configuration_option ||
-  'verify_only',
-);
-
-const virtualDisplayLayoutBlocked = computed(() => {
-  const action = effectiveAppDisplayAction.value;
-  return (
-    displaySelection.value === 'virtual' &&
-    resolvedVirtualDisplayLayout.value !== 'exclusive' &&
-    action === 'disabled'
-  );
-});
-
 function selectVirtualDisplayLayout(v: unknown) {
   const sv = String(v).trim().toLowerCase();
   if (APP_VIRTUAL_DISPLAY_LAYOUTS.includes(sv as AppVirtualDisplayLayout)) {
     form.value.virtualDisplayLayout = sv as AppVirtualDisplayLayout;
-    // Only a user layout selection enables preparation; hydration preserves saved policy.
-    if (
-      !form.value.ddConfigurationOption ||
-      ['verify_only', 'disabled'].includes(form.value.ddConfigurationOption)
-    ) {
-      form.value.ddConfigurationOption = 'ensure_active';
-    }
   }
 }
 const lastPhysicalOutput = ref('');
@@ -2345,9 +2306,6 @@ watch(
       !displayDevicesLoading.value
     ) {
       loadDisplayDevices().catch(() => {});
-    }
-    if (selection === 'physical' && !form.value.ddConfigurationOption) {
-      form.value.ddConfigurationOption = 'verify_only';
     }
   },
 );

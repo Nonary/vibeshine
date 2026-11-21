@@ -3,6 +3,7 @@ import { test, expect, type Page } from '@playwright/test';
 const uuid = '11111111-1111-4111-8111-111111111111';
 const name = 'Display regression game';
 type Interface = 'classic' | 'v2';
+const layoutHint = 'This virtual display layout applies even when display automation is off.';
 
 async function setup(page: Page, app: Record<string, unknown>, host: Record<string, unknown> = {}) {
   const config = {
@@ -80,7 +81,7 @@ async function save(page: Page, ui: Interface) {
 
 for (const ui of ['classic', 'v2'] as const) {
   for (const width of [1440, 393]) {
-    test(`${ui} choosing a primary isolated layout enables it and survives save/reopen at ${width}px`, async ({
+    test(`${ui} choosing a primary isolated layout preserves inherited automation at ${width}px`, async ({
       page,
     }) => {
       await page.setViewportSize({ width, height: 1000 });
@@ -92,24 +93,20 @@ for (const ui of ['classic', 'v2'] as const) {
       await open(page, ui);
       if (ui === 'v2') {
         await page.locator('#app-display-layout').selectOption('extended_primary_isolated');
-        await expect(page.locator('#app-display-configuration')).toHaveValue('ensure_active');
       } else {
         await page.getByText('Extended + Primary (Isolated)', { exact: true }).click();
-        await expect(
-          page.getByRole('radio', { name: 'Activate the display automatically', exact: true }),
-        ).toBeChecked();
       }
-      await expect(page.getByTestId('app-display-layout-conflict')).toHaveCount(0);
+      await expect(page.getByText(layoutHint)).toBeVisible();
       await save(page, ui);
       await expect.poll(() => saves.length).toBe(1);
       expect(saves[0]).toMatchObject({
         'virtual-screen': true,
         'virtual-display-mode': 'per_client',
         'virtual-display-layout': 'extended_primary_isolated',
-        'dd-configuration-option': 'ensure_active',
       });
+      expect(saves[0]['dd-configuration-option']).toBeFalsy();
       await open(page, ui);
-      await expect(page.getByTestId('app-display-layout-conflict')).toHaveCount(0);
+      await expect(page.getByText(layoutHint)).toBeVisible();
       if (ui === 'v2') {
         await expect(page.locator('#app-display-mode')).toHaveValue('per_client');
         await expect(page.locator('#app-display-layout')).toHaveValue('extended_primary_isolated');
@@ -124,38 +121,30 @@ for (const ui of ['classic', 'v2'] as const) {
     });
   }
 
-  for (const action of ['disabled']) {
-    test(`${ui} exposes an existing ${action} conflict without changing it on load`, async ({
-      page,
-    }) => {
-      const { saves } = await setup(page, {
-        'virtual-screen': true,
-        'virtual-display-mode': 'per_client',
-        'virtual-display-layout': 'extended_primary_isolated',
-        'dd-configuration-option': action,
-      });
-      await open(page, ui);
-      await expect(page.getByTestId('app-display-layout-conflict')).toBeVisible();
-      if (action === 'verify_only') {
-        await page.setViewportSize({ width: 393, height: 1000 });
-        await page.getByTestId('app-display-layout-conflict').screenshot({
-          path: test.info().outputPath(`${ui}-layout-warning.png`),
-          timeout: 5000,
-        });
-      }
-      await save(page, ui);
-      await expect.poll(() => saves.length).toBe(1);
-      expect(saves[0]['dd-configuration-option']).toBe(action);
-      await open(page, ui);
-      await page
-        .getByRole('button', { name: 'Apply this layout for this game', exact: true })
-        .click();
-      await expect(page.getByTestId('app-display-layout-conflict')).toHaveCount(0);
-      await save(page, ui);
-      await expect.poll(() => saves.length).toBe(2);
-      expect(saves[1]['dd-configuration-option']).toBe('ensure_active');
+  test(`${ui} applies the explicit layout without rewriting disabled automation`, async ({ page }) => {
+    const { saves } = await setup(page, {
+      'virtual-screen': true,
+      'virtual-display-mode': 'per_client',
+      'virtual-display-layout': 'extended_primary_isolated',
+      'dd-configuration-option': 'disabled',
     });
-  }
+    await open(page, ui);
+    await expect(page.getByText(layoutHint)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Apply this layout for this game' })).toHaveCount(0);
+    if (ui === 'v2') {
+      await page.locator('#app-display-layout').selectOption('exclusive');
+    } else {
+      await page.getByText('Exclusive', { exact: true }).click();
+    }
+    await save(page, ui);
+    await expect.poll(() => saves.length).toBe(1);
+    expect(saves[0]).toMatchObject({
+      'virtual-display-layout': 'exclusive',
+      'dd-configuration-option': 'disabled',
+    });
+    await open(page, ui);
+    await expect(page.getByText(layoutHint)).toBeVisible();
+  });
 
   test(`${ui} applies an app virtual layout even with app verify only`, async ({ page }) => {
     const { saves } = await setup(page, {
@@ -165,8 +154,7 @@ for (const ui of ['classic', 'v2'] as const) {
       'dd-configuration-option': 'verify_only',
     });
     await open(page, ui);
-    await expect(page.getByTestId('app-display-layout-conflict')).toHaveCount(0);
-    await expect(page.getByText('This game uses a virtual display, so its selected layout will be applied even when Verify Only is selected. Client display settings can override this.')).toBeVisible();
+    await expect(page.getByText(layoutHint)).toBeVisible();
     await save(page, ui);
     await expect.poll(() => saves.length).toBe(1);
     expect(saves[0]['dd-configuration-option']).toBe('verify_only');
@@ -180,7 +168,7 @@ for (const ui of ['classic', 'v2'] as const) {
       'config-overrides': { dd_configuration_option: 'verify_only' },
     }, { dd_configuration_option: 'ensure_active' });
     await open(page, ui);
-    await expect(page.getByText('This game uses a virtual display, so its selected layout will be applied even when Verify Only is selected. Client display settings can override this.')).toBeVisible();
+    await expect(page.getByText(layoutHint)).toBeVisible();
   });
 
   test(`${ui} preserves explicit choices equal to host defaults when the host later changes`, async ({
@@ -226,10 +214,14 @@ for (const ui of ['classic', 'v2'] as const) {
   test(`${ui} switching a physical game to per-client virtual display persists the selection`, async ({
     page,
   }) => {
-    const { saves } = await setup(page, {
-      'virtual-display-mode': 'disabled',
-      'virtual-screen': false,
-    });
+    const { saves } = await setup(
+      page,
+      {
+        'virtual-display-mode': 'disabled',
+        'virtual-screen': false,
+      },
+      { dd_configuration_option: 'disabled' },
+    );
     if (ui === 'v2') {
       await page.goto(`/v2/library/${uuid}`);
       await page.getByRole('radio', { name: 'Use Vibeshine virtual display', exact: true }).check();
@@ -242,14 +234,15 @@ for (const ui of ['classic', 'v2'] as const) {
       await page.getByText('Virtual Display (Per Client) — Recommended', { exact: true }).click();
       await page.getByText('Extended + Primary (Isolated)', { exact: true }).click();
     }
+    await expect(page.getByText(layoutHint)).toBeVisible();
     await save(page, ui);
     await expect.poll(() => saves.length).toBe(1);
     expect(saves[0]).toMatchObject({
       'virtual-screen': true,
       'virtual-display-mode': 'per_client',
       'virtual-display-layout': 'extended_primary_isolated',
-      'dd-configuration-option': 'ensure_active',
     });
+    expect(saves[0]['dd-configuration-option']).toBeFalsy();
     await open(page, ui);
   });
 }

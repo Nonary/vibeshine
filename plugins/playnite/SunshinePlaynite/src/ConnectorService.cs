@@ -53,6 +53,8 @@ namespace SunshinePlaynite
             dataMapper = new PlayniteDataMapper(api, Serialize);
         }
 
+        public void Warn(string message) { log.Warn(message); }
+
         public void ApplySettings(bool notifyLibraryChanges, bool enableDebugLogging)
         {
             Volatile.Write(ref libraryNotificationsEnabled, notifyLibraryChanges ? 1 : 0);

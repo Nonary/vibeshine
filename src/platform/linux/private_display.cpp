@@ -995,10 +995,9 @@ namespace platf::linux_private_display {
         auto snapshot = snapshot_policy::decode<json>(*saved, snapshot_owner(), &restore_pending, &manager.snapshot_legacy_record);
         if (!snapshot) {
           const auto current = query_configuration();
-          const auto managed = discover_managed_outputs();
           if (current) {
             snapshot = handoff_policy::adopt(*saved, snapshot_owner(), snapshot_handoff_context(), *current,
-                                             {managed.begin(), managed.end()}, physical_connector_identities(*current));
+                                             physical_connector_identities(*current));
           }
           if (snapshot) {
             const auto identities = json::parse(*saved).at("machine_handoff").at("physical_identities").get<std::map<std::string, std::string>>();
@@ -1710,7 +1709,9 @@ namespace platf::linux_private_display {
       diagnostic_selected_mode_refresh_hz,
       prefer_highest
     );
-    if (mode_id.empty()) {
+    if (mode_id.empty() || (resolution && refresh && !prefer_highest &&
+                            is_managed_output(session.virtual_display_device_id) &&
+                            !mode_matches_refresh(*target_before, mode_id, *refresh))) {
       BOOST_LOG(error) << "Linux private display: no compatible mode is available for "
                        << session.virtual_display_device_id;
       return use_current_output();
@@ -2122,6 +2123,10 @@ namespace platf::linux_private_display {
         output = find_output(*configuration, entry.name);
         if (!output) return false;
         entry.mode_id = best_mode_id(*output, resolution, refresh);
+        if (entry.mode_id.empty() || !mode_matches_refresh(*output, entry.mode_id, refresh)) {
+          BOOST_LOG(error) << "Linux Remote Monitor: custom mode was not accepted on " << entry.name;
+          return false;
+        }
       }
     }
 

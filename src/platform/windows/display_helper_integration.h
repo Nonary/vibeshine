@@ -209,6 +209,12 @@ namespace display_helper_integration {
     const ApplyVerificationTicket &ticket,
     std::chrono::milliseconds timeout);
 
+  // Milliseconds left in the bounded stream-start budget of the most recent
+  // APPLY, clamped at zero, or nullopt when that APPLY was not a bounded stream
+  // start. Capture start uses it to keep its own settling waits inside the
+  // client's first-video deadline; unbounded applies keep their full waits.
+  std::optional<std::chrono::milliseconds> remaining_stream_start_budget();
+
 #endif
 
 #ifdef _WIN32

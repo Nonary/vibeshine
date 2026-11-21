@@ -9,6 +9,12 @@ using nlohmann::json;
 std::string package_name() {
 #ifdef _WIN32
   return "VibeshineSetup.exe";
+#elif defined(__APPLE__)
+#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
+  return "Vibeshine-macOS-arm64.dmg";
+#else
+  return "Vibeshine-macOS-x86_64.dmg";
+#endif
 #elif defined(__x86_64__)
   return "vibeshine-fixture-x86_64.pkg.tar.zst";
 #elif defined(__aarch64__)
@@ -30,6 +36,15 @@ json nightly(std::string day, std::string sha = std::string(40, 'b')) {
   for (auto name : {"nightly-metadata.json", "SHA256SUMS"}) result["assets"].push_back({{"name",name},{"state","uploaded"},{"size",100}});
   result["nightly_metadata"] = {{"schema_version",1},{"channel","nightly"},{"tag",tag},{"version",tag},
                                  {"source_commit",sha},{"nightly_sequence",std::stoi("202610"+day)}};
+  return result;
+}
+json revised_nightly(std::string day, int revision, std::string sha) {
+  auto result = nightly(day, sha);
+  auto tag = "2.0.1-nightly.d202610" + day + ".r." + std::to_string(revision) + "." + sha.substr(0, 12);
+  result["tag_name"] = tag;
+  result["nightly_metadata"]["tag"] = tag;
+  result["nightly_metadata"]["version"] = tag;
+  result["nightly_metadata"]["nightly_sequence"] = std::stoll("202610" + day) * 1000 + revision;
   return result;
 }
 int main() {
@@ -79,6 +94,46 @@ int main() {
   assert(!release_selection::select(json::array({with_body(next_nightly)}), current_nightly["tag_name"], true).is_null());
   assert(release_selection::select(json::array({with_body(next_nightly)}), "2.0.0", false).is_null());
   assert(release_selection::select(json::array({with_body(next_nightly)}), "2.0.1", true).is_null());
+  auto revision1 = revised_nightly("22", 1, std::string(40, '0'));
+  auto revision2 = revised_nightly("22", 2, std::string(40, 'a'));
+  auto revision10 = revised_nightly("22", 10, std::string(40, '1'));
+  auto revisions = json::array({revision10, current_nightly, revision2, revision1});
+  assert(select(revisions, current_nightly["tag_name"], true)["tag_name"] == revision10["tag_name"]);
+  assert(select(revisions, revision1["tag_name"], true)["tag_name"] == revision10["tag_name"]);
+  assert(select(revisions, revision10["tag_name"], true).is_null());
+  assert(select(json::array({current_nightly}), revision1["tag_name"], true).is_null());
+  assert(select(json::array({next_nightly}), revision10["tag_name"], true)["tag_name"] == next_nightly["tag_name"]);
+  assert(select(json::array({revision10}), next_nightly["tag_name"], true).is_null());
+  assert(select(revisions, "2.0.1", true).is_null());
+  assert(select(revisions, "2.0.0", false).is_null());
+  assert(select(json::array({revision1}), "2.0.1-daily.d20261021.999+aaaaaaaaaaaa", true)["tag_name"] == revision1["tag_name"]);
+  assert(select(json::array({revision1}), "2.0.1-daily.d20261023.1+aaaaaaaaaaaa", true).is_null());
+  assert(select(json::array({daily("23", "2.0.1")}), revision1["tag_name"], true)["tag_name"] == "daily-2026-10-23");
+  for (const auto &field : {"source_commit", "nightly_sequence", "version"}) {
+    auto invalid = revision1;
+    invalid["nightly_metadata"][field] = "tampered";
+    assert(select(json::array({invalid}), "2.0.0", true).is_null());
+  }
+  auto malformed = revision1;
+  malformed["tag_name"] = "2.0.1-nightly.d20261022.r.0.aaaaaaaaaaaa";
+  assert(select(json::array({malformed}), "2.0.0", true).is_null());
+  for (const auto &invalid_tag : {
+    "2.0.1-nightly.d20261022.r.1000.aaaaaaaaaaaa",
+    "2.0.1-nightly.d20260230.r.1.aaaaaaaaaaaa"}) {
+    auto invalid = revision1;
+    invalid["tag_name"] = invalid_tag;
+    invalid["nightly_metadata"]["tag"] = invalid_tag;
+    invalid["nightly_metadata"]["version"] = invalid_tag;
+    invalid["nightly_metadata"]["source_commit"] = std::string(40, 'a');
+    invalid["nightly_metadata"]["nightly_sequence"] = 20260230001LL;
+    assert(select(json::array({invalid}), "2.0.0", true).is_null());
+  }
+  auto missing_body = with_body(revision1);
+  missing_body.erase("body");
+  assert(release_selection::select(json::array({missing_body}), "2.0.0", true).is_null());
+  auto missing_sums = revision1;
+  missing_sums["assets"].erase(2);
+  assert(select(json::array({missing_sums}), "2.0.0", true).is_null());
   auto tampered_nightly = current_nightly;
   tampered_nightly["nightly_metadata"]["source_commit"] = std::string(40, 'c');
   assert(release_selection::select(json::array({with_body(tampered_nightly)}), "2.0.0", true).is_null());
@@ -177,5 +232,22 @@ int main() {
   auto wrong_core = compatible;
   wrong_core["nightly_metadata"]["version"] = "2.0.2-daily.d20261011.3+aaaaaaaaaaaa";
   assert(select(json::array({wrong_core}), "2.0.0", true).is_null());
+  auto mac = release("2.0.0");
+  mac["assets"][0]["name"] = "Vibeshine-macOS-arm64.dmg";
+  assert(release_selection::macos_package(mac, true));
+  assert(!release_selection::macos_package(mac, false));
+  mac["assets"][0]["name"] = "Vibeshine-macOS-x86_64.dmg";
+  assert(release_selection::macos_package(mac, false));
+  assert(!release_selection::macos_package(mac, true));
+  mac["assets"][0]["size"] = 0;
+  assert(!release_selection::macos_package(mac, false));
+  mac["assets"][0]["size"] = 100;
+  mac["assets"][0]["state"] = "new";
+  assert(!release_selection::macos_package(mac, false));
+  mac["assets"][0]["state"] = "uploaded";
+  mac["assets"][0]["name"] = "Vibepollo-macOS-x86_64.dmg";
+  assert(!release_selection::macos_package(mac, false));
+  mac["assets"] = json::array();
+  assert(!release_selection::macos_package(mac, false));
   std::cout << "release selection regression checks passed\n";
 }
