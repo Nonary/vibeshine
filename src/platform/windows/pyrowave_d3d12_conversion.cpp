@@ -1,5 +1,6 @@
-// Bounded, opt-in D3D12 conversion prototype. The source is snapshotted by
-// D3D11 while the caller holds its keyed mutex; only conversion moves queues.
+// D3D12 conversion backend for PyroWave. The source is snapshotted by D3D11
+// while the caller holds its keyed mutex; only conversion moves queues. The
+// compute queue runs at HIGH priority so conversion is not starved by a game.
 #include "pyrowave_d3d12_conversion.h"
 
 #include <d3d11_4.h>
@@ -364,7 +365,7 @@ namespace pyrowave::d3d11 {
         return true;
       }
       if (log) {
-        log(2, std::string("PyroWave D3D12 prototype: ") + operation + " [" + hex(hr) + "]");
+        log(2, std::string("PyroWave D3D12 conversion: ") + operation + " [" + hex(hr) + "]");
       }
       return false;
     }
@@ -395,9 +396,23 @@ namespace pyrowave::d3d11 {
       }
       D3D12_COMMAND_QUEUE_DESC queue_desc {};
       queue_desc.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
-      // Normal priority bounds this first prototype; realtime priority is never requested.
-      queue_desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
-      if (!check(device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue)), "create compute queue") ||
+      // HIGH keeps the conversion dispatch ahead of the game's own compute work
+      // on the same adapter. GLOBAL_REALTIME is never requested: it needs a
+      // privilege and can starve the desktop. NORMAL is the logged fallback.
+      queue_desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_HIGH;
+      HRESULT queue_hr = device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue));
+      const bool high_priority = SUCCEEDED(queue_hr);
+      if (!high_priority) {
+        if (log) {
+          log(2, "PyroWave D3D12 conversion: high-priority compute queue refused [" + hex(queue_hr) + "]; using normal priority");
+        }
+        queue_desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+        queue_hr = device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue));
+      }
+      if (SUCCEEDED(queue_hr) && log) {
+        log(1, std::string("PyroWave D3D12 conversion: compute queue priority ") + (high_priority ? "high" : "normal"));
+      }
+      if (!check(queue_hr, "create compute queue") ||
           !check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&allocator)), "create command allocator") ||
           !check(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, allocator.Get(), nullptr, IID_PPV_ARGS(&list)), "create command list") ||
           !check(list->Close(), "close initial command list") ||
