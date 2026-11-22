@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -51,6 +52,12 @@ namespace platf::gamepad {
 
     ds5_speaker_packetizer(const ds5_speaker_packetizer &) = delete;
     ds5_speaker_packetizer &operator=(const ds5_speaker_packetizer &) = delete;
+
+    bool take_first_nonzero(const controller_speaker_pcm::block &block) {
+      if (diagnostic_logged_ || std::none_of(block.samples.begin(), block.samples.end(), [](auto sample) { return sample != 0; })) return false;
+      diagnostic_logged_ = true;
+      return true;
+    }
 
     template<class Emit>
     void push(const unsigned char *pcm, std::size_t bytes, clock::time_point now, Emit emit) {
@@ -106,5 +113,6 @@ namespace platf::gamepad {
     std::uint32_t sequence_ = 0;
     std::uint64_t position_ = 0;
     clock::time_point last_input_ {};
+    bool diagnostic_logged_ = false;
   };
 }

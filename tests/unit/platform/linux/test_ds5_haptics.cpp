@@ -47,11 +47,15 @@ int main() {
       if (MlHapticsRead16(blocks[0].samples.data() + i * 4) != 0x5555 ||
           MlHapticsRead16(blocks[0].samples.data() + i * 4 + 2) != 0x7777) return 8;
     }
+    if (output.take_first_nonzero(controller_speaker_pcm::block {}) ||
+        !output.take_first_nonzero(blocks[0]) ||
+        output.take_first_nonzero(blocks[0])) return 15;
     const auto stale = blocks[0];
     output.push(usb.data(), usb.size(), now + std::chrono::milliseconds(60), collect);
     if (blocks.size() != 2 || blocks[1].generation != 2 ||
         controller_speaker_pcm::encode(8, 13, 0, stale, epoch)) return 9;
     if (!controller_speaker_pcm::encode(8, 13, 0, blocks[1], epoch)) return 10;
+    if (output.take_first_nonzero(blocks[1])) return 16;
     output.push(usb.data(), 7, now, collect);
     if (controller_speaker_pcm::encode(8, 13, 0, blocks[1], epoch)) return 11;
     retired_epoch = epoch;

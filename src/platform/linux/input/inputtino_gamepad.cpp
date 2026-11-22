@@ -190,7 +190,7 @@ namespace platf::gamepad {
             if (waveform || speaker) {
               auto packetizer = waveform ? std::make_shared<ds5_haptics_packetizer>() : nullptr;
               auto speaker_packetizer = speaker ? std::make_shared<ds5_speaker_packetizer>(metadata.speaker_owner) : nullptr;
-              (*ds5).set_on_haptics([feedback_queue, idx = id.clientRelativeIndex, packetizer, speaker_packetizer, on_rumble_fn, speaker_logged = false](const unsigned char *pcm, std::size_t bytes) mutable {
+              (*ds5).set_on_haptics([feedback_queue, idx = id.clientRelativeIndex, packetizer, speaker_packetizer, on_rumble_fn](const unsigned char *pcm, std::size_t bytes) {
                 if (packetizer) packetizer->push(pcm, bytes, [&](std::uint32_t sequence, const auto &samples) {
                   gamepad_feedback_msg_t msg {};
                   msg.type = gamepad_feedback_e::haptics_pcm;
@@ -224,14 +224,15 @@ namespace platf::gamepad {
                   msg.id = idx;
                   msg.speaker_epoch = epoch;
                   msg.data.speaker = block;
-                  const bool nonzero = !speaker_logged && std::any_of(block.samples.begin(), block.samples.end(), [](auto sample) { return sample != 0; });
+                  // Inputtino copies the callback on dispatch. Keep one-time
+                  // diagnostic state on the shared producer.
+                  const bool first_nonzero = speaker_packetizer->take_first_nonzero(block);
                   const bool queued = feedback_queue->raise_recent(std::move(msg), controller_speaker_pcm::pending_blocks, [idx](const gamepad_feedback_msg_t &pending) {
                     return pending.type == gamepad_feedback_e::speaker_pcm && pending.id == idx;
                   });
-                  if (nonzero) {
+                  if (first_nonzero) {
                     BOOST_LOG(debug) << "DualSense speaker PCM " << (queued ? "accepted" : "rejected")
-                                     << " by feedback queue; client-relative controller index=" << idx;
-                    speaker_logged = true;
+                                     << " by feedback queue; client-relative controller index=" << unsigned(idx);
                   }
                 });
               });
