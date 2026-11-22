@@ -2114,15 +2114,23 @@ namespace rtsp_stream {
       return false;
     }
 
-    // When using stereo audio, the audio quality is (strangely) indicated by whether the Host field
-    // in the RTSP message matches a local interface's IP address. Fortunately, Moonlight always sends
-    // 0.0.0.0 when it wants low quality, so it is easy to check without enumerating interfaces.
+    // A client that explicitly accepts Dolby negotiates quality through AudioQuality.
+    // Keep the legacy Host-based stereo quality detection exclusively for Opus.
+    const auto audio_accept = args.find("x-ss-audio-codec-accept"sv);
+    const std::string_view accepted_audio_codec =
+      audio_accept == args.end() ? std::string_view {} : std::string_view {audio_accept->second};
+    const bool client_accepted_audio_codec =
+      !session->audio_codec_offered.empty() && audio_accept != args.end() &&
+      audio_accept->second == session->audio_codec_offered;
+
     if (config.audio.channels == 2) {
-      for (auto option = req->options; option != nullptr; option = option->next) {
-        if ("Host"sv == option->option) {
-          std::string_view content {option->content};
-          BOOST_LOG(debug) << "Found Host: "sv << content;
-          config.audio.flags[audio::config_t::HIGH_QUALITY] = (content.find("0.0.0.0"sv) == std::string::npos);
+      if (!client_accepted_audio_codec) {
+        for (auto option = req->options; option != nullptr; option = option->next) {
+          if ("Host"sv == option->option) {
+            std::string_view content {option->content};
+            BOOST_LOG(debug) << "Found Host: "sv << content;
+            config.audio.flags[audio::config_t::HIGH_QUALITY] = (content.find("0.0.0.0"sv) == std::string::npos);
+          }
         }
       }
     } else if (session->surround_params.length() > 3) {
@@ -2149,12 +2157,6 @@ namespace rtsp_stream {
       config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
     }
     // Select Dolby only when ANNOUNCE accepts the exact codec offered in DESCRIBE.
-    const auto audio_accept = args.find("x-ss-audio-codec-accept"sv);
-    const std::string_view accepted_audio_codec =
-      audio_accept == args.end() ? std::string_view {} : std::string_view {audio_accept->second};
-    const bool client_accepted_audio_codec =
-      !session->audio_codec_offered.empty() && audio_accept != args.end() &&
-      audio_accept->second == session->audio_codec_offered;
     const bool ac3_encoder_available = session->audio_codec_offered == "AC3"sv && audio::ac3_available();
     const bool eac3_encoder_available = session->audio_codec_offered == "EAC3"sv && audio::eac3_available();
     const bool selected_encoder_available = ac3_encoder_available || eac3_encoder_available;
@@ -2173,7 +2175,7 @@ namespace rtsp_stream {
       accepted_audio_codec,
       ac3_encoder_available,
       eac3_encoder_available,
-      config::audio.high_quality_audio
+      config.audio.flags[audio::config_t::HIGH_QUALITY]
     );
     if (config::audio.format != "opus"sv && session->audio_codec_offered.empty()) {
       BOOST_LOG(warning) << "Dolby audio format ["sv << config::audio.format
