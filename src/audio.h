@@ -5,6 +5,7 @@
 #pragma once
 
 // local includes
+#include "audio_codec.h"
 #include "audio_context.h"
 #include "audio_display_transition.h"
 #include "platform/common.h"
@@ -126,8 +127,6 @@ namespace audio {
   bool ac3_available();
   /** @brief Check whether the linked FFmpeg build provides the E-AC-3 encoder. */
   bool eac3_available();
-
-  enum class dolby_codec_e { opus, ac3, eac3 };
 
   /** @brief Configure Dolby only after an exact offer/accept match; otherwise retain Opus. */
   dolby_codec_e configure_dolby_audio(
