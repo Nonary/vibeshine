@@ -4,7 +4,7 @@
  */
 #pragma once
 
-#include "audio.h"
+#include "audio_codec.h"
 
 namespace rtsp_stream {
   /**
