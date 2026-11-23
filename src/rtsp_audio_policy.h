@@ -1,3 +1,4 @@
+/**
  * @file src/rtsp_audio_policy.h
  * @brief RTSP response policy for negotiated audio codecs.
  */
@@ -13,4 +14,3 @@ namespace rtsp_stream {
     return codec != audio::dolby_codec_e::opus;
   }
 }  // namespace rtsp_stream
-/**
