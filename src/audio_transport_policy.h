@@ -1,3 +1,4 @@
+/**
  * @file src/audio_transport_policy.h
  * @brief Bounds checks for encoded audio packets and their CBC transport buffers.
  */
@@ -34,4 +35,3 @@ namespace stream {
     return required_size <= destination_capacity;
   }
 }  // namespace stream
-/**
