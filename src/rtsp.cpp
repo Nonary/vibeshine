@@ -1809,7 +1809,7 @@ namespace rtsp_stream {
     option.option = cseq_header;
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = const_cast<char *>(seqn_str.c_str());
+    option.content = seqn_str.data();
 
     std::stringstream ss;
 
@@ -1915,7 +1915,7 @@ namespace rtsp_stream {
     seqn.option = cseq_header;
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    seqn.content = const_cast<char *>(seqn_str.c_str());
+    seqn.content = seqn_str.data();
 
     std::string_view target {req->message.request.target};
     auto begin = std::find(std::begin(target), std::end(target), '=') + 1;
@@ -2026,7 +2026,7 @@ namespace rtsp_stream {
     option.option = cseq_header;
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = const_cast<char *>(seqn_str.c_str());
+    option.content = seqn_str.data();
 
     auto args = parse_announce_attributes(std::string_view {req->payload, (size_t) req->payloadLength});
 
@@ -2482,7 +2482,7 @@ namespace rtsp_stream {
           OPTION_ITEM completion_option {};
           completion_option.option = cseq_header;
           auto completion_seqn = std::to_string(sequence_number);
-          completion_option.content = const_cast<char *>(completion_seqn.c_str());
+          completion_option.content = completion_seqn.data();
 
           if (startup_failed) {
             if (startup_error.empty()) {
@@ -2525,7 +2525,7 @@ namespace rtsp_stream {
     option.option = cseq_header;
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = const_cast<char *>(seqn_str.c_str());
+    option.content = seqn_str.data();
 
     respond(socket->sock, *session, &option, 200, "OK", req->sequenceNumber, {});
     return false;
