@@ -1952,62 +1952,41 @@ namespace rtsp_stream {
     return false;
   }
 
-  bool cmd_announce(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
-    // Capture before parsing: cancellation may clear this launch while the
-    // io_context is still validating ANNOUNCE, before worker submission.
-    const auto intake_ticket = host_stream_control::request_ticket();
-    OPTION_ITEM option {};
-
-    // I know these string literals will not be modified
-    option.option = const_cast<char *>("CSeq");
-
-    auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = const_cast<char *>(seqn_str.c_str());
-
-    std::string_view payload {req->payload, (size_t) req->payloadLength};
-
+  std::unordered_map<std::string_view, std::string_view> parse_announce_attributes(std::string_view payload) {
     std::vector<std::string_view> lines;
 
     auto whitespace = [](char ch) {
       return ch == '\n' || ch == '\r';
     };
 
-    {
-      auto pos = std::begin(payload);
-      auto begin = pos;
-      while (pos != std::end(payload)) {
-        if (whitespace(*pos++)) {
-          lines.emplace_back(begin, pos - begin - 1);
+    auto pos = std::begin(payload);
+    auto begin = pos;
+    while (pos != std::end(payload)) {
+      if (whitespace(*pos++)) {
+        lines.emplace_back(begin, pos - begin - 1);
 
-          while (pos != std::end(payload) && whitespace(*pos)) {
-            ++pos;
-          }
-          begin = pos;
+        while (pos != std::end(payload) && whitespace(*pos)) {
+          ++pos;
         }
+        begin = pos;
       }
     }
 
-    std::string_view client;
     std::unordered_map<std::string_view, std::string_view> args;
-
     for (auto line : lines) {
-      auto type = line.substr(0, 2);
-      if (type == "s="sv) {
-        client = line.substr(2);
-      } else if (type == "a=") {
+      if (line.substr(0, 2) == "a="sv) {
         auto pos = line.find(':');
-
         auto name = line.substr(2, pos - 2);
         auto val = line.substr(pos + 1);
 
-        if (val[val.size() - 1] == ' ') {
-          val = val.substr(0, val.size() - 1);
+        if (!val.empty() && val.back() == ' ') {
+          val.remove_suffix(1);
         }
         args.emplace(name, val);
       }
     }
 
-    // Initialize any omitted parameters to defaults
+    // Initialize any omitted parameters to defaults.
     args.try_emplace("x-nv-video[0].encoderCscMode"sv, "0"sv);
     args.try_emplace("x-nv-vqos[0].bitStreamFormat"sv, "0"sv);
     args.try_emplace("x-nv-video[0].dynamicRangeMode"sv, "0"sv);
@@ -2023,6 +2002,22 @@ namespace rtsp_stream {
     args.try_emplace("x-ss-video[0].chromaSamplingType"sv, "0"sv);
     args.try_emplace("x-ss-video[0].intraRefresh"sv, "0"sv);
     args.try_emplace("x-nv-video[0].clientRefreshRateX100"sv, "0"sv);
+    return args;
+  }
+
+  bool cmd_announce(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
+    // Capture before parsing: cancellation may clear this launch while the
+    // io_context is still validating ANNOUNCE, before worker submission.
+    const auto intake_ticket = host_stream_control::request_ticket();
+    OPTION_ITEM option {};
+
+    // I know these string literals will not be modified
+    option.option = const_cast<char *>("CSeq");
+
+    auto seqn_str = std::to_string(req->sequenceNumber);
+    option.content = const_cast<char *>(seqn_str.c_str());
+
+    auto args = parse_announce_attributes(std::string_view {req->payload, (size_t) req->payloadLength});
 
     stream::config_t config {};
     config.gen1_framegen_fix = false;
