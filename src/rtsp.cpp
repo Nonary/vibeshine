@@ -681,7 +681,7 @@ namespace rtsp_stream {
       handle_plaintext_payload(socket, ec, buf_size);
     }
 
-    void handle_data(const msg_t &req) {
+    void handle_data(msg_t req) {
       handle_data_fn(shared_from_this(), std::move(req));
     }
 
@@ -2407,7 +2407,7 @@ namespace rtsp_stream {
     }
 
     audio::dolby_codec_e selected_audio_codec {};
-    if (!configure_announce_audio(config.audio, args, req, socket->sock, *session, option, req->sequenceNumber, selected_audio_codec)) {
+    if (!configure_announce_audio(config.audio, args, req, socket->sock, session, option, req->sequenceNumber, selected_audio_codec)) {
       return false;
     }
 
