@@ -1773,12 +1773,12 @@ namespace rtsp_stream {
     respond(sock, session, resp);
   }
 
-  bool cmd_not_found(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, msg_t &&req) {
+  bool cmd_not_found(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     respond(socket->sock, *session, nullptr, 404, "NOT FOUND", req->sequenceNumber, {});
     return false;
   }
 
-  bool cmd_option(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, msg_t &&req) {
+  bool cmd_option(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
@@ -1791,7 +1791,7 @@ namespace rtsp_stream {
     return false;
   }
 
-  bool cmd_describe(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, msg_t &&req) {
+  bool cmd_describe(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
@@ -1893,7 +1893,7 @@ namespace rtsp_stream {
     return false;
   }
 
-  bool cmd_setup(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, msg_t &&req) {
+  bool cmd_setup(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     OPTION_ITEM options[4] {};
 
     auto &seqn = options[0];
@@ -1952,7 +1952,7 @@ namespace rtsp_stream {
     return false;
   }
 
-  bool cmd_announce(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, msg_t &&req) {
+  bool cmd_announce(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     // Capture before parsing: cancellation may clear this launch while the
     // io_context is still validating ANNOUNCE, before worker submission.
     const auto intake_ticket = host_stream_control::request_ticket();
@@ -2512,7 +2512,7 @@ namespace rtsp_stream {
     return true;
   }
 
-  bool cmd_play(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, msg_t &&req) {
+  bool cmd_play(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
