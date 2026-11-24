@@ -82,7 +82,9 @@ describe('legacy gamepad help', () => {
       } else if (locale === 'fr') {
         expect(help).toContain(messagesFr.config.gamepad_desc);
       } else {
-        expect(help).toContain('Linux exposes through UHID');
+        expect(help).toContain('Choose which virtual controller Linux exposes.');
+        expect(help).toContain('Automatic uses the controller information reported by the client');
+        expect(help).not.toContain('through UHID');
         expect(help).not.toContain('XInput');
         expect(help).not.toContain('explicit pad clicks');
       }
