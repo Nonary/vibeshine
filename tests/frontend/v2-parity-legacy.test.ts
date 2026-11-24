@@ -4,6 +4,11 @@ import { createPinia, setActivePinia } from 'pinia';
 import { createI18n } from 'vue-i18n';
 import { NCheckbox } from 'naive-ui';
 import messagesEn from '@/public/assets/locale/en.json';
+import messagesEnGb from '@/public/assets/locale/en_GB.json';
+import messagesEnUs from '@/public/assets/locale/en_US.json';
+import messagesFr from '@/public/assets/locale/fr.json';
+import Inputs from '@/configs/tabs/Inputs.vue';
+import loadLocale from '@/locale';
 import AudioVideo from '@/configs/tabs/AudioVideo.vue';
 import DisplayDeviceOptions from '@/configs/tabs/audiovideo/DisplayDeviceOptions.vue';
 import { NInput, NButton } from 'naive-ui';
@@ -36,6 +41,47 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   setActivePinia(undefined);
+});
+
+describe('legacy gamepad help', () => {
+  const messages = { en: messagesEn, en_GB: messagesEnGb, en_US: messagesEnUs, fr: messagesFr };
+
+  it.each([
+    ['linux', 'en'],
+    ['linux', 'en_GB'],
+    ['linux', 'en_US'],
+    ['windows', 'en'],
+    ['windows', 'en_GB'],
+    ['windows', 'en_US'],
+    ['linux', 'fr'],
+  ] as const)('renders the %s description for %s', async (platform, locale) => {
+    vi.mocked(http.get).mockImplementation(async (url) => ({
+      status: 200,
+      data: url === '/api/configLocale' ? { locale } : messages[locale],
+    }) as never);
+    const { pinia } = setupConfig({
+      controller: 'enabled',
+      gamepad: platform === 'windows' ? 'vhf_steam' : 'xone',
+    }, platform);
+    const wrapper = mount(Inputs, {
+      global: { plugins: [pinia, await loadLocale()], stubs: { NSelect: true } },
+    });
+    try {
+      const help = wrapper.text();
+      if (platform === 'windows') {
+        expect(help).toContain('reports the Steam Controller type');
+        expect(help).toContain('Other controller reports use automatic profile selection');
+      } else if (locale === 'fr') {
+        expect(help).toContain(messagesFr.config.gamepad_desc);
+      } else {
+        expect(help).toContain('Linux exposes through UHID');
+        expect(help).not.toContain('XInput');
+        expect(help).not.toContain('explicit pad clicks');
+      }
+    } finally {
+      wrapper.unmount();
+    }
+  });
 });
 
 describe('legacy configuration behavior', () => {

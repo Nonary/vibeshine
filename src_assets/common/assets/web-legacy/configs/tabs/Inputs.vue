@@ -1,15 +1,27 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
+import { useI18n } from 'vue-i18n';
 import ConfigFieldRenderer from '@/ConfigFieldRenderer.vue';
 import { useConfigStore } from '@/stores/config';
 
 const store = useConfigStore();
 const { config, metadata } = storeToRefs(store);
+const { locale, t, te } = useI18n();
 
 const platform = computed(() =>
   (metadata.value?.platform || config.value?.platform || '').toLowerCase(),
 );
+
+const gamepadDescription = computed(() => {
+  if (platform.value !== 'linux') return undefined;
+
+  const linuxKey = 'config.gamepad_desc_linux';
+  // Keep existing localized help when this locale has no Linux-specific translation.
+  if (locale.value !== 'en' && !te(linuxKey) && te('config.gamepad_desc')) return undefined;
+
+  return t(linuxKey);
+});
 </script>
 
 <template>
@@ -17,7 +29,11 @@ const platform = computed(() =>
     <ConfigFieldRenderer setting-key="controller" v-model="config.controller" class="mb-3" />
 
     <div v-if="config.controller === 'enabled' && platform !== 'macos'" class="mb-6">
-      <ConfigFieldRenderer setting-key="gamepad" v-model="config.gamepad" />
+      <ConfigFieldRenderer
+        setting-key="gamepad"
+        v-model="config.gamepad"
+        :desc="gamepadDescription"
+      />
     </div>
 
     <ConfigFieldRenderer
