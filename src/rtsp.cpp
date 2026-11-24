@@ -2341,6 +2341,47 @@ namespace rtsp_stream {
     apply_rtx_hdr_stream_policy(config.monitor);
   }
 
+  bool validate_announce_video_and_encryption(
+    const stream::config_t &config,
+    bool pyrowave_session,
+    tcp::socket &socket,
+    launch_session_t &session,
+    OPTION_ITEM &option,
+    int sequence_number
+  ) {
+    if (config.monitor.videoFormat == 1 && video::active_hevc_mode == 1) {
+      BOOST_LOG(warning) << "HEVC is disabled, yet the client requested HEVC"sv;
+
+      respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+      return false;
+    }
+
+    if (config.monitor.videoFormat == 2 && video::active_av1_mode == 1) {
+      BOOST_LOG(warning) << "AV1 is disabled, yet the client requested AV1"sv;
+
+      respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+      return false;
+    }
+
+    if (pyrowave_session && video::active_pyrowave_mode < 2) {
+      BOOST_LOG(warning) << "PyroWave is disabled or unsupported, yet the client requested PyroWave"sv;
+
+      respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+      return false;
+    }
+
+    // Check that any required encryption is enabled
+    auto encryption_mode = net::encryption_mode_for_address(socket.remote_endpoint().address());
+    if (encryption_mode == config::ENCRYPTION_MODE_MANDATORY &&
+        (config.encryptionFlagsEnabled & (SS_ENC_VIDEO | SS_ENC_AUDIO)) != (SS_ENC_VIDEO | SS_ENC_AUDIO)) {
+      BOOST_LOG(error) << "Rejecting client that cannot comply with mandatory encryption requirement"sv;
+
+      respond(socket, session, &option, 403, "Forbidden", sequence_number, {});
+      return false;
+    }
+    return true;
+  }
+
   bool cmd_announce(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     // Capture before parsing: cancellation may clear this launch while the
     // io_context is still validating ANNOUNCE, before worker submission.
@@ -2407,34 +2448,7 @@ namespace rtsp_stream {
       return false;
     }
 
-    if (config.monitor.videoFormat == 1 && video::active_hevc_mode == 1) {
-      BOOST_LOG(warning) << "HEVC is disabled, yet the client requested HEVC"sv;
-
-      respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-      return false;
-    }
-
-    if (config.monitor.videoFormat == 2 && video::active_av1_mode == 1) {
-      BOOST_LOG(warning) << "AV1 is disabled, yet the client requested AV1"sv;
-
-      respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-      return false;
-    }
-
-    if (pyrowave_session && video::active_pyrowave_mode < 2) {
-      BOOST_LOG(warning) << "PyroWave is disabled or unsupported, yet the client requested PyroWave"sv;
-
-      respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-      return false;
-    }
-
-    // Check that any required encryption is enabled
-    auto encryption_mode = net::encryption_mode_for_address(socket->sock.remote_endpoint().address());
-    if (encryption_mode == config::ENCRYPTION_MODE_MANDATORY &&
-        (config.encryptionFlagsEnabled & (SS_ENC_VIDEO | SS_ENC_AUDIO)) != (SS_ENC_VIDEO | SS_ENC_AUDIO)) {
-      BOOST_LOG(error) << "Rejecting client that cannot comply with mandatory encryption requirement"sv;
-
-      respond(socket->sock, *session, &option, 403, "Forbidden", req->sequenceNumber, {});
+    if (!validate_announce_video_and_encryption(config, pyrowave_session, socket->sock, *session, option, req->sequenceNumber)) {
       return false;
     }
 
