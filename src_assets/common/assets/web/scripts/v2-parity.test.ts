@@ -97,6 +97,21 @@ test('gamepad options follow the host platform', () => {
   assert.deepEqual(settingsFields.get('ds4_back_as_touchpad_click')?.platform, ['windows', 'linux']);
 });
 
+test('both web interfaces explain the Steam Controller client requirement and fallback', () => {
+  for (const directory of ['../public/assets/locale/', '../../web-legacy/public/assets/locale/']) {
+    const readLocale = (locale: string) =>
+      JSON.parse(readFileSync(new URL(directory + locale + '.json', import.meta.url), 'utf8'));
+    const english = readLocale('en').config.gamepad_desc;
+    for (const locale of ['en', 'en_US', 'en_GB']) {
+      const description = readLocale(locale).config?.gamepad_desc ?? english;
+      const label = directory + locale;
+      assert.match(description, /reports the Steam Controller type with at least one of/, label);
+      assert.match(description, /grip sensing, pad haptics, or explicit pad clicks/, label);
+      assert.match(description, /Other controller reports use automatic profile selection/, label);
+    }
+  }
+});
+
 test('both production settings models offer the composite DualSense only on Windows and preserve saved values', () => {
   for (const getOptions of [getConfigSelectOptions, getLegacyConfigSelectOptions]) {
     const context = { t: (key: string) => key, platform: 'windows' };

@@ -1,26 +1,33 @@
 # Steam Controller (2026) over the VHF virtual gamepad
 
-A client that connects a 2026 Steam Controller (today the modified Moonlight
-Android client at <https://github.com/jlobue10/moonlight-android>) reports it
-with the controller type `LI_CTYPE_STEAM`. On Windows, with Vibeshine's own
-virtual gamepad driver installed, the host then creates the driver's
-`steam_controller` profile for that slot: Steam sees a real Steam Controller
-with two trackpads, capacitive grips and stick touch, motion sensors, a
-battery and pad haptics, instead of the DualSense approximation it would get
-otherwise.
+On Windows, Vibeshine can expose a native Steam Controller (2026) through its
+Virtual HID Framework (VHF) gamepad driver. The driver must offer the
+Steam Controller profile, and the client must report the controller as
+`LI_CTYPE_STEAM` with at least one of the following capabilities.
+
+- `LI_CCAP_GRIP_SENSE` (grip sensing)
+- `LI_CCAP_STEAM_HAPTIC` (pad haptics)
+- `LI_CCAP_SC26_BUTTONS` (explicit pad clicks)
+
+One client implementation is the [modified Moonlight Android client](https://github.com/jlobue10/moonlight-android).
+Steam on the host sees a Steam Controller with two trackpads, capacitive
+grips and stick touch, motion sensors, a battery, and pad haptics.
 
 ## Selection
 
-| `gamepad` setting | Steam Controller client gets |
+| `gamepad` setting | When the client reports the Steam Controller type and a capability listed above |
 |---|---|
-| `auto` | the VHF Steam Controller profile when the driver is installed and offers it, otherwise the ViGEmBus fallback |
-| `vhf` | the Steam Controller profile when the driver offers it, otherwise the driver's automatic profile |
-| `vhf_steam` | the Steam Controller profile for every client; refused (no substitution) if the driver lacks it |
+| `auto` | Prefers the VHF Steam Controller profile. If unavailable, it can try the driver's automatic profile and fall back to ViGEmBus. |
+| `vhf` | Tries the VHF Steam Controller profile, then the driver's automatic profile if needed. If VHF allocation fails, it can fall back to ViGEmBus. |
+| `vhf_steam` | Requests the VHF Steam Controller profile. If the host cannot create it, it refuses to substitute another profile. |
 
-The host only ever selects profiles the driver advertises in its handshake,
-so with a driver that predates the profile the option is inert rather than a
-failure: `auto` and `vhf` fall back as above, and the log says which profile
-the slot was created with.
+With `vhf_steam`, all other controller reports use automatic profile selection
+based on the type and capabilities the client sends. This includes a physical
+Steam Controller that the client forwards as an Xbox or generic gamepad, or
+a controller reported as `LI_CTYPE_STEAM` with only generic capabilities.
+If the host reaches VHF allocation for one of these reports, its log records
+the reported type and capabilities and says that the controller gets the
+automatic choice.
 
 ## What the host maps
 
@@ -121,8 +128,8 @@ feedback types, the per-slot feedback counters and the
 `set_steam_controller_attributes` call are part of the libvirtualgamepad
 protocol (header and driver). The host must be built against
 a libvirtualgamepad that defines them and ships a driver that offers the
-profile; an installed driver without the profile falls back as described
-above.
+profile. If the installed driver lacks support, the result depends on the
+setting as described in [Selection](#selection).
 
 ## Tests
 

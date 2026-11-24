@@ -595,7 +595,6 @@
     "file_state_desc": "The file where current state of Vibeshine is stored",
     "gamepad": "Emulated Gamepad Type",
     "gamepad_auto": "Automatic selection options",
-    "gamepad_desc": "Choose which type of gamepad to emulate on the host",
     "gamepad_ds4": "DS4 (PS4)",
     "gamepad_ds4_manual": "DS4 selection options",
     "gamepad_ds5": "DS5 (PS5)",
