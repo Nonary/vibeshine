@@ -2016,6 +2016,61 @@ namespace rtsp_stream {
     return args;
   }
 
+  bool configure_pyrowave_announce(
+    stream::config_t &config,
+    const std::unordered_map<std::string_view, std::string_view> &args,
+    std::shared_ptr<socket_t> socket,
+    launch_session_t &session,
+    OPTION_ITEM &option,
+    int sequence_number,
+    bool &pyrowave_session
+  ) {
+    pyrowave_session = config.monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT;
+    if (pyrowave_session) {
+      // Aurora's adaptive-FEC attribute or our record-framing feature bit selects
+      // record framing; other PyroWave clients get length-prefixed frames.
+      std::optional<std::uint32_t> pyrowave_features;
+      if (const auto it = args.find(pyrowave::protocol::ANNOUNCE_FEATURES); it != args.end()) {
+        pyrowave_features = (std::uint32_t) util::from_view(it->second);
+      }
+      const bool pyrowave_adaptive_fec = args.contains(pyrowave::protocol::ANNOUNCE_ADAPTIVE_FEC);
+      config.monitor.pyrowave_framing = pyrowave::policy::select_framing(pyrowave_adaptive_fec, pyrowave_features);
+      config.monitor.packetsize = config.packetsize;
+      config.monitor.pyrowave_min_parity_shards = std::max(2, config.minRequiredFecPackets);
+      if (const auto it = args.find("x-ss-video[0].pyrowaveLinkMbps"sv); it != args.end()) {
+        const auto link_mbps = util::from_view(it->second);
+        if (link_mbps <= 0 || link_mbps > 400000) {
+          respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+          return false;
+        }
+        config.monitor.pyrowave_peer_link_bps = std::uint64_t(link_mbps) * 1'000'000;
+      }
+      if (const auto it = args.find("x-ss-video[0].pyrowavePaceMbps"sv); it != args.end()) {
+        const auto pace_mbps = util::from_view(it->second);
+        if (pace_mbps <= 0 || pace_mbps > 400000) {
+          respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+          return false;
+        }
+        config.monitor.pyrowave_peer_pace_bps = std::uint64_t(pace_mbps) * 1'000'000;
+      }
+      if (const auto it = args.find("x-ss-video[0].pyrowaveHybrid"sv); it != args.end() && it->second != "0"sv) {
+        respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+        return false;
+      }
+      // Retired compression transports must not be negotiated as native framing.
+      if (const auto it = args.find("x-ss-video[0].pyrowaveCompression"sv); it != args.end() && it->second != "0"sv) {
+        respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+        return false;
+      }
+      BOOST_LOG(info) << "Client requested PyroWave: framing="sv
+                      << (config.monitor.pyrowave_framing == pyrowave::policy::framing_e::records ? "records"sv : "length-prefixed"sv)
+                      << ", features="sv << pyrowave_features.value_or(0)
+                      << ", adaptiveFec="sv << (pyrowave_adaptive_fec ? "sent"sv : "absent"sv)
+                      << ", packetSize="sv << config.packetsize;
+    }
+    return true;
+  }
+
   bool cmd_announce(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     // Capture before parsing: cancellation may clear this launch while the
     // io_context is still validating ANNOUNCE, before worker submission.
@@ -2197,48 +2252,9 @@ namespace rtsp_stream {
       BOOST_LOG(info) << "Client requested VRR low-latency stream policy";
     }
 
-    const bool pyrowave_session = config.monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT;
-    if (pyrowave_session) {
-      // Aurora's adaptive-FEC attribute or our record-framing feature bit selects
-      // record framing; other PyroWave clients get length-prefixed frames.
-      std::optional<std::uint32_t> pyrowave_features;
-      if (const auto it = args.find(pyrowave::protocol::ANNOUNCE_FEATURES); it != args.end()) {
-        pyrowave_features = (std::uint32_t) util::from_view(it->second);
-      }
-      const bool pyrowave_adaptive_fec = args.contains(pyrowave::protocol::ANNOUNCE_ADAPTIVE_FEC);
-      config.monitor.pyrowave_framing = pyrowave::policy::select_framing(pyrowave_adaptive_fec, pyrowave_features);
-      config.monitor.packetsize = config.packetsize;
-      config.monitor.pyrowave_min_parity_shards = std::max(2, config.minRequiredFecPackets);
-      if (const auto it = args.find("x-ss-video[0].pyrowaveLinkMbps"sv); it != args.end()) {
-        const auto link_mbps = util::from_view(it->second);
-        if (link_mbps <= 0 || link_mbps > 400000) {
-          respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-          return false;
-        }
-        config.monitor.pyrowave_peer_link_bps = std::uint64_t(link_mbps) * 1'000'000;
-      }
-      if (const auto it = args.find("x-ss-video[0].pyrowavePaceMbps"sv); it != args.end()) {
-        const auto pace_mbps = util::from_view(it->second);
-        if (pace_mbps <= 0 || pace_mbps > 400000) {
-          respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-          return false;
-        }
-        config.monitor.pyrowave_peer_pace_bps = std::uint64_t(pace_mbps) * 1'000'000;
-      }
-      if (const auto it = args.find("x-ss-video[0].pyrowaveHybrid"sv); it != args.end() && it->second != "0"sv) {
-        respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-        return false;
-      }
-      // Retired compression transports must not be negotiated as native framing.
-      if (const auto it = args.find("x-ss-video[0].pyrowaveCompression"sv); it != args.end() && it->second != "0"sv) {
-        respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-        return false;
-      }
-      BOOST_LOG(info) << "Client requested PyroWave: framing="sv
-                      << (config.monitor.pyrowave_framing == pyrowave::policy::framing_e::records ? "records"sv : "length-prefixed"sv)
-                      << ", features="sv << pyrowave_features.value_or(0)
-                      << ", adaptiveFec="sv << (pyrowave_adaptive_fec ? "sent"sv : "absent"sv)
-                      << ", packetSize="sv << config.packetsize;
+    bool pyrowave_session = false;
+    if (!configure_pyrowave_announce(config, args, socket, *session, option, req->sequenceNumber, pyrowave_session)) {
+      return false;
     }
 
     const bool prefer_10bit_sdr = effective_10bit_sdr_requested(*session);
