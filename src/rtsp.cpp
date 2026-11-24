@@ -132,6 +132,15 @@ namespace {
 #endif
 
 namespace rtsp_stream {
+  // The legacy RTSP C API exposes mutable pointers although it only reads these
+  // protocol/header constants while constructing a response.
+  char rtsp_protocol[] = "RTSP/1.0";
+  char cseq_header[] = "CSeq";
+  char session_header[] = "Session";
+  char session_value[] = "DEADBEEFCAFE;timeout = 90";
+  char transport_header[] = "Transport";
+  char connect_data_header[] = "X-SS-Connect-Data";
+  char ping_payload_header[] = "X-SS-Ping-Payload";
   void free_msg(PRTSP_MESSAGE msg) {
     freeMessage(msg);
 
@@ -1768,7 +1777,9 @@ namespace rtsp_stream {
 
   void respond(tcp::socket &sock, launch_session_t &session, POPTION_ITEM options, int statuscode, const char *status_msg, int seqn, const std::string_view &payload) {
     msg_t resp {new msg_t::element_type};
-    createRtspResponse(resp.get(), nullptr, 0, const_cast<char *>("RTSP/1.0"), statuscode, const_cast<char *>(status_msg), seqn, options, const_cast<char *>(payload.data()), (int) payload.size());
+    std::string mutable_status {status_msg};
+    std::string mutable_payload {payload};
+    createRtspResponse(resp.get(), nullptr, 0, rtsp_protocol, statuscode, mutable_status.data(), seqn, options, mutable_payload.data(), (int) mutable_payload.size());
 
     respond(sock, session, resp);
   }
@@ -1782,10 +1793,10 @@ namespace rtsp_stream {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
-    option.option = const_cast<char *>("CSeq");
+    option.option = cseq_header;
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = const_cast<char *>(seqn_str.c_str());
+    option.content = seqn_str.data();
 
     respond(socket->sock, *session, &option, 200, "OK", req->sequenceNumber, {});
     return false;
@@ -1795,7 +1806,7 @@ namespace rtsp_stream {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
-    option.option = const_cast<char *>("CSeq");
+    option.option = cseq_header;
 
     auto seqn_str = std::to_string(req->sequenceNumber);
     option.content = const_cast<char *>(seqn_str.c_str());
@@ -1901,7 +1912,7 @@ namespace rtsp_stream {
     auto &port_option = options[2];
     auto &payload_option = options[3];
 
-    seqn.option = const_cast<char *>("CSeq");
+    seqn.option = cseq_header;
 
     auto seqn_str = std::to_string(req->sequenceNumber);
     seqn.content = const_cast<char *>(seqn_str.c_str());
@@ -1925,24 +1936,24 @@ namespace rtsp_stream {
 
     seqn.next = &session_option;
 
-    session_option.option = const_cast<char *>("Session");
-    session_option.content = const_cast<char *>("DEADBEEFCAFE;timeout = 90");
+    session_option.option = session_header;
+    session_option.content = session_value;
 
     session_option.next = &port_option;
 
     // Moonlight merely requires 'server_port=<port>'
     auto port_value = std::format("server_port={}", static_cast<int>(port));
 
-    port_option.option = const_cast<char *>("Transport");
+    port_option.option = transport_header;
     port_option.content = port_value.data();
 
     // Send identifiers that will be echoed in the other connections
     auto connect_data = std::to_string(session->control_connect_data);
     if (type == "control"sv) {
-      payload_option.option = const_cast<char *>("X-SS-Connect-Data");
+      payload_option.option = connect_data_header;
       payload_option.content = connect_data.data();
     } else {
-      payload_option.option = const_cast<char *>("X-SS-Ping-Payload");
+      payload_option.option = ping_payload_header;
       payload_option.content = session->av_ping_payload.data();
     }
 
@@ -2012,7 +2023,7 @@ namespace rtsp_stream {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
-    option.option = const_cast<char *>("CSeq");
+    option.option = cseq_header;
 
     auto seqn_str = std::to_string(req->sequenceNumber);
     option.content = const_cast<char *>(seqn_str.c_str());
@@ -2386,9 +2397,9 @@ namespace rtsp_stream {
           // must also reject a second ANNOUNCE while awaiting control attach.
           server->post([server, socket = std::move(socket), session = std::move(session), sequence_number]() mutable {
             OPTION_ITEM completion_option {};
-            completion_option.option = const_cast<char *>("CSeq");
+            completion_option.option = cseq_header;
             auto completion_seqn = std::to_string(sequence_number);
-            completion_option.content = const_cast<char *>(completion_seqn.c_str());
+            completion_option.content = completion_seqn.data();
             BOOST_LOG(info) << "Discarding canceled, expired or duplicate RTSP startup request.";
             respond(socket->sock, *session, &completion_option, 503, "Service Unavailable", sequence_number, {});
             server->shutdown_socket(*socket);
@@ -2469,7 +2480,7 @@ namespace rtsp_stream {
                       send_audio_codec_header = should_send_audio_codec_header(selected_audio_codec),
                       audio_codec_name = std::string(audio::dolby_codec_name(selected_audio_codec))]() mutable {
           OPTION_ITEM completion_option {};
-          completion_option.option = const_cast<char *>("CSeq");
+          completion_option.option = cseq_header;
           auto completion_seqn = std::to_string(sequence_number);
           completion_option.content = const_cast<char *>(completion_seqn.c_str());
 
@@ -2511,7 +2522,7 @@ namespace rtsp_stream {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
-    option.option = const_cast<char *>("CSeq");
+    option.option = cseq_header;
 
     auto seqn_str = std::to_string(req->sequenceNumber);
     option.content = const_cast<char *>(seqn_str.c_str());
