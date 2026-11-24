@@ -173,10 +173,10 @@ namespace rtsp_stream {
   class socket_t;
 
   using msg_t = util::safe_ptr<RTSP_MESSAGE, free_msg>;
-  using cmd_func_t = std::function<bool(rtsp_server_t *server, std::shared_ptr<socket_t>, std::shared_ptr<launch_session_t>, msg_t &&)>;
+  using cmd_func_t = std::function<bool(rtsp_server_t *server, std::shared_ptr<socket_t>, std::shared_ptr<launch_session_t>, const msg_t &)>;
 
   void print_msg(PRTSP_MESSAGE msg);
-  bool cmd_not_found(rtsp_server_t *server, std::shared_ptr<socket_t>, std::shared_ptr<launch_session_t>, msg_t &&req);
+  bool cmd_not_found(rtsp_server_t *server, std::shared_ptr<socket_t>, std::shared_ptr<launch_session_t>, const msg_t &req);
   void respond(tcp::socket &sock, launch_session_t &session, POPTION_ITEM options, int statuscode, const char *status_msg, int seqn, const std::string_view &payload);
 
   void apply_rtx_hdr_stream_policy(video::config_t &config) {
@@ -672,7 +672,7 @@ namespace rtsp_stream {
       handle_plaintext_payload(socket, ec, buf_size);
     }
 
-    void handle_data(msg_t &&req) {
+    void handle_data(const msg_t &req) {
       handle_data_fn(shared_from_this(), std::move(req));
     }
 
@@ -735,14 +735,14 @@ namespace rtsp_stream {
       return 0;
     }
 
-    void handle_msg(std::shared_ptr<socket_t> socket, msg_t &&req) {
+    void handle_msg(std::shared_ptr<socket_t> socket, msg_t req) {
       auto session = socket->session;
       auto func = _map_cmd_cb.find(req->message.request.command);
       bool defer_socket_shutdown = false;
       if (func != std::end(_map_cmd_cb)) {
-        defer_socket_shutdown = func->second(this, socket, session, std::move(req));
+        defer_socket_shutdown = func->second(this, socket, session, req);
       } else {
-        cmd_not_found(this, socket, session, std::move(req));
+        cmd_not_found(this, socket, session, req);
       }
 
       if (!defer_socket_shutdown) {
@@ -1919,7 +1919,7 @@ namespace rtsp_stream {
     } else if (type == "control"sv) {
       port = net::map_port(stream::CONTROL_PORT);
     } else {
-      cmd_not_found(server, socket, session, std::move(req));
+      cmd_not_found(server, socket, session, req);
       return false;
     }
 
