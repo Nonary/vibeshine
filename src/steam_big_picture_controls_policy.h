@@ -172,10 +172,11 @@ namespace platf::steam::big_picture::policy {
   /** Name of the CDP binding the script reports through (window.__vibeshineBridge). */
   constexpr std::string_view bridge_binding = "__vibeshineBridge";
 
-  /** Evaluated in each candidate page: true only in Steam's shared JS context, the one page that owns
-   * the webpack chunk registry and was not opened by another window. */
+  /** Evaluated in each candidate page: true only in Steam's shared JS context, the one page that loads
+   * Steam's UI code and was not opened by another window. Steam ships that code as webpack chunks, or
+   * (its beta from November 2026) as native ES modules. */
   constexpr std::string_view is_shared_context_expression =
-    "!window.opener && typeof SteamClient === 'object' && Object.keys(window).some((k) => k.startsWith('webpackChunk'))";
+    "!window.opener && typeof SteamClient === 'object' && (Object.keys(window).some((k) => k.startsWith('webpackChunk')) || !!document.querySelector('script[type=\"module\"][src]'))";
 
   /** Titles Steam has used for its shared JS context, tried before probing every Steam page. */
   constexpr std::string_view shared_context_titles[] = {"SharedJSContext", "Steam Shared Context presented by Valve™"};

@@ -13,6 +13,9 @@
 //   when it doesn't look as expected.
 // - Steam code is found by stable names (text IDs, prop names, CSS keys, method names), never by
 //   minified identifiers or module ids. Menu components are learned from Steam's own Power menu.
+//   Steam ships its UI as webpack chunks, or (its beta from November 2026) as native ES modules, whose
+//   builds don't export the header and spell out class names instead of CSS keys; there the header,
+//   its clock and its item component are learned from the React tree of Big Picture on screen.
 // - Patches check an on/off flag, so switching off never unwinds another mod's patches. After too many
 //   errors the script switches itself off. Switching off redraws what we rendered, so none of it stays
 //   on screen.
@@ -27,11 +30,16 @@
 //   simulateMissing  lookups to treat as not found (fault injection)
 //   simulateCrash    our components to make throw while rendering (fault injection)
 //   maxErrors        errors allowed before the script switches itself off (default 8)
-(() => {
+//   loadModule       tests only: loads an ES module by URL in place of import()
+//
+// On webpack builds the injection returns its report; on ES-module builds, which can only be read
+// asynchronously, a promise of it.
+(function main(preloaded) {
   const TAG = '[Vibeshine]';
   const PROTOCOL = 1;
   const VERSION = 1;
-  const options = window.__vibeshineOptions ?? {};
+  // Read once: an ES-module build starts over with the options and the modules it read.
+  const options = preloaded?.options ?? window.__vibeshineOptions ?? {};
   delete window.__vibeshineOptions;
   const MAX_ERRORS = options.maxErrors ?? 8;
   const simulateMissing = new Set(options.simulateMissing ?? []);
@@ -101,31 +109,13 @@
     };
 
   // ---------------------------------------------------------------------------------------------
-  // Finding Steam's code. Pushing a fake chunk into the webpack chunk list hands us `require`.
-  // Modules are matched on stable names in their source; requiring runs a module, so filters are tight.
+  // Finding Steam's code. Modules are matched on stable names in their source; loading a webpack
+  // module runs it, so filters are tight.
+  // - Webpack builds: pushing a fake chunk into the webpack chunk list hands us `require`.
+  // - ES-module builds: Steam's own module scripts and the chunks they loaded. Importing a chunk
+  //   again hands back the module already running, so nothing runs twice. A chunk holds many
+  //   modules, so there the source test only narrows the search and the export test decides.
   // ---------------------------------------------------------------------------------------------
-  function getWebpackRequire() {
-    for (const key of Object.keys(window).filter((k) => k.startsWith('webpackChunk'))) {
-      let found;
-      try {
-        window[key].push([[Symbol('vibeshine-bpm')], {}, (r) => { found = r; }]);
-      } catch {}
-      if (found?.m) return found;
-    }
-    return null;
-  }
-
-  // Nothing is patched before these two checks, so throwing here leaves Steam untouched; the helper retries.
-  const req = getWebpackRequire();
-  if (!req) throw new Error(`${TAG} Steam's webpack registry not found`);
-
-  const sources = new Map();
-  for (const [id, factory] of Object.entries(req.m)) {
-    try {
-      sources.set(id, factory.toString());
-    } catch {}
-  }
-
   const srcOf = (v) => {
     try {
       return (typeof v === 'function' ? v : v?.type ?? v?.render)?.toString() ?? '';
@@ -134,14 +124,100 @@
     }
   };
   const has = (text, ...needles) => needles.every((n) => text.includes(n));
+  const isReact = (m) => typeof m?.createElement === 'function' && typeof m.useSyncExternalStore === 'function' && typeof m.Component === 'function' && typeof m.version === 'string';
+
+  function webpackModules() {
+    for (const key of Object.keys(window).filter((k) => k.startsWith('webpackChunk'))) {
+      let found;
+      try {
+        window[key].push([[Symbol('vibeshine-bpm')], {}, (r) => { found = r; }]);
+      } catch {}
+      if (!found?.m) continue;
+      const entries = [];
+      for (const [id, factory] of Object.entries(found.m)) {
+        try {
+          entries.push({ source: factory.toString(), load: () => found(id) });
+        } catch {}
+      }
+      return { kind: 'webpack', entries, react: null };
+    }
+    return null;
+  }
+
+  const hasEsModules = () => !!window.document?.querySelector?.('script[type="module"][src]');
+
+  async function esModules() {
+    const load = options.loadModule ?? ((url) => import(url));
+    const origin = `${window.location.origin}/`;
+    const fetched = new Set((window.performance?.getEntriesByType?.('resource') ?? []).map((e) => e.name));
+    const queue = [...window.document.querySelectorAll('script[type="module"][src], link[rel="modulepreload"][href]')].map((el) => el.src || el.href);
+    const seen = new Set();
+    const chunks = [];
+    // Steam's own module scripts, what they import, and chunks they loaded later (Steam fetched
+    // those); a chunk it never loaded stays unloaded.
+    // Kept in the order they were found, so lookups pick the same export every time.
+    while (queue.length) {
+      const batch = [...new Set(queue.splice(0))].filter((url) => url.startsWith(origin) && !seen.has(url));
+      batch.forEach((url) => seen.add(url));
+      const sources = await Promise.all(batch.map((url) => window.fetch(url).then((r) => r.text(), () => null).catch(() => null)));
+      batch.forEach((url, i) => {
+        const source = sources[i];
+        if (typeof source !== 'string') return;
+        chunks.push({ url, source });
+        // A static import is loaded with its importer; any other chunk named here only if fetched.
+        for (const [, staticImport, , spec] of source.matchAll(/(\b(?:from|import)\s*)?(["'`])(\.{1,2}\/[^"'`\s]+?\.m?js(?:\?[^"'`\s]*)?)\2/g)) {
+          const next = new window.URL(spec, url).href;
+          if (!seen.has(next) && (staticImport || fetched.has(next))) queue.push(next);
+        }
+      });
+    }
+    const loaded = await Promise.all(chunks.map((chunk) => Promise.resolve().then(() => load(chunk.url)).catch(() => null)));
+    const entries = chunks.flatMap((chunk, i) => (loaded[i] ? [{ source: chunk.source, load: () => loaded[i] }] : []));
+    if (!entries.length) return null;
+    return { kind: 'esm', entries, react: esReact(entries) };
+  }
+
+  // These builds don't export React itself, only its CommonJS loader, which hands back the React
+  // module Steam already loaded. Its name, or failing that its shape in the chunk that defines React.
+  function esReact(entries) {
+    const lazyLoader = (v) => typeof v === 'function' && v.length === 0 && /^\(\)\s*=>\s*\(\w+\s*\|\|/.test(srcOf(v));
+    for (const { source, load } of entries) {
+      const name = source.match(/export\s*\{[^}]*\brequire_react\s+as\s+([\w$]+)/)?.[1];
+      const loader = name && load()[name];
+      try {
+        const m = typeof loader === 'function' ? loader() : null;
+        if (isReact(m)) return m;
+      } catch {}
+    }
+    for (const { source, load } of entries) {
+      if (!has(source, '.useSyncExternalStore=function', 'react.transitional.element')) continue;
+      for (const loader of Object.values(load()).filter(lazyLoader)) {
+        try {
+          const m = loader();
+          if (isReact(m)) return m;
+        } catch {}
+      }
+    }
+    return null;
+  }
+
+  // Nothing is patched before these checks, so throwing here leaves Steam untouched; the helper retries.
+  const modules = preloaded?.modules ?? webpackModules();
+  if (!modules) {
+    if (!hasEsModules()) throw new Error(`${TAG} Steam's modules not found`);
+    return esModules().then((found) => {
+      if (!found) throw new Error(`${TAG} Steam's ES modules could not be read`);
+      return main({ options, modules: found });
+    });
+  }
 
   function findExport(name, srcTest, exportTest) {
     if (simulateMissing.has(name)) return null;
-    for (const [id, src] of sources) {
-      if (!srcTest(src)) continue;
+    for (const { source, load } of modules.entries) {
+      if (!srcTest(source)) continue;
       let mod;
       try {
-        mod = req(id);
+        mod = load();
       } catch {
         continue;
       }
@@ -155,12 +231,11 @@
     return null;
   }
 
-  const React = findExport(
-    'react',
-    (s) => has(s, 'useSyncExternalStore', 'createElement', 'forwardRef') && /\.version\s*=\s*"\d+\.\d+/.test(s),
-    (m) => typeof m?.createElement === 'function' && typeof m.useSyncExternalStore === 'function' && typeof m.Component === 'function' && typeof m.version === 'string',
-  );
+  const React =
+    (simulateMissing.has('react') ? null : modules.react) ??
+    findExport('react', (s) => has(s, 'useSyncExternalStore', 'createElement', 'forwardRef') && /\.version\s*=\s*"\d+\.\d+/.test(s), isReact);
   if (!React) throw new Error(`${TAG} React not found`);
+  const esm = modules.kind === 'esm';
   const h = React.createElement;
   const MEMO = Symbol.for('react.memo');
   const FORWARD_REF = Symbol.for('react.forward_ref');
@@ -168,10 +243,17 @@
 
   // Steam UI building blocks. Each is optional: features fall back when one is missing.
   const inMenuModule = (s) => has(s, 'onSelected', 'contextMenuItem');
+  // ES-module builds quote strings with backticks.
+  const isSeparatorSource = (src) => /["'`]separator["'`]/.test(src);
+  const isMenuItemLike = (v) => typeof v === 'function' && v.prototype?.isReactComponent && srcOf(v).includes('onSelected');
   const parts = {
     Menu: findExport('menu', inMenuModule, (v) => typeof v === 'function' && has(srcOf(v), 'labelId', 'useId')),
-    MenuItem: findExport('menuItem', inMenuModule, (v) => typeof v === 'function' && v.prototype?.isReactComponent && srcOf(v).includes('onSelected')),
-    MenuSeparator: findExport('menuSeparator', inMenuModule, (v) => typeof v === 'function' && !v.prototype?.isReactComponent && srcOf(v).includes('"separator"')),
+    // Other components mention onSelected too; Steam's menu item also names its class. A chunk of an
+    // ES-module build holds many of those components, so there only that test is safe.
+    MenuItem:
+      findExport('menuItem', inMenuModule, (v) => isMenuItemLike(v) && srcOf(v).includes('contextMenuItem')) ??
+      (esm ? null : findExport('menuItem', inMenuModule, isMenuItemLike)),
+    MenuSeparator: findExport('menuSeparator', inMenuModule, (v) => typeof v === 'function' && !v.prototype?.isReactComponent && isSeparatorSource(srcOf(v))),
     source: 'search',
   };
   const ui = {
@@ -191,24 +273,29 @@
       (v) => typeof v === 'function' && has(srcOf(v), 'GetContextMenuManagerFromWindow', 'CreateContextMenuInstance'),
     ),
     // The Steam window a component is drawn for: in a game, the game's overlay, even for the Quick
-    // Access Menu drawn over it. Its value has the window as BrowserWindow.
-    windowContext: findExport(
-      'windowContext',
-      (s) => has(s, 'createContext', 'VirtualKeyboardManager', '.instance'),
-      (v) => v?.$$typeof === CONTEXT,
-    ),
+    // Access Menu drawn over it. Its value has the window as BrowserWindow. A chunk of an ES-module
+    // build holds many contexts, so there it is learned from the screen instead.
+    windowContext: esm
+      ? null
+      : findExport(
+          'windowContext',
+          (s) => has(s, 'createContext', 'VirtualKeyboardManager', '.instance'),
+          (v) => v?.$$typeof === CONTEXT,
+        ),
+    // Learned from the screen on ES-module builds (see learnFromScreen): Steam's own header item
+    // component, which spells out the class names CSS keys used to give, and the clock.
+    headerItem: null,
+    clock: null,
   };
   const ContextMenuManager = findExport(
     'contextMenuHook',
     (s) => s.includes('CreateContextMenuInstance'),
     (v) => typeof v === 'function' && typeof v.prototype?.CreateContextMenuInstance === 'function',
   );
-  const HeaderBar = findExport(
-    'header',
-    (s) => has(s, 'quickAccessHeader', 'BShowHeader'),
-    (v) => v?.$$typeof === MEMO && typeof v.type === 'function' && has(srcOf(v), 'quickAccessHeader', 'BShowHeader'),
-  );
-  sources.clear();
+  const isHeaderBar = (v) => v?.$$typeof === MEMO && typeof v.type === 'function' && has(srcOf(v), 'quickAccessHeader', 'BShowHeader');
+  // Not exported by ES-module builds: learned from the screen then (see learnFromScreen).
+  let HeaderBar = findExport('header', (s) => has(s, 'quickAccessHeader', 'BShowHeader'), isHeaderBar);
+  modules.entries = [];
 
   // ---------------------------------------------------------------------------------------------
   // Status store and labels
@@ -368,12 +455,12 @@
     return null;
   }
 
-  const POWER_MENU_ANCHORS = ['#StopStreamingTo', '#ExitGamepadUI', '#MinimizeSteam', '"#Power"'];
+  const POWER_MENU_ANCHORS = ['#StopStreamingTo', '#ExitGamepadUI', '#MinimizeSteam', /["'`]#Power["'`]/];
   function isPowerMenu(element) {
     if (!React.isValidElement(element)) return false;
     if (element.props && 'isPowerChord' in element.props) return true;
     const src = srcOf(element.type);
-    return POWER_MENU_ANCHORS.filter((a) => src.includes(a)).length >= 2;
+    return POWER_MENU_ANCHORS.filter((a) => (typeof a === 'string' ? src.includes(a) : a.test(src))).length >= 2;
   }
 
   function PowerMenuItems({ MenuItem, MenuSeparator }) {
@@ -508,14 +595,17 @@
     const live = s.clients?.length > 0;
     const text = live ? label(s, 'iconStreaming', clientNames(s)) : label(s, 'iconPaused', s.appName || 'Game');
     const css = ui.headerCss;
+    const color = live ? '#5ad45a' : '#f0b03c';
+    const open = (evt) => openVibeshineMenu(evt, steamWindow);
+    // Steam's own header item draws it like Steam's icons, with their class names and controller focus.
+    if (!css && ui.headerItem) return h(ui.headerItem, { className: 'vibeshine-bpm-indicator', role: 'button', title: text, description: text, style: { color }, onActivate: open }, streamIcon());
     const common = {
       className: css ? `${css.HeaderItem} ${css.Clickable} vibeshine-bpm-indicator` : 'vibeshine-bpm-indicator',
       role: 'button',
       'aria-label': text,
       title: text,
-      style: { ...(css ? null : FALLBACK_ICON_STYLE), color: live ? '#5ad45a' : '#f0b03c' },
+      style: { ...(css ? null : FALLBACK_ICON_STYLE), color },
     };
-    const open = (evt) => openVibeshineMenu(evt, steamWindow);
     if (ui.Focusable) return h(ui.Focusable, { ...common, noFocusRing: true, onActivate: open, onOKActionDescription: 'Vibeshine' }, streamIcon());
     return h('div', { ...common, tabIndex: 0, onClick: open }, streamIcon());
   }
@@ -531,7 +621,7 @@
     }
     return out;
   }
-  const isClockSlot = (el) => React.isValidElement(el) && [el.type, el.props?.children?.type].some((t) => /\.Clock\b/.test(srcOf(t)));
+  const isClockSlot = (el) => React.isValidElement(el) && [el.type, el.props?.children?.type].some((t) => (ui.clock && t === ui.clock) || /\.Clock\b/.test(srcOf(t)));
   const ICON_KEY = 'vibeshine-indicator';
   const isOurIcon = (el) => React.isValidElement(el) && el.key === ICON_KEY;
 
@@ -597,14 +687,87 @@
     setFeature('header_icon', 'off: header layout not recognised');
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // Learning from Big Picture on screen. ES-module builds don't export the header and spell out class
+  // names where they are used, so the header, its clock, Steam's header item component and the
+  // context with the Steam window are read from the React tree Big Picture shows, climbing from the
+  // clock: the element showing the time.
+  // ---------------------------------------------------------------------------------------------
+  const TIME_TEXT = /^\D{0,8}\d{1,2}[:.]\d{2}\D{0,8}$/;
+  const PROVIDER = Symbol.for('react.provider');
+  const isComponentType = (t) => typeof t === 'function' || t?.$$typeof === MEMO || t?.$$typeof === FORWARD_REF;
+  function fiberOf(node) {
+    const key = Object.keys(node).find((k) => k.startsWith('__reactFiber$'));
+    return key ? node[key] : null;
+  }
+  function bigPictureDocuments() {
+    const windowStore = window.SteamUIStore?.WindowStore;
+    const windows = [windowStore?.GamepadUIMainWindowInstance, ...(windowStore?.SteamUIWindows ?? [])];
+    return [...new Set(windows.map((w) => w?.BrowserWindow?.document).filter(Boolean))];
+  }
+  function learnFromScreen() {
+    if (simulateMissing.has('header')) return false;
+    for (const doc of bigPictureDocuments()) {
+      for (const node of doc.querySelectorAll('*')) {
+        if (node.childElementCount || !TIME_TEXT.test(node.textContent ?? '')) continue;
+        const path = [];
+        let fiber = fiberOf(node);
+        while (fiber && !isHeaderBar(fiber.elementType) && path.length < 200) {
+          path.push(fiber);
+          fiber = fiber.return;
+        }
+        if (!isHeaderBar(fiber?.elementType)) continue;
+        HeaderBar = fiber.elementType;
+        // Steam wraps each header item in an error boundary: inside it the clock, and inside that the
+        // component every header item draws with.
+        const boundary = path.findIndex((f) => f.elementType?.prototype?.isReactComponent);
+        if (boundary >= 2 && isComponentType(path[boundary - 1].elementType) && isComponentType(path[boundary - 2].elementType)) {
+          ui.clock = path[boundary - 1].elementType;
+          ui.headerItem = path[boundary - 2].elementType;
+        }
+        // Above the header: the Steam window it is drawn for.
+        for (let f = fiber.return; f && !ui.windowContext; f = f.return) {
+          const t = f.elementType;
+          if ((t?.$$typeof === CONTEXT || t?.$$typeof === PROVIDER) && f.memoizedProps?.value?.BrowserWindow) ui.windowContext = t._context ?? t;
+        }
+        updateHeaderStylesFeature();
+        updateHeaderMenuFeature();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function updateHeaderStylesFeature() {
+    setFeature('header_styles', ui.headerCss ? 'ok' : ui.headerItem ? "ok (Steam's header item)" : 'fallback: inline styles');
+  }
+
   function setupHeader() {
     if (!featureEnabled('header_icon')) {
       setFeature('header_menu', 'off: turned off in Vibeshine');
       return setFeature('header_icon', 'off: turned off in Vibeshine');
     }
     updateHeaderMenuFeature();
-    if (!HeaderBar) return setFeature('header_icon', 'off: header component not found');
+    if (!HeaderBar) learnFromScreen();
+    if (!HeaderBar && esm && !options.checkOnly) {
+      // Big Picture isn't showing its header yet. Look again until it does.
+      const timer = setInterval(
+        safeHandler('header-search', () => {
+          if (!state.enabled || !learnFromScreen()) return;
+          clearInterval(timer);
+          patchHeader();
+        }),
+        2000,
+      );
+      cleanups.push(() => clearInterval(timer));
+      return setFeature('header_icon', 'waiting for Big Picture to show its header');
+    }
+    if (!HeaderBar) return setFeature('header_icon', esm ? 'off: Big Picture is not showing its header; open it and check again' : 'off: header component not found');
     if (options.checkOnly) return setFeature('header_icon', 'ready');
+    patchHeader();
+  }
+
+  function patchHeader() {
     slot = headerSlot();
     const original = HeaderBar.type;
     const patched = disguise(function VibeshineHeaderBar(...args) {
@@ -633,7 +796,7 @@
   // Start
   // ---------------------------------------------------------------------------------------------
   setFeature('focusable', ui.Focusable ? 'ok' : 'fallback: plain clickable icon (no controller focus)');
-  setFeature('header_styles', ui.headerCss ? 'ok' : 'fallback: inline styles');
+  updateHeaderStylesFeature();
 
   for (const [name, setup] of [['power_menu', setupPowerMenu], ['header_icon', setupHeader]]) {
     try {

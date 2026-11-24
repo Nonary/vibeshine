@@ -3,6 +3,8 @@
 // The fake components behave like Steam's, and report the source text (toString) of the real
 // minified components from the Steam client build of Oct 22 2026, so the script's lookups are tested
 // against realistic code. The script runs in its own VM context, like Steam's shared JS context.
+// With { build: 'esm' } it is Steam's beta of Nov 18 2026 instead, which loads its UI as native ES
+// modules, doesn't export the header, and spells out class names in its header item component.
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
@@ -358,6 +360,35 @@ export interface Mounted {
   unmount(): void;
 }
 
+const roots = new WeakMap<Mounted, Fiber>();
+
+/** The page elements a mounted tree shows, in document order, each with the React fiber that drew
+ * it under a "__reactFiber$" key, as React DOM leaves them: a fiber has the element type, the props
+ * and the fiber that rendered it (return). */
+export function screenOf(mounted: Mounted): any[] {
+  const elements: any[] = [];
+  const convert = (fiber: Fiber, parent: any) => {
+    const reactFiber = {
+      elementType: fiber.tag === 'root' ? null : fiber.kind,
+      memoizedProps: fiber.props,
+      return: parent,
+    };
+    if (fiber.tag === 'host') {
+      const [node] = output(fiber) as HostNode[];
+      elements.push({
+        tagName: String(fiber.kind).toUpperCase(),
+        childElementCount: node.children.filter((child) => typeof child !== 'string').length,
+        textContent: textOf([node]),
+        __reactFiber$fake: reactFiber,
+      });
+    }
+    for (const child of fiber.children) convert(child, reactFiber);
+  };
+  const root = roots.get(mounted);
+  if (root?.alive) convert(root, null);
+  return elements;
+}
+
 /** Keep an element tree on screen, so later store changes redraw it the way React would. */
 export function mount(node: any): Mounted {
   const root: Fiber = {
@@ -386,6 +417,7 @@ export function mount(node: any): Mounted {
       root.children = [];
     },
   };
+  roots.set(mounted, root);
   return mounted;
 }
 
@@ -457,14 +489,29 @@ function withSource<T extends object>(target: T, source: string): T {
 const noop = () => {};
 
 export interface FakeSteamOptions {
+  /** How Steam ships its UI: webpack chunks (default), or native ES modules as its beta of Nov 2026. */
+  build?: 'webpack' | 'esm';
   /** Source text of the clock component; drop ".Clock" to simulate a renamed clock. */
   clockSource?: string;
   /** Reuse one element for the header's right-hand items on every render, as React compilers do
    * for static subtrees, so its children array is shared between renders. */
   hoistHeaderItems?: boolean;
+  /** ES modules: the name React's CommonJS loader has in its chunk's export statement. */
+  reactLoaderName?: string;
 }
 
+// Steam's beta of Nov 18 2026 (ES modules): the clock and the component every header item draws
+// with, which spells out the class names that were CSS keys.
+const ESM_CLOCK_SOURCE =
+  'function qea(){let e=O2(),t=lDi(),{region:n}=q.useContext(F6),r=tta(n);return(0,Y.jsx)(N6,{className:U(t9i,r&&`tR1cGD328Pg-`),vrTooltip:t,children:e})}';
+const ESM_HEADER_ITEM_SOURCE =
+  'function N6(e){let{description:t,vrTooltip:n,...r}=e,i=e.onActivate!=null,{region:a}=q.useContext(F6);switch(a){case 0:case 1:return(0,Y.jsx)(B,{noFocusRing:!0,"aria-label":t,role:`link`,onOKActionDescription:t,...r,className:U(w6,i&&`D0YaFv54SdQ-`,e.className),children:e.children})}}';
+// React's CommonJS loader as such builds export it: it hands back the module once loaded.
+const LAZY_LOADER_SOURCE = '()=>(t||(e((t={exports:{}}).exports,t,t.exports),e=null),t.exports)';
+const ORIGIN = 'https://steamloopback.host';
+
 export function createSteam(options: FakeSteamOptions = {}) {
+  const esm = options.build === 'esm';
   const messages: any[] = [];
   const consoleErrors: unknown[][] = [];
   const createdMenus: Array<{ element: any; target: any; window: unknown }> = [];
@@ -490,9 +537,23 @@ export function createSteam(options: FakeSteamOptions = {}) {
     'class L extends l.PureComponent{static contextType=j;m_ref=l.createRef();m_refDiv=l.createRef();OnClick(re){this.props.onSelected?.(re)}render(){return(0,e.jsx)("div",{ref:this.m_refDiv,className:"contextMenuItem",children:this.props.children})}}',
   );
 
+  // ES-module builds quote strings with backticks.
   const MenuSeparator = withSource(
     () => h('div', { className: 'ContextMenuSeparator', role: 'separator' }),
-    'function O(re){const oe=l.useContext(j).styles??A();return(0,e.jsx)("div",{className:oe.ContextMenuSeparator,role:"separator"})}',
+    esm
+      ? 'function xg(e){let t=U.useContext(hg).styles??Gh;return(0,$.jsx)(`div`,{className:t.ContextMenuSeparator,role:`separator`})}'
+      : 'function O(re){const oe=l.useContext(j).styles??A();return(0,e.jsx)("div",{className:oe.ContextMenuSeparator,role:"separator"})}',
+  );
+
+  // Another component that mentions onSelected, found before the menu item in the same chunk.
+  class SearchResults extends Component {
+    render() {
+      return h('div', { className: 'SearchResults' }, this.props.children);
+    }
+  }
+  withSource(
+    SearchResults,
+    'class extends q.Component{m_strLastSearch;m_rgCurrentMatches=[];OnClick(e){this.props.onSelected?.(e)}render(){return(0,Y.jsx)(`div`,{children:this.props.children})}}',
   );
 
   // Steam's Menu adds its own trailing separator and Cancel item.
@@ -586,9 +647,29 @@ export function createSteam(options: FakeSteamOptions = {}) {
     ItemBoundary,
     'class u extends a.Component{state={};constructor(h){super(h),this.state.lastErrorKey=h.errorKey}render(){return this.props.children}}',
   );
+  // ES-module builds: the component every header item draws with, which adds the item's classes.
+  const HeaderItem = withSource((props: any) => {
+    const { description, vrTooltip: _vrTooltip, className, children, ...rest } = props;
+    const classes = ['b2KPbm3TAf0-', rest.onActivate && 'D0YaFv54SdQ-', className];
+    return h(
+      Focusable,
+      {
+        noFocusRing: true,
+        'aria-label': description,
+        role: 'link',
+        onOKActionDescription: description,
+        ...rest,
+        className: classes.filter(Boolean).join(' '),
+      },
+      children,
+    );
+  }, ESM_HEADER_ITEM_SOURCE);
   const item = (name: string, source: string) =>
     withSource(
-      () => h('div', { className: headerCss.HeaderItem, 'aria-label': name }, name),
+      () =>
+        esm
+          ? h(HeaderItem, { description: name }, name)
+          : h('div', { className: headerCss.HeaderItem, 'aria-label': name }, name),
       source,
     );
   const Search = item('Search', 'function oe(){return(0,e.jsx)(se,{className:Ne().SearchIcon})}');
@@ -605,9 +686,14 @@ export function createSteam(options: FakeSteamOptions = {}) {
     'function yi(qr){return(0,e.jsx)(se,{className:Ne().Avatar})}',
   );
   const Clock = withSource(
-    () => h('div', { className: `${headerCss.HeaderItem} ${headerCss.Clock}` }, '4:06 PM'),
+    () =>
+      esm
+        ? h(HeaderItem, { className: 'JB0I-4VGcik-' }, '4:06 PM')
+        : h('div', { className: `${headerCss.HeaderItem} ${headerCss.Clock}` }, '4:06 PM'),
     options.clockSource ??
-      'function gi(){const qr=(0,ae.hj)(),ni=(0,ae.I_)(),{region:Di}=a.useContext(mn),Pi=en(Di);return(0,e.jsx)(se,{className:(0,x.A)(Ne().Clock,Pi&&Ne().DashboardBar),vrTooltip:ni,children:qr})}',
+      (esm
+        ? ESM_CLOCK_SOURCE
+        : 'function gi(){const qr=(0,ae.hj)(),ni=(0,ae.I_)(),{region:Di}=a.useContext(mn),Pi=en(Di);return(0,e.jsx)(se,{className:(0,x.A)(Ne().Clock,Pi&&Ne().DashboardBar),vrTooltip:ni,children:qr})}'),
   );
   const Provider = (props: any) => props.children;
   const HeaderRow = (props: any) => h('div', { id: 'header' }, props.children);
@@ -708,6 +794,90 @@ export function createSteam(options: FakeSteamOptions = {}) {
     modules.map(([id, source]) => [id, withSource(noop.bind(null), source)]),
   );
 
+  // ES modules -----------------------------------------------------------------------------------
+  // Steam's module script, the chunks it imports, one it loaded later and one it never loaded. The
+  // header isn't exported, React only through its CommonJS loader, and near misses come first.
+  const lazyLoader = (value: unknown) => withSource(() => value, LAZY_LOADER_SOURCE);
+  const reactLoaderName = options.reactLoaderName ?? 'require_react';
+  const chunks: Record<
+    string,
+    { source: string; exports: Record<string, unknown>; loaded: boolean }
+  > = {
+    'library.js?contenthash=L': {
+      source:
+        'const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["./chunk~lazy.js?contenthash=Z","./chunk~never.js?contenthash=N"])))=>i.map(i=>d[i]);import{t as e}from"./chunk~menus.js?contenthash=M";import"./chunk~react.js?contenthash=R";export{}',
+      exports: {},
+      loaded: true,
+    },
+    'chunk~react.js?contenthash=R': {
+      source: `var e=Symbol.for(\`react.transitional.element\`);t.useSyncExternalStore=function(t,n,r){return O.H.useSyncExternalStore(t,n,r)};export{require_react_dom as $a,${reactLoaderName} as eo,useValueWasTrueRecently as $}`,
+      exports: { $a: lazyLoader({ createRoot: noop }), eo: lazyLoader(React), $: noop },
+      loaded: true,
+    },
+    'chunk~menus.js?contenthash=M': {
+      source:
+        'onSelected contextMenuItem GetContextMenuManagerFromWindow CreateContextMenuInstance {"flow-children":t,onActivate:n,focusWithinClassName:a} createContext VirtualKeyboardManager .instance quickAccessHeader BShowHeader',
+      exports: {
+        q: React.createContext(null),
+        An: SearchResults,
+        c: MenuItem,
+        _g: Menu,
+        xg: MenuSeparator,
+        M: Focusable,
+        n: showContextMenu,
+        i: CContextMenuManager,
+        w: WindowContext,
+      },
+      loaded: true,
+    },
+    'chunk~lazy.js?contenthash=Z': { source: 'export{}', exports: {}, loaded: true },
+    'chunk~never.js?contenthash=N': { source: 'export{}', exports: {}, loaded: false },
+  };
+  const chunkAt = (url: string) => chunks[url.slice(`${ORIGIN}/`.length)];
+  const modulesRead = { fetched: [] as string[], imported: [] as string[] };
+  const loadModule = (url: string) => {
+    modulesRead.imported.push(url);
+    const chunk = chunkAt(url);
+    if (!chunk) throw new Error(`no module at ${url}`);
+    return Promise.resolve(chunk.exports);
+  };
+  const libraryUrl = `${ORIGIN}/library.js?contenthash=L`;
+  const sharedDocument = {
+    querySelector: (selector: string) => (selector.includes('script') ? { src: libraryUrl } : null),
+    querySelectorAll: () => [
+      { src: libraryUrl },
+      { href: `${ORIGIN}/chunk~react.js?contenthash=R` },
+    ],
+  };
+  const esmGlobals = {
+    document: sharedDocument,
+    location: { origin: ORIGIN },
+    URL,
+    performance: {
+      getEntriesByType: (type: string) =>
+        type === 'resource'
+          ? [
+              ...Object.entries(chunks)
+                .filter(([, chunk]) => chunk.loaded)
+                .map(([path]) => ({ name: `${ORIGIN}/${path}` })),
+              { name: `${ORIGIN}/css/chunk~7c8d31ab0c.css?contenthash=C` },
+            ]
+          : [],
+    },
+    fetch: (url: string) => {
+      modulesRead.fetched.push(url);
+      const chunk = chunkAt(url);
+      return chunk
+        ? Promise.resolve({ text: () => Promise.resolve(chunk.source) })
+        : Promise.reject(new Error(`404 ${url}`));
+    },
+  };
+
+  // Big Picture's window, on screen once opened: its header, in the Steam window context.
+  const bigPictureWindow: any = { BrowserWindow: { document: null } };
+  const windowStore: any = { GamepadUIMainWindowInstance: undefined, SteamUIWindows: [] };
+  let bigPicture: Mounted | null = null;
+
   // Steam's clock and timers, moved only by advance() and skip() ------------------------------
   let clock = 1_000_000;
   let nextTimer = 1;
@@ -720,13 +890,16 @@ export function createSteam(options: FakeSteamOptions = {}) {
       return nextTimer++;
     },
     clearInterval: (id: number) => timers.delete(id),
-    webpackChunksteamui: { push: (chunk: any[]) => chunk[2]?.(require) },
+    ...(esm
+      ? esmGlobals
+      : { webpackChunksteamui: { push: (chunk: any[]) => chunk[2]?.(require) } }),
     __vibeshineBridge: (json: string) => messages.push(JSON.parse(json)),
     SteamUIStore: {
       OpenPowerMenu(target: unknown) {
         calls.openPowerMenu += 1;
         showContextMenu(h(PowerMenu, { onCancel: noop, isPowerChord: false }), target);
       },
+      WindowStore: windowStore,
     },
     console: { log: noop, error: (...args: unknown[]) => consoleErrors.push(args) },
   });
@@ -759,15 +932,46 @@ export function createSteam(options: FakeSteamOptions = {}) {
     consoleErrors,
     createdMenus,
     calls,
-    components: { Menu, MenuItem, MenuSeparator, PowerMenu, HeaderBar, CContextMenuManager },
+    components: {
+      Menu,
+      MenuItem,
+      MenuSeparator,
+      PowerMenu,
+      HeaderBar,
+      CContextMenuManager,
+      WindowContext,
+    },
     originals: {
       createContextMenuInstance: CContextMenuManager.prototype.CreateContextMenuInstance,
       headerType: HeaderBar.type,
     },
-    /** Evaluate the script inside Steam with the given options; returns its report as plain JSON. */
-    inject(scriptOptions?: Record<string, unknown>) {
-      if (scriptOptions) window.__vibeshineOptions = scriptOptions;
-      return JSON.parse(JSON.stringify(vm.runInContext(SCRIPT, window)));
+    /** Evaluate the script inside Steam with the given options; returns its report as plain JSON,
+     * or with ES modules a promise of it. */
+    inject(scriptOptions?: Record<string, unknown>): any {
+      if (esm) window.__vibeshineOptions = { ...scriptOptions, loadModule };
+      else if (scriptOptions) window.__vibeshineOptions = scriptOptions;
+      const plain = (report: unknown) => JSON.parse(JSON.stringify(report));
+      const result = vm.runInContext(SCRIPT, window);
+      // A promise from the script's own context isn't an instance of ours.
+      return typeof result?.then === 'function' ? result.then(plain) : plain(result);
+    },
+    /** ES modules: the chunk URLs the script fetched and imported. */
+    modulesRead,
+    /** Open Big Picture, showing its header on screen in Big Picture's Steam window. */
+    openBigPicture() {
+      bigPicture?.unmount();
+      const shown = mount(
+        h(WindowContext, { value: bigPictureWindow }, h(HeaderBar, { quickAccessHeader: false })),
+      );
+      bigPicture = shown;
+      bigPictureWindow.BrowserWindow.document = { querySelectorAll: () => screenOf(shown) };
+      windowStore.GamepadUIMainWindowInstance = bigPictureWindow;
+      return shown;
+    },
+    closeBigPicture() {
+      bigPicture?.unmount();
+      bigPicture = null;
+      windowStore.GamepadUIMainWindowInstance = undefined;
     },
     /** Open the Power menu the way Steam does and render the menu that was created. */
     openPowerMenu() {

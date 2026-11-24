@@ -78,6 +78,10 @@ using a fallback, or off. Run it after a Steam update.
   `ready; appears the next time Big Picture opens` until then. Once a header has the patch, the icon
   comes back straight away when Vibeshine or its helper restarts, and goes as soon as the controls
   are turned off.
+- **Header icon on Steam's ES-module beta.** The header is learned from Big Picture on screen, so if
+  Big Picture isn't open when Vibeshine connects, the header icon reports `waiting for Big Picture to
+  show its header` and checks every 2 s. Once found, it appears the next time Big Picture opens, as
+  above. The Power menu entries don't depend on it.
 - **End Stream's log label.** End Stream shares the end-stream hotkey's code, so its display cleanup
   logs `reason=end_stream_hotkey`. The line before it says `End Stream selected in Steam`.
 - **Console session only.** The helper runs in the PC's own (console) session, where Steam is on
@@ -99,6 +103,12 @@ all 5 controls work.
 | Steam's web helper killed | Steam restarted it; the controls were back after 3.5 s. |
 | Vibeshine's helper killed | Restarted after 5 s and injected again. |
 | Debug-port buttons | Turn off and Turn on restarted Steam (in Big Picture when it was open) and the controls reconnected within 3 s. A stream kept running throughout. |
+
+Steam beta client build Nov 18 2026 16:23:39 (ES modules, React 19.1.1), Windows 11, 2026-11-24. Check
+compatibility with Big Picture open: all 5 controls work, the header styles from Steam's header item.
+With the helper's streaming fixture, after Big Picture was opened again, the icon showed left of the
+clock in the header's own style and opened the Vibeshine menu, and the Power menu had the entries at
+the top. Not yet checked with a real stream.
 
 ## How it works
 
@@ -123,6 +133,15 @@ Steam client (user)  <-- CDP over 127.0.0.1:8080 -->  sunshine_steam_ui_helper.e
   `#StopStreamingTo`, property names, CSS keys and method names), and fails per feature: if a lookup
   breaks after a Steam update, that feature switches off or falls back, and Steam's own menus and
   header stay intact.
+- Steam's beta from November 2026 loads its UI as native ES modules instead of webpack chunks. The
+  helper accepts Steam's shared context either way, and the script then reads the chunks Steam has
+  loaded: importing one again hands back the module already running, so nothing runs twice. React
+  comes from its CommonJS loader, which those builds export instead of React itself. They don't
+  export the header either, and spell out class names in the components that use them, so the
+  script learns the header, its clock, Steam's header item component and the context with the Steam
+  window from Big Picture's React tree on screen, climbing from the clock. The icon is drawn with
+  Steam's header item, so it gets the header's own classes. Steam's current webpack builds keep the
+  old lookups.
 - The helper checks in with the script every 5 s. If the script hears nothing for 15 s, because the
   helper was stopped, crashed or was removed with Vibeshine, it hides its entries until the helper is
   back, so Steam never offers controls that nothing would act on.
@@ -190,7 +209,8 @@ See [the API reference](api.md) for the details.
 
 - **Script tests:** `npm run test:unit` in the web UI runs the script against a fake Steam
   (`scripts/support/fake-steam.ts`), whose small React stand-in redraws like React, so something
-  left frozen on screen fails a test.
+  left frozen on screen fails a test. `createSteam({ build: 'esm' })` makes it Steam's ES-module beta,
+  with chunks to read and Big Picture on screen to learn the header from.
 - **Helper tests:** `test_component_steam_big_picture_controls` (decisions) and
   `test_component_steam_ui_helper_controller` (injection lifecycle against a fake Steam).
 - **Flag-file tests:** `test_component_steam_big_picture_flag_file` creates, moves and deletes flag

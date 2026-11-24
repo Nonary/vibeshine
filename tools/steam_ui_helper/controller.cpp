@@ -157,7 +157,8 @@ namespace steam_ui_helper {
     }
     auto options = options_.inject_options;
     options["checkOnly"] = true;
-    const auto result = evaluate(policy::inject_expression(options, options_.script));
+    // The script reads Steam's ES-module builds asynchronously, so its report may be a promise.
+    const auto result = evaluate(policy::inject_expression(options, options_.script), true);
     const auto report = policy::report_message(result.value("/result/value"_json_pointer, json {}), steam_build_);
     if (!report) {
       throw std::runtime_error("the Steam script speaks a different protocol version");
@@ -296,7 +297,7 @@ namespace steam_ui_helper {
 
   void controller_t::inject(clock::time_point now) {
     try {
-      const auto result = evaluate(policy::inject_expression(options_.inject_options, options_.script));
+      const auto result = evaluate(policy::inject_expression(options_.inject_options, options_.script), true);
       const auto report = policy::report_message(result.value("/result/value"_json_pointer, json {}), steam_build_);
       if (!report) {
         script_refused_ = true;

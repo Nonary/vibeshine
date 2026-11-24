@@ -392,9 +392,14 @@ test('opens the Vibeshine menu from the header icon', () => {
 // front and leaves it there once the menu closes.
 const gameOverlay = { name: 'Game overlay' };
 const quickAccessMenu = { name: 'Quick Access Menu' };
-const overlayWindow = { BrowserWindow: { document: { documentElement: { ownerDocument: { defaultView: gameOverlay } } } } };
+const overlayWindow = {
+  BrowserWindow: { document: { documentElement: { ownerDocument: { defaultView: gameOverlay } } } },
+};
 const iconElement = { ownerDocument: { defaultView: quickAccessMenu } };
-const selectIcon = { currentTarget: iconElement, target: { ownerDocument: iconElement.ownerDocument } };
+const selectIcon = {
+  currentTarget: iconElement,
+  target: { ownerDocument: iconElement.ownerDocument },
+};
 
 test("opens the Vibeshine menu over the whole game, like Steam's Power menu", () => {
   const steam = createSteam();
@@ -585,4 +590,129 @@ test('respects per-feature switches', () => {
   );
   steam.window.VibeshineBPM.setStatus(streaming);
   assert.ok(findHost(steam.renderHeader(), isIcon));
+});
+
+// ---------------------------------------------------------------------------------------------
+// Steam's beta from November 2026 loads its UI as native ES modules: no webpack registry, no
+// exported header, and class names spelled out in Steam's header item component.
+// ---------------------------------------------------------------------------------------------
+const HEADER_WITH_ICON = [
+  'Search',
+  'Internet Settings',
+  'Notifications',
+  'ICON',
+  '4:06 PM',
+  'View Account',
+];
+
+test('finds Steam in its ES modules, reading only the chunks Steam loaded', async () => {
+  const steam = createSteam({ build: 'esm' });
+  steam.openBigPicture();
+  const report = await steam.inject({ checkOnly: true });
+  assert.equal(report.react, '19.1.1');
+  assert.deepEqual(report.features, {
+    focusable: 'ok',
+    header_styles: "ok (Steam's header item)",
+    power_menu: 'ready',
+    header_menu: 'ok (menu parts: search)',
+    header_icon: 'ready',
+  });
+  const chunk = (url: string) => url.replace(/^.*\/|\?.*$/g, '');
+  assert.deepEqual([...new Set(steam.modulesRead.imported.map(chunk))].sort(), [
+    'chunk~lazy.js',
+    'chunk~menus.js',
+    'chunk~react.js',
+    'library.js',
+  ]);
+  assert.equal(steam.modulesRead.fetched.map(chunk).includes('chunk~never.js'), false);
+  // A check patches nothing.
+  assert.equal(steam.components.HeaderBar.type, steam.originals.headerType);
+});
+
+test('finds React by its loader when the loader has no name', async () => {
+  const steam = createSteam({ build: 'esm', reactLoaderName: 'e' });
+  const report = await steam.inject({ checkOnly: true });
+  assert.equal(report.react, '19.1.1');
+});
+
+test("draws the header icon with Steam's header item, left of the clock", async () => {
+  const steam = createSteam({ build: 'esm' });
+  steam.openBigPicture();
+  const report = await steam.inject();
+  // The header on screen was drawn before the script: the icon comes when Big Picture opens again.
+  assert.equal(report.features.header_icon, 'ready; appears the next time Big Picture opens');
+  steam.window.VibeshineBPM.setStatus(streaming);
+  const header = steam.renderHeader();
+  assert.deepEqual(headerOrder(header), HEADER_WITH_ICON);
+  const icon = findHost(header, isIcon)!;
+  assert.deepEqual(icon.props.className.split(' '), [
+    'b2KPbm3TAf0-',
+    'D0YaFv54SdQ-',
+    'vibeshine-bpm-indicator',
+  ]);
+  assert.equal(icon.props['aria-label'], 'Streaming to Steam Deck, Browser with Vibeshine');
+  assert.equal(icon.props.style.color, '#5ad45a');
+  assert.equal(steam.messages.at(-1).value, 'ok (left of the clock)');
+});
+
+test('waits for Big Picture to show its header before adding the icon', async () => {
+  const steam = createSteam({ build: 'esm' });
+  const report = await steam.inject();
+  assert.equal(report.features.header_icon, 'waiting for Big Picture to show its header');
+  steam.window.VibeshineBPM.setStatus(streaming);
+  steam.advance(4_000);
+  assert.equal(findHost(steam.renderHeader(), isIcon), undefined);
+
+  steam.openBigPicture();
+  steam.advance(2_000);
+  assert.deepEqual(
+    steam.messages
+      .filter((m) => m.type === 'feature' && m.name !== 'header_menu')
+      .map((m) => m.value),
+    ["ok (Steam's header item)", 'ready; appears the next time Big Picture opens'],
+  );
+  assert.deepEqual(headerOrder(steam.renderHeader()), HEADER_WITH_ICON);
+  // It stops looking once found, and its timers go when it is switched off.
+  const timers = steam.timers.size;
+  steam.advance(10_000);
+  assert.equal(steam.timers.size, timers);
+  steam.window.VibeshineBPM.unpatch();
+  assert.equal(steam.timers.size, 0);
+});
+
+test('stops looking for the header when switched off before Big Picture opens', async () => {
+  const steam = createSteam({ build: 'esm' });
+  await steam.inject();
+  steam.window.VibeshineBPM.unpatch();
+  assert.equal(steam.timers.size, 0);
+});
+
+test("opens the Vibeshine menu with Steam's menu item, in the Steam window it is drawn for", async () => {
+  const steam = createSteam({ build: 'esm' });
+  steam.openBigPicture();
+  await steam.inject();
+  steam.window.VibeshineBPM.setStatus(streaming);
+  findHost(steam.renderHeader(overlayWindow), isIcon)!.props.onActivate(selectIcon);
+  assert.equal(steam.createdMenus.at(-1)!.window, gameOverlay);
+  assert.deepEqual(menuLabels(render(steam.createdMenus.at(-1)!.element)), [
+    'Factorio · 1280×800 @ 90 fps · HEVC',
+    '----',
+    'End Stream (Vibeshine)',
+    'Stop Streaming To Steam Deck (Vibeshine)',
+    'Stop Streaming To Browser (Vibeshine)',
+    '----',
+    'Cancel',
+  ]);
+});
+
+test('adds the Power menu entries in an ES-module Steam', async () => {
+  const steam = createSteam({ build: 'esm' });
+  await steam.inject();
+  steam.window.VibeshineBPM.setStatus(streaming);
+  assert.deepEqual(menuLabels(steam.openPowerMenu()).slice(0, 4), [
+    'End Stream (Vibeshine)',
+    'Stop Streaming To Steam Deck (Vibeshine)',
+    'Stop Streaming To Browser (Vibeshine)',
+    '----',
+  ]);
 });
