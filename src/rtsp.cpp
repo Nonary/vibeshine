@@ -2019,7 +2019,7 @@ namespace rtsp_stream {
   bool configure_pyrowave_announce(
     stream::config_t &config,
     const std::unordered_map<std::string_view, std::string_view> &args,
-    std::shared_ptr<socket_t> socket,
+    tcp::socket &socket,
     launch_session_t &session,
     OPTION_ITEM &option,
     int sequence_number,
@@ -2040,7 +2040,7 @@ namespace rtsp_stream {
       if (const auto it = args.find("x-ss-video[0].pyrowaveLinkMbps"sv); it != args.end()) {
         const auto link_mbps = util::from_view(it->second);
         if (link_mbps <= 0 || link_mbps > 400000) {
-          respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+          respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
           return false;
         }
         config.monitor.pyrowave_peer_link_bps = std::uint64_t(link_mbps) * 1'000'000;
@@ -2048,18 +2048,18 @@ namespace rtsp_stream {
       if (const auto it = args.find("x-ss-video[0].pyrowavePaceMbps"sv); it != args.end()) {
         const auto pace_mbps = util::from_view(it->second);
         if (pace_mbps <= 0 || pace_mbps > 400000) {
-          respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+          respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
           return false;
         }
         config.monitor.pyrowave_peer_pace_bps = std::uint64_t(pace_mbps) * 1'000'000;
       }
       if (const auto it = args.find("x-ss-video[0].pyrowaveHybrid"sv); it != args.end() && it->second != "0"sv) {
-        respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+        respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
         return false;
       }
       // Retired compression transports must not be negotiated as native framing.
       if (const auto it = args.find("x-ss-video[0].pyrowaveCompression"sv); it != args.end() && it->second != "0"sv) {
-        respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+        respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
         return false;
       }
       BOOST_LOG(info) << "Client requested PyroWave: framing="sv
@@ -2253,7 +2253,7 @@ namespace rtsp_stream {
     }
 
     bool pyrowave_session = false;
-    if (!configure_pyrowave_announce(config, args, socket, *session, option, req->sequenceNumber, pyrowave_session)) {
+    if (!configure_pyrowave_announce(config, args, socket->sock, *session, option, req->sequenceNumber, pyrowave_session)) {
       return false;
     }
 
