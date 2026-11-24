@@ -4,6 +4,7 @@ import { hostReadiness, linuxCaptureState } from '../utils/hostReadiness.ts';
 import {
   acknowledgeSettings,
   configBoolean,
+  gamepadDescriptionKey,
   linuxVirtualCaptureWarning,
   settingError,
 } from '../utils/settings.ts';
@@ -24,6 +25,16 @@ test('keyboard and mouse input defaults to Auto with explicit backend overrides'
   assert.deepEqual(backend.options?.map((option) => option.value), ['auto', 'sendinput', 'vhf']);
   assert.equal(backend.platform, 'windows');
   assert.equal(backend.restartRequired, true);
+});
+
+test('English gamepad override help is specific to Linux hosts', () => {
+  for (const locale of ['en', 'en-GB', 'en-US']) {
+    assert.equal(gamepadDescriptionKey('gamepad', 'linux', locale), 'config.gamepad_desc_linux');
+    assert.equal(gamepadDescriptionKey('gamepad', 'windows', locale), undefined);
+  }
+  assert.equal(gamepadDescriptionKey('gamepad', 'linux', 'fr'), undefined);
+  assert.equal(gamepadDescriptionKey('gamepad', '', 'en'), undefined);
+  assert.equal(gamepadDescriptionKey('controller', 'linux', 'en'), undefined);
 });
 
 test('capture verification requires observed event-driven KMS, never configuration alone', () => {

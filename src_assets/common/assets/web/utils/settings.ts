@@ -44,6 +44,16 @@ export function configBoolean(value: unknown, fallback = false): boolean {
   );
 }
 
+export function gamepadDescriptionKey(
+  key: string,
+  platform: string,
+  locale: string,
+): string | undefined {
+  if (key === 'gamepad' && platform.toLowerCase().includes('linux') && /^en(?:[-_]|$)/i.test(locale)) {
+    return 'config.gamepad_desc_linux';
+  }
+}
+
 export function linuxVirtualCaptureWarning(platform: string, capture: unknown): boolean {
   return (
     platform.toLowerCase() === 'linux' &&

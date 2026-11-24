@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, toRaw } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { gamepadDescriptionKey } from '@/utils/settings';
 
 import {
   clientOverrideableKeys,
@@ -45,7 +46,7 @@ const emit = defineEmits<{
   'update:modelValue': [value: Record<string, unknown>];
 }>();
 
-const { t, te } = useI18n();
+const { locale, t, te } = useI18n();
 const search = ref('');
 const announcement = ref('');
 const catalogOpen = ref(false);
@@ -123,6 +124,7 @@ function descriptionFor(key: string): string {
   const field = fieldFor(key);
   const candidates = [
     field?.descriptionKey,
+    gamepadDescriptionKey(key, String(props.metadata.platform ?? ''), locale.value),
     `config.${key}_desc`,
     `ui.settings.fields.${key}.description`,
   ].filter((candidate): candidate is string => Boolean(candidate));

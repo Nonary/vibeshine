@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useUnsavedChanges } from '@/composables/useUnsavedChanges';
 import { useI18n } from 'vue-i18n';
+import { gamepadDescriptionKey } from '@/utils/settings';
 import { useRoute, useRouter } from 'vue-router';
 
 import { groupLibraryGames, providerLabels } from '@/utils/libraryGames';
@@ -329,7 +330,7 @@ interface FrameGenHealth {
 
 const route = useRoute();
 const router = useRouter();
-const { t, te } = useI18n();
+const { locale, t, te } = useI18n();
 const loading = ref(true);
 const saving = ref(false);
 const deleting = ref(false);
@@ -1044,6 +1045,7 @@ function overrideDescription(key: string): string {
   const field = overrideField(key);
   const candidates = [
     field?.descriptionKey,
+    gamepadDescriptionKey(key, String(overrideMetadata.value.platform ?? ''), locale.value),
     `config.${key}_desc`,
     `ui.settings.fields.${key}.description`,
   ].filter((candidate): candidate is string => Boolean(candidate));
