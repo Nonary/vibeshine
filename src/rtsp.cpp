@@ -2123,17 +2123,15 @@ namespace rtsp_stream {
       !session->audio_codec_offered.empty() && audio_accept != args.end() &&
       audio_accept->second == session->audio_codec_offered;
 
-    if (config.audio.channels == 2) {
-      if (!client_accepted_audio_codec) {
-        for (auto option = req->options; option != nullptr; option = option->next) {
-          if ("Host"sv == option->option) {
-            std::string_view content {option->content};
-            BOOST_LOG(debug) << "Found Host: "sv << content;
-            config.audio.flags[audio::config_t::HIGH_QUALITY] = (content.find("0.0.0.0"sv) == std::string::npos);
-          }
+    if (config.audio.channels == 2 && !client_accepted_audio_codec) {
+      for (auto option = req->options; option != nullptr; option = option->next) {
+        if ("Host"sv == option->option) {
+          std::string_view content {option->content};
+          BOOST_LOG(debug) << "Found Host: "sv << content;
+          config.audio.flags[audio::config_t::HIGH_QUALITY] = (content.find("0.0.0.0"sv) == std::string::npos);
         }
       }
-    } else if (session->surround_params.length() > 3) {
+    } else if (config.audio.channels != 2 && session->surround_params.length() > 3) {
       // Channels
       std::uint8_t c = session->surround_params[0] - '0';
       // Streams
