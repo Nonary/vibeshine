@@ -2218,26 +2218,15 @@ namespace rtsp_stream {
     return true;
   }
 
-  bool cmd_announce(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
-    // Capture before parsing: cancellation may clear this launch while the
-    // io_context is still validating ANNOUNCE, before worker submission.
-    const auto intake_ticket = host_stream_control::request_ticket();
-    OPTION_ITEM option {};
-
-    // I know these string literals will not be modified
-    option.option = cseq_header;
-
-    auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = seqn_str.data();
-
-    auto args = parse_announce_attributes(std::string_view {req->payload, (size_t) req->payloadLength});
-
-    stream::config_t config {};
-    config.gen1_framegen_fix = false;
-    config.gen2_framegen_fix = false;
-    config.frame_generation_enabled = false;
-
-    std::int64_t configuredBitrateKbps;
+  bool parse_announce_stream_config(
+    stream::config_t &config,
+    const std::unordered_map<std::string_view, std::string_view> &args,
+    std::shared_ptr<socket_t> socket,
+    std::shared_ptr<launch_session_t> session,
+    const msg_t &req,
+    OPTION_ITEM &option,
+    std::int64_t &configuredBitrateKbps
+  ) {
     config.audio.flags[audio::config_t::HOST_AUDIO] = session->host_audio;
     try {
       config.audio.channels = (int) util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
@@ -2319,6 +2308,32 @@ namespace rtsp_stream {
       configuredBitrateKbps = util::from_view(args.at("x-ml-video.configuredBitrateKbps"sv));
     } catch (std::out_of_range &) {
       respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return false;
+    }
+    return true;
+  }
+
+  bool cmd_announce(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
+    // Capture before parsing: cancellation may clear this launch while the
+    // io_context is still validating ANNOUNCE, before worker submission.
+    const auto intake_ticket = host_stream_control::request_ticket();
+    OPTION_ITEM option {};
+
+    // I know these string literals will not be modified
+    option.option = cseq_header;
+
+    auto seqn_str = std::to_string(req->sequenceNumber);
+    option.content = seqn_str.data();
+
+    auto args = parse_announce_attributes(std::string_view {req->payload, (size_t) req->payloadLength});
+
+    stream::config_t config {};
+    config.gen1_framegen_fix = false;
+    config.gen2_framegen_fix = false;
+    config.frame_generation_enabled = false;
+
+    std::int64_t configuredBitrateKbps;
+    if (!parse_announce_stream_config(config, args, socket, session, req, option, configuredBitrateKbps)) {
       return false;
     }
 
