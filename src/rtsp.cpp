@@ -2076,7 +2076,7 @@ namespace rtsp_stream {
     const std::unordered_map<std::string_view, std::string_view> &args,
     const msg_t &req,
     tcp::socket &socket,
-    launch_session_t &session,
+    std::shared_ptr<launch_session_t> session,
     OPTION_ITEM &option,
     int sequence_number,
     audio::dolby_codec_e &selected_audio_codec
@@ -2131,7 +2131,7 @@ namespace rtsp_stream {
     // change the negotiated codec if its encoder or requested channel layout is unsupported.
     if (client_accepted_audio_codec && (!selected_encoder_available || !supported_dolby_channel_count)) {
       BOOST_LOG(error) << "Client accepted a Dolby codec that cannot be provided for the requested stream";
-      respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+      respond(socket, *session, &option, 400, "BAD REQUEST", sequence_number, {});
       return false;
     }
     selected_audio_codec = audio::configure_dolby_audio(
