@@ -4,10 +4,12 @@
  */
 #pragma once
 
+#include "audio_codec.h"
+
 #include <cstddef>
 
 namespace stream {
-  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = 2560;  ///< Maximum 640 kbit/s AC-3 access unit at 48 kHz.
+  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = audio::MAX_DOLBY_PACKET_SIZE;
 
   /**
    * @brief Return the output size of AES-CBC with PKCS#7 padding enabled.
