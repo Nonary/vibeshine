@@ -2071,6 +2071,153 @@ namespace rtsp_stream {
     return true;
   }
 
+  bool configure_announce_audio(
+    audio::config_t &audio_config,
+    const std::unordered_map<std::string_view, std::string_view> &args,
+    const msg_t &req,
+    tcp::socket &socket,
+    launch_session_t &session,
+    OPTION_ITEM &option,
+    int sequence_number,
+    audio::dolby_codec_e &selected_audio_codec
+  ) {
+    // A client that explicitly accepts Dolby negotiates quality through AudioQuality.
+    // Keep the legacy Host-based stereo quality detection exclusively for Opus.
+    const auto audio_accept = args.find("x-ss-audio-codec-accept"sv);
+    const std::string_view accepted_audio_codec =
+      audio_accept == args.end() ? std::string_view {} : std::string_view {audio_accept->second};
+    const bool client_accepted_audio_codec =
+      !session->audio_codec_offered.empty() && audio_accept != args.end() &&
+      audio_accept->second == session->audio_codec_offered;
+
+    if (audio_config.channels == 2 && !client_accepted_audio_codec) {
+      for (auto option = req->options; option != nullptr; option = option->next) {
+        if ("Host"sv == option->option) {
+          std::string_view content {option->content};
+          BOOST_LOG(debug) << "Found Host: "sv << content;
+          audio_config.flags[audio::config_t::HIGH_QUALITY] = (content.find("0.0.0.0"sv) == std::string::npos);
+        }
+      }
+    } else if (audio_config.channels != 2 && session->surround_params.length() > 3) {
+      // Channels
+      std::uint8_t c = session->surround_params[0] - '0';
+      // Streams
+      std::uint8_t n = session->surround_params[1] - '0';
+      // Coupled streams
+      std::uint8_t m = session->surround_params[2] - '0';
+      auto valid = false;
+      if ((c == 6 || c == 8) && c == audio_config.channels && n + m == c && session->surround_params.length() == c + 3) {
+        audio_config.customStreamParams.channelCount = c;
+        audio_config.customStreamParams.streams = n;
+        audio_config.customStreamParams.coupledStreams = m;
+        valid = true;
+        for (std::uint8_t i = 0; i < c; i++) {
+          audio_config.customStreamParams.mapping[i] = session->surround_params[i + 3] - '0';
+          if (audio_config.customStreamParams.mapping[i] >= c) {
+            valid = false;
+            break;
+          }
+        }
+      }
+      audio_config.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
+    }
+    // Select Dolby only when ANNOUNCE accepts the exact codec offered in DESCRIBE.
+    const bool ac3_encoder_available = session->audio_codec_offered == "AC3"sv && audio::ac3_available();
+    const bool eac3_encoder_available = session->audio_codec_offered == "EAC3"sv && audio::eac3_available();
+    const bool selected_encoder_available = ac3_encoder_available || eac3_encoder_available;
+    const bool supported_dolby_channel_count = audio_config.channels == 2 || audio_config.channels == 6;
+
+    // Once a client has explicitly accepted an advertised codec, do not silently
+    // change the negotiated codec if its encoder or requested channel layout is unsupported.
+    if (client_accepted_audio_codec && (!selected_encoder_available || !supported_dolby_channel_count)) {
+      BOOST_LOG(error) << "Client accepted a Dolby codec that cannot be provided for the requested stream";
+      respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+      return false;
+    }
+    selected_audio_codec = audio::configure_dolby_audio(
+      audio_config,
+      session->audio_codec_offered,
+      accepted_audio_codec,
+      ac3_encoder_available,
+      eac3_encoder_available,
+      audio_config.flags[audio::config_t::HIGH_QUALITY]
+    );
+    if (config::audio.format != "opus"sv && session->audio_codec_offered.empty()) {
+      BOOST_LOG(warning) << "Dolby audio format ["sv << config::audio.format
+                         << "] was selected, but its FFmpeg encoder is unavailable; using Opus"sv;
+    } else if (!session->audio_codec_offered.empty() && !client_accepted_audio_codec) {
+      BOOST_LOG(info) << "Client did not accept "sv << session->audio_codec_offered << "; falling back to Opus"sv;
+    }
+
+    if (session->continuous_audio) {
+      BOOST_LOG(info) << "Client requested continuous audio"sv;
+      audio_config.flags[audio::config_t::CONTINUOUS_AUDIO] = true;
+    }
+
+
+    return true;
+  }
+
+  bool adjust_announce_video_bitrate(
+    stream::config_t &config,
+    std::int64_t configuredBitrateKbps,
+    bool pyrowave_session,
+    tcp::socket &socket,
+    launch_session_t &session,
+    OPTION_ITEM &option,
+    int sequence_number
+  ) {
+    // If the client sent a configured bitrate, we will choose the actual bitrate ourselves
+    // by using FEC percentage and audio quality settings. If the calculated bitrate ends up
+    // too low, we'll allow it to exceed the limits rather than reducing the encoding bitrate
+    // down to nearly nothing.
+    if (configuredBitrateKbps) {
+      BOOST_LOG(debug) << "Client configured bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
+
+      // Preserve the original wire-bandwidth budget the client asked for so the
+      // UI can show it alongside the post-adjustment encoder bitrate.
+      config.monitor.client_requested_bitrate = static_cast<int>(configuredBitrateKbps);
+
+      // If the FEC percentage isn't too high, adjust the configured bitrate to ensure video
+      // traffic doesn't exceed the user's selected bitrate when the FEC shards are included.
+      // PyroWave only adds parity to its few critical packets (see stream.cpp), so it
+      // reserves its baseline parity and packet overhead in the per-frame budget.
+      if (config::stream.fec_percentage <= 80 && !pyrowave_session) {
+        configuredBitrateKbps /= 100.f / (100 - config::stream.fec_percentage);
+      }
+
+      // Account for the selected audio codec's bitrate without changing the Opus calculation.
+      int audioBitrateAdjustment {};
+      if (config.audio.use_ac3 || config.audio.use_eac3) {
+        audioBitrateAdjustment = audio::dolby_bitrate_kbps(
+          config.audio.use_eac3,
+          config.audio.high_quality_dolby,
+          config.audio.channels
+        );
+      } else {
+        audioBitrateAdjustment = (config.audio.flags[audio::config_t::HIGH_QUALITY] ? 256 : 96) * config.audio.channels;
+      }
+      // Audio adds two parity packets for every four data packets. Include
+      // that fixed 50% FEC cost inside PyroWave's total wire budget too.
+      if (pyrowave_session) audioBitrateAdjustment = (audioBitrateAdjustment * 3 + 1) / 2;
+      configuredBitrateKbps -= pyrowave_session ? audioBitrateAdjustment :
+                                                   std::min((std::int64_t) audioBitrateAdjustment, configuredBitrateKbps / 5);
+
+      // Reduce it by another 500Kbps to account for A/V packet overhead and control data
+      // traffic (capped at 10% reduction).
+      configuredBitrateKbps -= pyrowave_session ? 500 : std::min((std::int64_t) 500, configuredBitrateKbps / 10);
+      if (pyrowave_session && configuredBitrateKbps <= 0) {
+        BOOST_LOG(warning) << "PyroWave bandwidth budget cannot accommodate audio and control overhead";
+        respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+        return false;
+      }
+
+      BOOST_LOG(debug) << "Final adjusted video encoding bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
+      config.monitor.bitrate = (int) configuredBitrateKbps;
+    }
+    return true;
+  }
+
   bool cmd_announce(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     // Capture before parsing: cancellation may clear this launch while the
     // io_context is still validating ANNOUNCE, before worker submission.
@@ -2175,77 +2322,9 @@ namespace rtsp_stream {
       return false;
     }
 
-    // A client that explicitly accepts Dolby negotiates quality through AudioQuality.
-    // Keep the legacy Host-based stereo quality detection exclusively for Opus.
-    const auto audio_accept = args.find("x-ss-audio-codec-accept"sv);
-    const std::string_view accepted_audio_codec =
-      audio_accept == args.end() ? std::string_view {} : std::string_view {audio_accept->second};
-    const bool client_accepted_audio_codec =
-      !session->audio_codec_offered.empty() && audio_accept != args.end() &&
-      audio_accept->second == session->audio_codec_offered;
-
-    if (config.audio.channels == 2 && !client_accepted_audio_codec) {
-      for (auto option = req->options; option != nullptr; option = option->next) {
-        if ("Host"sv == option->option) {
-          std::string_view content {option->content};
-          BOOST_LOG(debug) << "Found Host: "sv << content;
-          config.audio.flags[audio::config_t::HIGH_QUALITY] = (content.find("0.0.0.0"sv) == std::string::npos);
-        }
-      }
-    } else if (config.audio.channels != 2 && session->surround_params.length() > 3) {
-      // Channels
-      std::uint8_t c = session->surround_params[0] - '0';
-      // Streams
-      std::uint8_t n = session->surround_params[1] - '0';
-      // Coupled streams
-      std::uint8_t m = session->surround_params[2] - '0';
-      auto valid = false;
-      if ((c == 6 || c == 8) && c == config.audio.channels && n + m == c && session->surround_params.length() == c + 3) {
-        config.audio.customStreamParams.channelCount = c;
-        config.audio.customStreamParams.streams = n;
-        config.audio.customStreamParams.coupledStreams = m;
-        valid = true;
-        for (std::uint8_t i = 0; i < c; i++) {
-          config.audio.customStreamParams.mapping[i] = session->surround_params[i + 3] - '0';
-          if (config.audio.customStreamParams.mapping[i] >= c) {
-            valid = false;
-            break;
-          }
-        }
-      }
-      config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
-    }
-    // Select Dolby only when ANNOUNCE accepts the exact codec offered in DESCRIBE.
-    const bool ac3_encoder_available = session->audio_codec_offered == "AC3"sv && audio::ac3_available();
-    const bool eac3_encoder_available = session->audio_codec_offered == "EAC3"sv && audio::eac3_available();
-    const bool selected_encoder_available = ac3_encoder_available || eac3_encoder_available;
-    const bool supported_dolby_channel_count = config.audio.channels == 2 || config.audio.channels == 6;
-
-    // Once a client has explicitly accepted an advertised codec, do not silently
-    // change the negotiated codec if its encoder or requested channel layout is unsupported.
-    if (client_accepted_audio_codec && (!selected_encoder_available || !supported_dolby_channel_count)) {
-      BOOST_LOG(error) << "Client accepted a Dolby codec that cannot be provided for the requested stream";
-      respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+    audio::dolby_codec_e selected_audio_codec {};
+    if (!configure_announce_audio(config.audio, args, req, socket->sock, *session, option, req->sequenceNumber, selected_audio_codec)) {
       return false;
-    }
-    const auto selected_audio_codec = audio::configure_dolby_audio(
-      config.audio,
-      session->audio_codec_offered,
-      accepted_audio_codec,
-      ac3_encoder_available,
-      eac3_encoder_available,
-      config.audio.flags[audio::config_t::HIGH_QUALITY]
-    );
-    if (config::audio.format != "opus"sv && session->audio_codec_offered.empty()) {
-      BOOST_LOG(warning) << "Dolby audio format ["sv << config::audio.format
-                         << "] was selected, but its FFmpeg encoder is unavailable; using Opus"sv;
-    } else if (!session->audio_codec_offered.empty() && !client_accepted_audio_codec) {
-      BOOST_LOG(info) << "Client did not accept "sv << session->audio_codec_offered << "; falling back to Opus"sv;
-    }
-
-    if (session->continuous_audio) {
-      BOOST_LOG(info) << "Client requested continuous audio"sv;
-      config.audio.flags[audio::config_t::CONTINUOUS_AUDIO] = true;
     }
 
     if (config.monitor.vrr_low_latency) {
@@ -2305,53 +2384,8 @@ namespace rtsp_stream {
 
 #endif
 
-    // If the client sent a configured bitrate, we will choose the actual bitrate ourselves
-    // by using FEC percentage and audio quality settings. If the calculated bitrate ends up
-    // too low, we'll allow it to exceed the limits rather than reducing the encoding bitrate
-    // down to nearly nothing.
-    if (configuredBitrateKbps) {
-      BOOST_LOG(debug) << "Client configured bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
-
-      // Preserve the original wire-bandwidth budget the client asked for so the
-      // UI can show it alongside the post-adjustment encoder bitrate.
-      config.monitor.client_requested_bitrate = static_cast<int>(configuredBitrateKbps);
-
-      // If the FEC percentage isn't too high, adjust the configured bitrate to ensure video
-      // traffic doesn't exceed the user's selected bitrate when the FEC shards are included.
-      // PyroWave only adds parity to its few critical packets (see stream.cpp), so it
-      // reserves its baseline parity and packet overhead in the per-frame budget.
-      if (config::stream.fec_percentage <= 80 && !pyrowave_session) {
-        configuredBitrateKbps /= 100.f / (100 - config::stream.fec_percentage);
-      }
-
-      // Account for the selected audio codec's bitrate without changing the Opus calculation.
-      int audioBitrateAdjustment {};
-      if (config.audio.use_ac3 || config.audio.use_eac3) {
-        audioBitrateAdjustment = audio::dolby_bitrate_kbps(
-          config.audio.use_eac3,
-          config.audio.high_quality_dolby,
-          config.audio.channels
-        );
-      } else {
-        audioBitrateAdjustment = (config.audio.flags[audio::config_t::HIGH_QUALITY] ? 256 : 96) * config.audio.channels;
-      }
-      // Audio adds two parity packets for every four data packets. Include
-      // that fixed 50% FEC cost inside PyroWave's total wire budget too.
-      if (pyrowave_session) audioBitrateAdjustment = (audioBitrateAdjustment * 3 + 1) / 2;
-      configuredBitrateKbps -= pyrowave_session ? audioBitrateAdjustment :
-                                                   std::min((std::int64_t) audioBitrateAdjustment, configuredBitrateKbps / 5);
-
-      // Reduce it by another 500Kbps to account for A/V packet overhead and control data
-      // traffic (capped at 10% reduction).
-      configuredBitrateKbps -= pyrowave_session ? 500 : std::min((std::int64_t) 500, configuredBitrateKbps / 10);
-      if (pyrowave_session && configuredBitrateKbps <= 0) {
-        BOOST_LOG(warning) << "PyroWave bandwidth budget cannot accommodate audio and control overhead";
-        respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-        return false;
-      }
-
-      BOOST_LOG(debug) << "Final adjusted video encoding bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
-      config.monitor.bitrate = (int) configuredBitrateKbps;
+    if (!adjust_announce_video_bitrate(config, configuredBitrateKbps, pyrowave_session, socket->sock, *session, option, req->sequenceNumber)) {
+      return false;
     }
 
     if (config.monitor.videoFormat == 1 && video::active_hevc_mode == 1) {
