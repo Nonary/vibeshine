@@ -2313,6 +2313,34 @@ namespace rtsp_stream {
     return true;
   }
 
+  void configure_announce_dynamic_range(stream::config_t &config, const launch_session_t &session, bool pyrowave_session) {
+    const bool prefer_10bit_sdr = effective_10bit_sdr_requested(session);
+    const bool hevc_main10 = config.monitor.videoFormat == 1 && video::active_hevc_mode >= 3;
+    const bool av1_main10 = config.monitor.videoFormat == 2 && video::active_av1_mode >= 3;
+    const bool pyrowave_10bit = pyrowave_session && video::active_pyrowave_mode >= 2;
+    const bool supports_10bit_dynamic_range = hevc_main10 || av1_main10 || pyrowave_10bit;
+    config.monitor.force_sdr = session->force_sdr;
+    if (prefer_10bit_sdr) {
+      if (supports_10bit_dynamic_range) {
+        BOOST_LOG(info) << "Client requested HDR, but 10-bit SDR is enabled for it; encoding Main10 without HDR";
+        config.monitor.dynamicRange = 1;
+        config.monitor.prefer_sdr_10bit = true;
+      } else {
+        config.monitor.dynamicRange = 0;
+        config.monitor.prefer_sdr_10bit = false;
+        BOOST_LOG(info) << "10-bit SDR is enabled for this client, but Main10 is unavailable; using 8-bit SDR encode";
+      }
+    } else if (config.monitor.dynamicRange == 0) {
+      // A PyroWave bitstream does not carry its bit depth: the client sizes its planes
+      // from the profile it negotiated, so never upgrade an 8-bit PyroWave request.
+      if (session->enable_hdr && supports_10bit_dynamic_range && !pyrowave_session) {
+        BOOST_LOG(info) << "RTSP ANNOUNCE requested SDR while launch HDR is enabled; using HDR 10-bit encode";
+        config.monitor.dynamicRange = 1;
+      }
+    }
+    apply_rtx_hdr_stream_policy(config.monitor);
+  }
+
   bool cmd_announce(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     // Capture before parsing: cancellation may clear this launch while the
     // io_context is still validating ANNOUNCE, before worker submission.
@@ -2351,31 +2379,7 @@ namespace rtsp_stream {
       return false;
     }
 
-    const bool prefer_10bit_sdr = effective_10bit_sdr_requested(*session);
-    const bool hevc_main10 = config.monitor.videoFormat == 1 && video::active_hevc_mode >= 3;
-    const bool av1_main10 = config.monitor.videoFormat == 2 && video::active_av1_mode >= 3;
-    const bool pyrowave_10bit = pyrowave_session && video::active_pyrowave_mode >= 2;
-    const bool supports_10bit_dynamic_range = hevc_main10 || av1_main10 || pyrowave_10bit;
-    config.monitor.force_sdr = session->force_sdr;
-    if (prefer_10bit_sdr) {
-      if (supports_10bit_dynamic_range) {
-        BOOST_LOG(info) << "Client requested HDR, but 10-bit SDR is enabled for it; encoding Main10 without HDR";
-        config.monitor.dynamicRange = 1;
-        config.monitor.prefer_sdr_10bit = true;
-      } else {
-        config.monitor.dynamicRange = 0;
-        config.monitor.prefer_sdr_10bit = false;
-        BOOST_LOG(info) << "10-bit SDR is enabled for this client, but Main10 is unavailable; using 8-bit SDR encode";
-      }
-    } else if (config.monitor.dynamicRange == 0) {
-      // A PyroWave bitstream does not carry its bit depth: the client sizes its planes
-      // from the profile it negotiated, so never upgrade an 8-bit PyroWave request.
-      if (session->enable_hdr && supports_10bit_dynamic_range && !pyrowave_session) {
-        BOOST_LOG(info) << "RTSP ANNOUNCE requested SDR while launch HDR is enabled; using HDR 10-bit encode";
-        config.monitor.dynamicRange = 1;
-      }
-    }
-    apply_rtx_hdr_stream_policy(config.monitor);
+    configure_announce_dynamic_range(config, *session, pyrowave_session);
 
 #if defined(_WIN32) || defined(__linux__)
     if (pyrowave_session) {
