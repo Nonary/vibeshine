@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useI18n } from 'vue-i18n';
 import ConfigFieldRenderer from '@/ConfigFieldRenderer.vue';
+import { gamepadDescriptionKey } from '@/configs/configFieldSchema';
 import { useConfigStore } from '@/stores/config';
 
 const store = useConfigStore();
@@ -13,15 +14,9 @@ const platform = computed(() =>
   (metadata.value?.platform || config.value?.platform || '').toLowerCase(),
 );
 
-const gamepadDescription = computed(() => {
-  if (platform.value !== 'linux') return undefined;
-
-  const linuxKey = 'config.gamepad_desc_linux';
-  // Keep existing localized help when this locale has no Linux-specific translation.
-  if (locale.value !== 'en' && !te(linuxKey) && te('config.gamepad_desc')) return undefined;
-
-  return t(linuxKey);
-});
+const gamepadDescription = computed(() =>
+  t(gamepadDescriptionKey(platform.value, locale.value, te)),
+);
 </script>
 
 <template>

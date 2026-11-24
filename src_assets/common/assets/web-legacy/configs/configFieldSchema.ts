@@ -38,6 +38,22 @@ export type ConfigFieldSchemaContext = ConfigSelectOptionsContext & {
   options?: ConfigSelectOption[];
 };
 
+export function gamepadDescriptionKey(
+  platform: string,
+  locale: string,
+  hasLocalTranslation: (key: string) => boolean,
+): string {
+  const genericKey = 'config.gamepad_desc';
+  const linuxKey = 'config.gamepad_desc_linux';
+  if (platform === 'linux') {
+    // Keep existing localized help when this locale has no Linux-specific translation.
+    if (locale === 'en' || hasLocalTranslation(linuxKey) || !hasLocalTranslation(genericKey)) {
+      return linuxKey;
+    }
+  }
+  return genericKey;
+}
+
 const SWITCH_KEYS = new Set<string>([
   'app_focus_exit_on_first',
   'frame_limiter_enable',

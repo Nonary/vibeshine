@@ -8,6 +8,7 @@ import messagesEnGb from '@/public/assets/locale/en_GB.json';
 import messagesEnUs from '@/public/assets/locale/en_US.json';
 import messagesFr from '@/public/assets/locale/fr.json';
 import Inputs from '@/configs/tabs/Inputs.vue';
+import AppEditConfigOverridesSection from '@/components/app-edit/AppEditConfigOverridesSection.vue';
 import loadLocale from '@/locale';
 import AudioVideo from '@/configs/tabs/AudioVideo.vue';
 import DisplayDeviceOptions from '@/configs/tabs/audiovideo/DisplayDeviceOptions.vue';
@@ -46,7 +47,7 @@ afterEach(() => {
 describe('legacy gamepad help', () => {
   const messages = { en: messagesEn, en_GB: messagesEnGb, en_US: messagesEnUs, fr: messagesFr };
 
-  it.each([
+  const platformLocales = [
     ['linux', 'en'],
     ['linux', 'en_GB'],
     ['linux', 'en_US'],
@@ -54,18 +55,25 @@ describe('legacy gamepad help', () => {
     ['windows', 'en_GB'],
     ['windows', 'en_US'],
     ['linux', 'fr'],
-  ] as const)('renders the %s description for %s', async (platform, locale) => {
+  ] as const;
+  const cases = ['global', 'application', 'client'].flatMap((scope) =>
+    platformLocales.map(([platform, locale]) => [scope, platform, locale] as const),
+  );
+
+  it.each(cases)('renders the %s description for %s in %s', async (scope, platform, locale) => {
     vi.mocked(http.get).mockImplementation(async (url) => ({
       status: 200,
       data: url === '/api/configLocale' ? { locale } : messages[locale],
     }) as never);
-    const { pinia } = setupConfig({
-      controller: 'enabled',
-      gamepad: platform === 'windows' ? 'vhf_steam' : 'xone',
-    }, platform);
-    const wrapper = mount(Inputs, {
-      global: { plugins: [pinia, await loadLocale()], stubs: { NSelect: true } },
-    });
+    const gamepad = platform === 'windows' ? 'vhf_steam' : 'xone';
+    const { pinia } = setupConfig({ controller: 'enabled', gamepad }, platform);
+    const global = { plugins: [pinia, await loadLocale()], stubs: { NSelect: true } };
+    const wrapper = scope === 'global'
+      ? mount(Inputs, { global })
+      : mount(AppEditConfigOverridesSection, {
+          global,
+          props: { scopeLabel: scope, overrides: { gamepad } },
+        });
     try {
       const help = wrapper.text();
       if (platform === 'windows') {

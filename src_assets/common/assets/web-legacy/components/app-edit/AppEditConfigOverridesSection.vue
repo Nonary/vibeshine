@@ -735,7 +735,7 @@ import ConfigSelectField from '@/ConfigSelectField.vue';
 import { computed, nextTick, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { NButton, NInput } from 'naive-ui';
-import { type ConfigFieldKind } from '@/configs/configFieldSchema';
+import { gamepadDescriptionKey, type ConfigFieldKind } from '@/configs/configFieldSchema';
 import { useConfigStore } from '@/stores/config';
 import {
   buildOverrideOptionsText,
@@ -1061,6 +1061,9 @@ function labelFor(key: string): string {
 }
 
 function descFor(key: string): string {
+  if (key === 'gamepad') {
+    return t(gamepadDescriptionKey(platformKey(), i18n.locale.value, te));
+  }
   const k = OVERRIDE_DESC_KEYS[key] ?? `config.${key}_desc`;
   if (!te(k)) return '';
   const v = t(k);
