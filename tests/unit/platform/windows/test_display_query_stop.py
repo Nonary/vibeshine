@@ -24,7 +24,8 @@ def replay(root, lib):
     start = host[host.index("  int start_capture_async(capture_thread_async_ctx_t &capture_thread_ctx) {"):]
     end = start[start.index("  void end_capture_async("):start.index("  int start_capture_sync(")]
     assert start.index("display_query_stop = std::stop_source {};") < start.index("std::thread")
-    assert "display_query_stop.get_token()" in start
+    assert "#ifdef _WIN32\n    const auto display_stop = ctx.display_query_stop.get_token();\n#endif" in worker
+    assert "captureThread(capture_thread_ctx)" in start
     assert "catch (const display_device::DisplayQueryStopped &)" in start
     assert end.index("display_query_stop.request_stop()") < end.index("capture_thread.join()")
 

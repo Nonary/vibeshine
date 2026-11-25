@@ -1358,10 +1358,31 @@ endif()
 sunshine_register_component(NAME test_component_video_policy TEST_SOURCE unit/test_video.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_policy.cpp")
 sunshine_register_component(NAME test_component_video_capture_source TEST_SOURCE unit/test_video_capture_source.cpp
-    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_policy.cpp"
-    LINK_LIBRARIES sunshine_test_displaydevice_headers Threads::Threads)
-if(SUNSHINE_TEST_ENABLE_COMPONENT AND SUNSHINE_TEST_PYTHON_EXECUTABLE
-   AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_policy.cpp")
+if(TARGET test_component_video_capture_source)
+    include(CheckCXXSourceCompiles)
+    include(CMakePushCheckState)
+    cmake_push_check_state(RESET)
+    set(CMAKE_REQUIRED_INCLUDES "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/windows/include")
+    set(CMAKE_REQUIRED_LIBRARIES Threads::Threads)
+    # Some libc++ versions ship the header before providing the stop-aware wait.
+    check_cxx_source_compiles([=[
+        #include <display_device/windows/win_display_query_stop.h>
+        int main() {
+            std::stop_source stop;
+            display_device::DisplayQueryStopGuard guard{stop.get_token()};
+            display_device::wait_for_display_query_retry(std::chrono::milliseconds{0}, [](auto) {});
+            return stop.stop_requested();
+        }
+    ]=] SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP)
+    cmake_pop_check_state()
+    if(SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP)
+        target_compile_definitions(test_component_video_capture_source PRIVATE SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP)
+        target_link_libraries(test_component_video_capture_source PRIVATE sunshine_test_displaydevice_headers Threads::Threads)
+    endif()
+endif()
+if(SUNSHINE_TEST_ENABLE_COMPONENT AND SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP
+   AND SUNSHINE_TEST_PYTHON_EXECUTABLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
     add_test(NAME test_component_display_query_stop
         COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
             "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_display_query_stop.py"

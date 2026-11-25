@@ -18,7 +18,6 @@
 #include <mutex>
 #include <optional>
 #include <sstream>
-#include <stop_token>
 #include <system_error>
 #include <thread>
 #include <utility>
@@ -83,6 +82,7 @@ extern "C" {
   #include <AMF/core/Factory.h>
   #include <AMF/core/Trace.h>
   #include <display_device/windows/win_display_query_stop.h>
+  #include <stop_token>
 
   // These using-declarations must sit between the AMF headers above and
   // hwcontext_amf.h below, and must stay outside the extern "C" block. hwcontext_amf.h
@@ -1918,7 +1918,9 @@ namespace video {
   struct capture_thread_async_ctx_t {
     std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue;
     std::thread capture_thread;
+#ifdef _WIN32
     std::stop_source display_query_stop {std::nostopstate};
+#endif
 
     safe::signal_t reinit_event;
     const encoder_t *encoder_p;
@@ -3124,13 +3126,14 @@ namespace video {
     }
   }
 
-  void captureThread(
-    std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue,
-    sync_util::sync_t<std::weak_ptr<platf::display_t>> &display_wp,
-    safe::signal_t &reinit_event,
-    const encoder_t &encoder,
-    [[maybe_unused]] std::stop_token display_stop
-  ) {
+  void captureThread(capture_thread_async_ctx_t &ctx) {
+    const auto capture_ctx_queue = ctx.capture_ctx_queue;
+    auto &display_wp = ctx.display_wp;
+    auto &reinit_event = ctx.reinit_event;
+    const auto &encoder = *ctx.encoder_p;
+#ifdef _WIN32
+    const auto display_stop = ctx.display_query_stop.get_token();
+#endif
     std::vector<capture_ctx_t> capture_ctxs;
 
     auto fg = util::fail_guard([&]() {
@@ -8015,27 +8018,16 @@ namespace video {
 
 #ifdef _WIN32
     capture_thread_ctx.display_query_stop = std::stop_source {};
-#endif
     capture_thread_ctx.capture_thread = std::thread {[&capture_thread_ctx] {
-      const auto run_worker = [&] {
-        captureThread(
-          capture_thread_ctx.capture_ctx_queue,
-          capture_thread_ctx.display_wp,
-          capture_thread_ctx.reinit_event,
-          *capture_thread_ctx.encoder_p,
-          capture_thread_ctx.display_query_stop.get_token()
-        );
-      };
-#ifdef _WIN32
       try {
-        run_worker();
+        captureThread(capture_thread_ctx);
       } catch (const display_device::DisplayQueryStopped &) {
         // The worker has already stopped its capture consumers on unwind.
       }
-#else
-      run_worker();
-#endif
     }};
+#else
+    capture_thread_ctx.capture_thread = std::thread {captureThread, std::ref(capture_thread_ctx)};
+#endif
 
     return 0;
   }

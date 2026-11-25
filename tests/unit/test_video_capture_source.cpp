@@ -1,7 +1,10 @@
 #include "../tests_common.h"
 #include "src/video_capture_source.h"
 
+#ifdef SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP
 #include <display_device/windows/win_display_query_stop.h>
+#endif
+
 #include <future>
 #include <memory>
 
@@ -9,7 +12,9 @@ namespace {
   struct capture_context_t {
     int generation = 0;
     safe::signal_t reinit;
+#ifdef SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP
     std::stop_source display_stop {std::nostopstate};
+#endif
   };
 
   using lease_t = video::capture_source_lease_t<capture_context_t>;
@@ -23,12 +28,16 @@ namespace {
 
   int start(capture_context_t &ctx) {
     ctx.generation = ++starts;
+#ifdef SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP
     ctx.display_stop = std::stop_source {};
+#endif
     return 0;
   }
 
-  void stop(capture_context_t &ctx) {
+  void stop([[maybe_unused]] capture_context_t &ctx) {
+#ifdef SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP
     ctx.display_stop.request_stop();
+#endif
     if (stop_hook) {
       stop_hook();
     }
@@ -255,27 +264,38 @@ TEST_F(CaptureSourceLease, RemoteMonitorAndInputRemainPrivate) {
 }
 
 TEST_F(CaptureSourceLease, FinalDisconnectStopsAndReconnectStartsFresh) {
+#ifdef SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP
   std::stop_token old_stop;
+#endif
   {
     auto first = acquire(source_e::active_output);
     auto second = acquire(source_e::active_output);
+#ifdef SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP
     old_stop = first->get()->display_stop.get_token();
+#endif
     second.reset();
     EXPECT_EQ(stops.load(), 0);
+#ifdef SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP
     EXPECT_FALSE(old_stop.stop_requested());
+#endif
     EXPECT_EQ(first->get()->generation, 1);
   }
   EXPECT_EQ(stops.load(), 1);
+#ifdef SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP
   EXPECT_TRUE(old_stop.stop_requested());
+#endif
   auto reconnect = acquire(source_e::active_output);
   EXPECT_EQ(reconnect->get()->generation, 2);
   EXPECT_FALSE(reconnect->get()->reinit.peek());
+#ifdef SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP
   const auto new_stop = reconnect->get()->display_stop.get_token();
   EXPECT_TRUE(new_stop.stop_possible());
   EXPECT_FALSE(new_stop.stop_requested());
   EXPECT_NE(old_stop, new_stop);
+#endif
 }
 
+#ifdef SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP
 TEST_F(CaptureSourceLease, FinalReleaseCancelsDisplayRetryForSharedAndExactWorkers) {
   using namespace std::chrono_literals;
   for (const auto source : {source_e::active_output, source_e::exact_output}) {
@@ -360,6 +380,7 @@ TEST(CaptureDisplayQueryStop, StopDiscardsNativeResultAndPreventsNextQuery) {
     EXPECT_EQ(delay, 250ms);
   });
 }
+#endif
 
 TEST_F(CaptureSourceLease, ConcurrentJoinsStartOnlyOneProducer) {
   auto first = std::async(std::launch::async, [&] {
