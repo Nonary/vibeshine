@@ -44,6 +44,8 @@ struct Clock {
 };
 std::vector<std::chrono::milliseconds> sleeps;
 void sleep_for(std::chrono::milliseconds delay) { sleeps.push_back(delay); Clock::time+=delay; }
+// Observe the requested delay at the retry wait boundary.
+void sleep_before_display_retry(std::chrono::milliseconds delay) { sleep_for(delay); }
 namespace display_helper_integration {
   std::atomic<std::int64_t> g_stream_start_deadline_us {0};
   enum class ApplyRetryPolicy {Full, StreamStart};

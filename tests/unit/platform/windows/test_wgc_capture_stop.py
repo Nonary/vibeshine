@@ -137,6 +137,7 @@ struct display_wgc_ipc_ram_t:display_base_t{std::shared_ptr<IPC> _ipc_session;vo
 }}
 struct capture_thread_async_ctx_t {
  std::shared_ptr<safe::queue_t<int>> capture_ctx_queue=std::make_shared<safe::queue_t<int>>();
+ struct { bool requested=false; void request_stop() { requested=true; } } display_query_stop;
  sync_util::sync_t<std::weak_ptr<platf::display_t>> display_wp;std::thread capture_thread;
 };
 // WATCH
@@ -161,6 +162,7 @@ template<class Display> void cancel(int phase){
  auto limit=std::chrono::steady_clock::now()+1s;while(c.capture_ctx_queue->running()&&std::chrono::steady_clock::now()<limit)std::this_thread::yield();
  check(!c.capture_ctx_queue->running(),"capture queue stopped");
  std::thread reaper([&]{join_session(s);});resume.set_value();reaper.join();
+ // DISPLAY_QUERY_STOP_CHECK
  check(traps==0,"WGC cancellation completes before video watchdog");check(ipc->stop_requested(),"stop targets this WGC generation");check(ipc->setups==0,"cancelled helper imports no handles");check(!s.videoThread.joinable()&&!s.audioThread.joinable(),"video and audio threads are joined");check(!s.audio_context_guard,"capture hold is released after joins");
 }
 int main(){
@@ -180,6 +182,12 @@ int main(){
 budgets='\n'.join(re.findall(r'^    constexpr auto kHelperHandle(?:WaitTimeout|ProgressInterval) = [^\n]+',ipc,re.M))
 if len(budgets.splitlines())!=2:raise RuntimeError('Missing production WGC helper wait budgets')
 for name,value in [('METHODS','\n'.join(methods)),('PRE',pre),('CONNECT',connect),('SEND',send),('WAIT',wait),('FORWARD','\n'.join(forward)),('SNAPSHOTS','\n'.join(snapshots)),('WATCH',watch),('END',end),('JOIN',join),('BUDGETS',budgets),('AUDIO_JOIN',audio_join)]:code=code.replace('// '+name+'\n',value+'\n')
+# Historical teardown sources predate the display-query stop signal.
+code=code.replace(
+    '// DISPLAY_QUERY_STOP_CHECK',
+    'check(c.display_query_stop.requested,"capture release stops display queries");'
+    if 'display_query_stop.request_stop()' in end else '',
+)
 with tempfile.TemporaryDirectory(prefix='wgc-stop-replay-') as temp:
     cpp=Path(temp)/'test.cpp';exe=Path(temp)/'test';cpp.write_text(code)
     subprocess.run([compiler,'-std=c++23','-O2','-pthread','-Wall','-Wextra',*compile_includes,str(cpp),'-o',str(exe)],check=True)
