@@ -191,6 +191,10 @@ namespace pyrowave::host {
         budget_logger.collect_and_log(budget.bytes_per_frame());
       }
 
+      void complete_frame(std::size_t detail_fec_wire_budget) override {
+        budget.complete_frame(detail_fec_wire_budget);
+      }
+
     private:
       struct img_ctx_t {
         ComPtr<ID3D11Texture2D> texture;

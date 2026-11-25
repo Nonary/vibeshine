@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <optional>
 #include <random>
@@ -754,6 +755,144 @@ TEST(PyroWavePolicy, StableFrameBudgetLeavesCadenceSavingsForFec) {
   EXPECT_EQ(budget.bytes_per_frame(), 143096u);
   budget.on_frame(now);
   EXPECT_EQ(budget.bytes_per_frame(), 0u);
+}
+
+TEST(PyroWavePolicy, SavedWireAllowanceSmoothsAlternatingGapsAtTheSameRate) {
+  using namespace std::chrono_literals;
+
+  constexpr wire_budget_t transport {PACKET_SIZE, 20};
+  constexpr std::size_t wire_packet_bytes = PACKET_SIZE + MAX_PACKET_WIRE_OVERHEAD_BYTES;
+  const auto nominal = frame_payload_budget(750000, transport);
+  const auto wire_cost = [](std::size_t frame_bytes) {
+    const auto shards = (frame_bytes + protocol::FRAME_HEADER_BYTES + SHARD - 1) / SHARD;
+    return (shards + parity_shards(212, 20, transport.min_parity_shards)) * wire_packet_bytes;
+  };
+  budget_t budget(100, 600000, 0, true, transport);
+  auto now = std::chrono::steady_clock::time_point {};
+  budget.on_frame(now);
+  budget.complete_frame(0);
+
+  std::size_t wire_total = 0;
+  for (int pair = 0; pair < 500; ++pair) {
+    now += 14ms;
+    budget.on_frame(now);
+    EXPECT_EQ(budget.bytes_per_frame(), nominal);
+    wire_total += wire_cost(budget.bytes_per_frame());
+    budget.complete_frame(0);
+
+    now += 6ms;
+    budget.on_frame(now);
+    EXPECT_EQ(budget.bytes_per_frame(), nominal);
+    EXPECT_GT(budget.bytes_per_frame(), frame_payload_budget(450000, transport));
+    EXPECT_NEAR(budget.frame_fps(), 1000.0 / 6.0, 0.001);
+    wire_total += wire_cost(budget.bytes_per_frame());
+    budget.complete_frame(0);
+    EXPECT_LE(wire_total, std::size_t(pair + 1) * 1500000);
+  }
+}
+
+TEST(PyroWavePolicy, CarryoverReservesDetailFecAndExpiresOnTheNextSubmit) {
+  using namespace std::chrono_literals;
+
+  constexpr wire_budget_t transport {PACKET_SIZE, 20};
+  budget_t budget(100, 600000, 0, true, transport);
+  auto now = std::chrono::steady_clock::time_point {};
+  budget.on_frame(now);
+
+  now += 14ms;
+  budget.on_frame(now);
+  budget.complete_frame(1050000);
+  now += 6ms;
+  budget.on_frame(now);
+  EXPECT_EQ(budget.bytes_per_frame(), frame_payload_budget(450000, transport));
+
+  now += 14ms;
+  budget.on_frame(now);
+  budget.complete_frame(950000);
+  now += 6ms;
+  budget.on_frame(now);
+  EXPECT_EQ(budget.bytes_per_frame(), frame_payload_budget(550000, transport));
+
+  now += 20ms;
+  budget.on_frame(now);
+  budget.complete_frame(0);
+  now += 4ms;
+  budget.on_frame(now);
+  // Only half a nominal frame can carry forward from the 20 ms gap.
+  EXPECT_EQ(budget.bytes_per_frame(), frame_payload_budget(675000, transport));
+  now += 4ms;
+  budget.on_frame(now);
+  EXPECT_EQ(budget.bytes_per_frame(), frame_payload_budget(300000, transport));
+}
+
+TEST(PyroWavePolicy, StartupStallsAndResetsCannotFundAnEarlyFrame) {
+  using namespace std::chrono_literals;
+
+  constexpr wire_budget_t transport {PACKET_SIZE, 20};
+  budget_t budget(100, 600000, 0, true, transport);
+  auto now = std::chrono::steady_clock::time_point {};
+  budget.on_frame(now);
+  budget.complete_frame(0);
+  now += 6ms;
+  budget.on_frame(now);
+  EXPECT_EQ(budget.bytes_per_frame(), frame_payload_budget(450000, transport));
+
+  now += 10s;
+  budget.on_frame(now);
+  budget.complete_frame(0);
+  now += 6ms;
+  budget.on_frame(now);
+  EXPECT_EQ(budget.bytes_per_frame(), frame_payload_budget(450000, transport));
+
+  now += 14ms;
+  budget.on_frame(now);
+  budget.complete_frame(0);
+  budget.on_frame(now);
+  EXPECT_EQ(budget.bytes_per_frame(), 0u);
+  budget.on_frame(now - 1ms);
+  EXPECT_EQ(budget.bytes_per_frame(), 0u);
+  now += 6ms;
+  budget.on_frame(now);
+  EXPECT_EQ(budget.bytes_per_frame(), frame_payload_budget(450000, transport));
+
+  now += 14ms;
+  budget.on_frame(now);
+  budget.complete_frame(0);
+  budget.set_bitrate(300000);
+  now += 14ms;
+  budget.on_frame(now);
+  budget.complete_frame(0);
+  now += 6ms;
+  budget.on_frame(now);
+  EXPECT_EQ(budget.bytes_per_frame(), frame_payload_budget(225000, transport));
+}
+
+TEST(PyroWavePolicy, CarryoverRespectsCodecAlignmentAndTransportScope) {
+  using namespace std::chrono_literals;
+
+  constexpr wire_budget_t transport {PACKET_SIZE, 20};
+  constexpr auto max_wire = std::numeric_limits<std::uint32_t>::max();
+  const auto start = std::chrono::steady_clock::time_point {};
+  budget_t capped(1, std::numeric_limits<int>::max(), 1025, true, transport);
+  capped.on_frame(start);
+  capped.on_frame(start + 2s);
+  capped.complete_frame(0);
+  capped.on_frame(start + 3s);
+  EXPECT_EQ(capped.bytes_per_frame(), 1024u);
+
+  budget_t saturated(1, std::numeric_limits<int>::max(), 0, true, transport);
+  saturated.on_frame(start);
+  saturated.on_frame(start + 2s);
+  saturated.complete_frame(max_wire);
+  saturated.on_frame(start + 3s);
+  EXPECT_EQ(saturated.bytes_per_frame(), frame_payload_budget(max_wire, transport));
+
+  budget_t disabled(100, 600000, 0, false, transport);
+  disabled.on_frame(start);
+  disabled.on_frame(start + 14ms);
+  disabled.complete_frame(0);
+  disabled.on_frame(start + 20ms);
+  EXPECT_EQ(disabled.bytes_per_frame(), frame_payload_budget(450000, transport));
 }
 
 TEST(PyroWavePolicy, PausesAndDuplicateTimestampsRespectTheTransportBudget) {

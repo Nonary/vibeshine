@@ -74,6 +74,9 @@ namespace pyrowave::host {
 
     /// Account for every frame submitted for encoding, including repeats.
     virtual void on_frame(std::chrono::steady_clock::time_point when) = 0;
+
+    /// Account for the wire allowance after a successful encode and detail FEC decision.
+    virtual void complete_frame(std::size_t detail_fec_wire_budget) = 0;
   };
 
   /**

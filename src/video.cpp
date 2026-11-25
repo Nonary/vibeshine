@@ -6468,6 +6468,7 @@ namespace video {
       const auto detail_fec = params.critical_fec && params.framing == pyrowave::policy::framing_e::records ?
                                 detail_fec_controller.observe(frame, submitted_at, config.bitrate) :
                                 pyrowave::policy::detail_fec_t {};
+      encoder->complete_frame(detail_fec.frame_wire_budget);
       auto packet = std::make_unique<packet_raw_generic>(std::move(frame), frame_nr++, true);
       frame = {};
       packet->channel_data = channel_data;

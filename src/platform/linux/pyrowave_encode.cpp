@@ -53,6 +53,10 @@ namespace pyrowave::host {
         budget.on_frame(when);
       }
 
+      void complete_frame(std::size_t detail_fec_wire_budget) override {
+        budget.complete_frame(detail_fec_wire_budget);
+      }
+
       int encode(platf::img_t &image, std::vector<std::uint8_t> &out, std::size_t &critical_bytes) override {
         out.clear();
         critical_bytes = 0;

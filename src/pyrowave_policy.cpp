@@ -12,6 +12,7 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace pyrowave::policy {
   namespace {
@@ -761,33 +762,64 @@ namespace pyrowave::policy {
   }
 
   void budget_t::set_bitrate(int kbps) {
+    if (kbps != bitrate_kbps) {
+      bitrate_changed = true;
+      credit_eligible = false;
+      wire_credit = 0;
+    }
     bitrate_kbps = kbps;
     update();
   }
 
   void budget_t::on_frame(std::chrono::steady_clock::time_point when) {
+    const auto credit = std::exchange(wire_credit, 0);
+    credit_eligible = false;
     if (last_frame) {
       if (when <= *last_frame) {
         budget = 0;
         return;
       }
       frame_interval = std::chrono::duration<double>(when - *last_frame).count();
+      credit_eligible = stable_frame_size && transport && !bitrate_changed &&
+                        frame_interval > nominal_interval && frame_interval <= 2.0 * nominal_interval;
     }
     last_frame = when;
-    update();
+    bitrate_changed = false;
+    update(credit);
   }
 
-  void budget_t::update() {
+  void budget_t::complete_frame(std::size_t detail_fec_wire_budget) {
+    if (!std::exchange(credit_eligible, false)) {
+      return;
+    }
+    // Charge the larger of the nominal allocation and the detail FEC ceiling.
+    // FEC's ceiling already includes image packets and critical parity.
+    const auto nominal_bytes = wire_bytes_for(nominal_interval);
+    const auto allocated = std::max(nominal_bytes, detail_fec_wire_budget);
+    const auto elapsed = wire_bytes_for(frame_interval);
+    if (elapsed > allocated) {
+      // Lend at most half a nominal frame, and only to the next submission.
+      wire_credit = std::min(elapsed - allocated, nominal_bytes / 2);
+    }
+  }
+
+  std::size_t budget_t::wire_bytes_for(double interval) const {
+    return std::size_t(std::clamp(double(bitrate_kbps) * 1000.0 * interval / 8.0, 0.0, double(std::numeric_limits<std::uint32_t>::max())));
+  }
+
+  void budget_t::update(std::size_t credit) {
     const auto budget_interval = stable_frame_size ? std::min(frame_interval, nominal_interval) : frame_interval;
-    double bytes = std::max(0.0, double(bitrate_kbps) * 1000.0 * budget_interval / 8.0);
+    auto bytes = wire_bytes_for(budget_interval);
     if (transport) {
-      bytes = double(frame_payload_budget(std::size_t(std::min(bytes, double(std::numeric_limits<std::uint32_t>::max()))), *transport));
+      if (stable_frame_size && credit) {
+        bytes += std::min(credit, wire_bytes_for(nominal_interval) - bytes);
+      }
+      bytes = frame_payload_budget(bytes, *transport);
     }
     if (max_frame_bytes) {
-      bytes = std::min(bytes, double(max_frame_bytes));
+      bytes = std::min(bytes, max_frame_bytes);
     }
-    bytes = std::min(bytes, double(std::numeric_limits<std::uint32_t>::max() & ~3u));
-    budget = std::size_t(bytes) & ~std::size_t(3);
+    budget = bytes & ~std::size_t(3);
     if (budget < SEQUENCE_HEADER_BYTES + BLOCK_HEADER_BYTES) {
       budget = 0;
     }

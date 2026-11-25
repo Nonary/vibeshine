@@ -241,7 +241,8 @@ namespace pyrowave::policy {
    * Each submitted frame, including repeats, gets the bytes earned since the
    * previous submission. The initial budget uses the negotiated frame rate.
    * With stable_frame_size, the encoded image budget never exceeds one negotiated
-   * frame's allowance at the current bitrate, leaving slower cadence's savings for FEC.
+   * frame's allowance at the current bitrate. A short-gap frame can use some of
+   * the preceding frame's wire allowance left over after detail FEC.
    * The transport capacity bounds accumulation after stalls in either mode.
    * An optional wire budget deducts packet headers and baseline critical FEC
    * before assigning bytes to the codec and record framing.
@@ -255,6 +256,9 @@ namespace pyrowave::policy {
     /// Report an encoding attempt, including repeats of the previous capture.
     void on_frame(std::chrono::steady_clock::time_point when);
 
+    /// Account for the wire allowance already available to a successful frame's detail FEC.
+    void complete_frame(std::size_t detail_fec_wire_budget);
+
     /// Current budget in bytes, aligned to codec words; zero means skip this frame.
     [[nodiscard]] std::size_t bytes_per_frame() const {
       return budget;
@@ -265,7 +269,8 @@ namespace pyrowave::policy {
     }
 
   private:
-    void update();
+    std::size_t wire_bytes_for(double interval) const;
+    void update(std::size_t credit = 0);
 
     std::optional<wire_budget_t> transport;
     int bitrate_kbps;
@@ -274,6 +279,9 @@ namespace pyrowave::policy {
     bool stable_frame_size;
     double frame_interval;
     std::optional<std::chrono::steady_clock::time_point> last_frame;
+    bool bitrate_changed = false;
+    bool credit_eligible = false;
+    std::size_t wire_credit = 0;
     std::size_t budget = 0;
   };
 }  // namespace pyrowave::policy
