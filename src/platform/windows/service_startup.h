@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 #include <Windows.h>
@@ -14,6 +15,8 @@ namespace service_ctrl {
     DWORD error_code = ERROR_SUCCESS;
     std::string error;
   };
+
+  using startup_owner = std::function<bool(const QUERY_SERVICE_CONFIGW &)>;
 
   namespace startup_detail {
     inline void fail(startup_state &state, DWORD code) {
@@ -60,7 +63,7 @@ namespace service_ctrl {
         }
       }
 
-      bool read() {
+      bool read(const startup_owner &owns = {}) {
         if (!handle) {
           return false;
         }
@@ -77,6 +80,10 @@ namespace service_ctrl {
           fail(state, GetLastError());
           return false;
         }
+        if (owns && !owns(*config)) {
+          fail(state, ERROR_INVALID_DATA);
+          return false;
+        }
         state.start_type = config->dwStartType;
         state.automatic = config->dwStartType == SERVICE_AUTO_START;
         state.status = true;
@@ -85,9 +92,9 @@ namespace service_ctrl {
     };
   }  // namespace startup_detail
 
-  inline startup_state get_service_startup() {
+  inline startup_state get_service_startup(const startup_owner &owns = {}) {
     startup_detail::service service {SERVICE_QUERY_CONFIG};
-    if (service.read()) {
+    if (service.read(owns)) {
       auto change = OpenServiceW(service.manager, L"SunshineService", SERVICE_CHANGE_CONFIG);
       service.state.can_change = change != nullptr;
       if (change) {
@@ -99,9 +106,9 @@ namespace service_ctrl {
     return service.state;
   }
 
-  inline startup_state set_service_startup(bool automatic, DWORD expected_start_type = SERVICE_NO_CHANGE) {
+  inline startup_state set_service_startup(bool automatic, DWORD expected_start_type = SERVICE_NO_CHANGE, const startup_owner &owns = {}) {
     startup_detail::service service {SERVICE_QUERY_CONFIG | SERVICE_CHANGE_CONFIG};
-    if (!service.read()) {
+    if (!service.read(owns)) {
       return service.state;
     }
     service.state.can_change = true;
@@ -118,7 +125,7 @@ namespace service_ctrl {
       return service.state;
     }
     service.state.status = false;
-    if (service.read() && service.state.start_type != desired) {
+    if (service.read(owns) && service.state.start_type != desired) {
       service.state.status = false;
       startup_detail::fail(service.state, ERROR_WRITE_FAULT);
     }

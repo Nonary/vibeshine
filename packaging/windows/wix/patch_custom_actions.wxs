@@ -18,6 +18,9 @@
     <Property Id="SAVED_DISPLAY_DRIVER_SELECTION">
       <RegistrySearch Id="SavedDisplayDriverSelection" Root="HKLM" Key="SOFTWARE\Nonary\Vibeshine\Installer\DriverSelections" Name="DisplayEnabled" Type="raw" Win64="yes"/>
     </Property>
+    <Property Id="SAVED_SERVICE_START" Secure="yes">
+      <RegistrySearch Id="SavedServiceStart" Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\SunshineService" Name="Start" Type="raw" Win64="yes"/>
+    </Property>
     <Property Id="INSTALL_SUDOVDA" Value="1" Secure="yes"/>
     <Property Id="INSTALL_VIRTUAL_DISPLAY_DRIVER" Secure="yes"/>
     <Property Id="INSTALL_VIRTUAL_GAMEPAD_DRIVER" Secure="yes"/>
@@ -58,7 +61,7 @@
       <Custom Action="ValidateInstallRootPreview" After="CostFinalize">1</Custom>
       <Custom Action="ValidateInstallRoot" After="StopSvcQuietImmediate">1</Custom>
       <!-- Read the original service configuration before product removal. -->
-      <Custom Action="CaptureManualServiceStartup" After="ValidateInstallRoot">(Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE</Custom>
+      <Custom Action="CaptureManualServiceStartup" After="ValidateInstallRoot">SAVED_SERVICE_START = "#3" AND (Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE</Custom>
       <Custom Action="RemoveConflictingProducts" After="CaptureManualServiceStartup">NOT Installed AND NOT REMOVE AND SKIP_REMOVE_CONFLICTING_PRODUCTS &lt;&gt; "1"</Custom>
 
       <!-- Pre-validate stop/kill when UI can't prompt.  Major upgrades are
@@ -73,8 +76,11 @@
       <Custom Action="SetStopSvcQuiet" After="InstallInitialize">((Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE AND UILevel &lt; 5) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
       <Custom Action="StopSvcQuiet" After="SetStopSvcQuiet">((Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE AND UILevel &lt; 5) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
 
-      <!-- InstallServices may have recreated the service with its fresh-install default. -->
-      <Custom Action="RestoreManualServiceStartup" After="InstallServices">VibeshineManualServiceStartup = "1" AND (Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE</Custom>
+      <!-- Roll back after MSI restores the old service; forward install uses the new path. -->
+      <Custom Action="SetRollbackManualServiceStartup" Before="RollbackManualServiceStartup">VibeshineManualServiceStartupPath</Custom>
+      <Custom Action="RollbackManualServiceStartup" Before="RemoveExistingProducts">VibeshineManualServiceStartupPath</Custom>
+      <Custom Action="SetRestoreManualServiceStartup" After="InstallServices">VibeshineManualServiceStartupPath</Custom>
+      <Custom Action="RestoreManualServiceStartup" After="SetRestoreManualServiceStartup">VibeshineManualServiceStartupPath</Custom>
 
       <!-- Start quietly on repair with basic/silent UI -->
       <Custom Action="SetStartSvcQuiet" Before="StartSvcQuiet">Installed AND NOT REMOVE AND UILevel &lt; 5</Custom>

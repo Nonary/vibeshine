@@ -179,3 +179,15 @@ TEST_F(ServiceStartupTest, ChangeMustBeVerifiedAgainstActualReadback) {
   EXPECT_TRUE(state.automatic);
   EXPECT_EQ(state.error_code, ERROR_WRITE_FAULT);
 }
+
+TEST_F(ServiceStartupTest, InstallerOnlyChangesOwnedAutomaticServices) {
+  const auto rejects_owner = [](const QUERY_SERVICE_CONFIGW &) { return false; };
+  const auto accepts_owner = [](const QUERY_SERVICE_CONFIGW &) { return true; };
+  EXPECT_FALSE(service_ctrl::set_service_startup(false, SERVICE_AUTO_START, rejects_owner).status);
+  EXPECT_EQ(mode, SERVICE_AUTO_START);
+
+  mode = SERVICE_DISABLED;
+  EXPECT_TRUE(service_ctrl::set_service_startup(false, SERVICE_AUTO_START, accepts_owner).status);
+  EXPECT_EQ(mode, SERVICE_DISABLED);
+  EXPECT_EQ(change_calls, 0);
+}

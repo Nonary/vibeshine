@@ -18,9 +18,6 @@ internal static class RollbackRegression {
   internal static int UninstallCode, RestoreCode, Checks;
   internal static bool NativeRegistrationPresent, NativeStateThrows, RestoreMakesRegistration;
   internal static int NativeProductState, RegistrationReadFailure;
-  internal static bool ProcessElevated, ManualStarts, FirewallMode, MachineProductRegistered, MachineCacheMatches;
-  internal static string RegisteredMsiRoot;
-  private const string UpgradeCode = "{33333333-3333-3333-3333-333333333333}";
   internal static void Check(bool condition, string name) {
     if (!condition) throw new Exception(name);
     Checks++;
@@ -38,9 +35,6 @@ internal static class RollbackRegression {
   private static void Reset(bool transactional = false, string payloadCode = Other) {
     Events.Clear(); RestoreArguments = null; LastRecoveryDirectory = null;
     RegistrationReadFailure = 0;
-    ProcessElevated = MachineProductRegistered = MachineCacheMatches = true;
-    RegisteredMsiRoot = Path.Combine(Root, "registered MSI root");
-    ManualStarts = FirewallMode = false;
     MetadataThrows = DirectoryFails = CopyFails = RestoreThrows = false;
     Hidden = true; Elevate = false; UninstallCode = RestoreCode = 0; NativeRegistrationPresent = true; NativeProductState = -1; NativeStateThrows = RestoreMakesRegistration = false;
     CachePath = Path.Combine(Root, "cached.msi");
@@ -80,127 +74,10 @@ internal static class RollbackRegression {
     Check(object.ReferenceEquals(result, failure) && result.ExitCode == code && result.LogPath == "original.log", "recovery preserves incoming outcome and original log");
     return result;
   }
-  private static object CaptureManualStartup() {
-    return Call("CaptureFirewallManualStartup", IncomingPath);
-  }
-  private static void EnableFirewallMode() {
-    FirewallMode = ManualStarts = true;
-    NativeProductState = 5;
-    Incoming.UpgradeCode = Cached.UpgradeCode = UpgradeCode;
-  }
-  private static void CheckFirewallStartupRecovery() {
-    // Both interactive and CLI callers use these same post-retry and
-    // rollback helpers. Simulate the stop, separate uninstall and install.
-    Reset(); EnableFirewallMode();
-    var preference = CaptureManualStartup();
-    Check(preference != null && Events.Contains("startup-capture"), "capture old Manual before the first install transaction");
-    var stash = RemoveLegacy();
-    Call("BindFirewallManualStartup", preference, stash);
-    Check(stash.FirewallManualStartupUpgradeCode == UpgradeCode, "bind captured state to exact firewall stash");
-    NativeProductState = 5;
-    Installed = Product(Other);
-    var success = new InstallerResult { Operation = InstallerOperation.Install, ExitCode = 0, LogPath = "retry.log" };
-    Call("RestoreManualStartupAfterFirewallRetry", success, IncomingPath, stash);
-    Check(Events.Count(item => item == "startup-restore") == 1, "successful retry restores Manual to the authenticated new product");
-    Recover(stash, 0);
-
-    Reset(); EnableFirewallMode();
-    preference = CaptureManualStartup();
-    stash = RemoveLegacy();
-    Call("BindFirewallManualStartup", preference, stash);
-    // The old ProductCode is initially absent and becomes live when the
-    // mock msiexec restores its exact cached MSI.
-    NativeRegistrationPresent = false; NativeProductState = -1; RestoreMakesRegistration = true;
-    var failure = Recover(stash);
-    Check(failure.Message.Contains("automatically restored") && Events.Contains("startup-restore")
-      && Events.IndexOf("restore") < Events.IndexOf("startup-restore"),
-      "verified fallback restores Manual after MSI success and prior product registration");
-
-    Reset(); EnableFirewallMode();
-    preference = CaptureManualStartup();
-    stash = RemoveLegacy();
-    Call("BindFirewallManualStartup", preference, stash);
-    NativeRegistrationPresent = false; NativeProductState = -1; RestoreMakesRegistration = true;
-    RestoredProduct = Product(Other);
-    failure = Recover(stash);
-    Check(!failure.Message.Contains("automatically restored") && !Events.Contains("startup-restore"),
-      "unverified fallback cannot alter service mode even if msiexec returns success");
-
-    foreach (var name in new[] { "fresh", "conflict", "no-state", "per-user", "wrong-family", "unelevated",
-      "unverified-root", "not-machine-msi", "different-machine-cache" }) {
-      Reset(); EnableFirewallMode();
-      if (name == "fresh") Installed = null;
-      if (name == "conflict") Installed.Kind = InstallerRunner.InstalledProductKind.Vibepollo;
-      if (name == "no-state") ManualStarts = false;
-      if (name == "per-user") Installed.IsPerUser = true;
-      if (name == "wrong-family") Cached.UpgradeCode = Other;
-      if (name == "unelevated") ProcessElevated = false;
-      if (name == "unverified-root") RegisteredMsiRoot = null;
-      if (name == "not-machine-msi") MachineProductRegistered = false;
-      if (name == "different-machine-cache") MachineCacheMatches = false;
-      Check(CaptureManualStartup() == null, name + ": no state captured");
-      if (name == "unverified-root" || name == "not-machine-msi" || name == "different-machine-cache")
-        Check(!Events.Contains("startup-capture"), name + ": attractive ARP path never reaches SCM");
-      Call("RestoreManualStartupAfterFirewallRetry", success, IncomingPath, new InstallerRunner.StashedVibeshinePayload());
-      Check(!Events.Contains("startup-restore"), name + ": no service write");
-    }
-
-    Reset(); EnableFirewallMode();
-    preference = CaptureManualStartup();
-    var unrelated = new InstallerRunner.StashedVibeshinePayload { ProductCode = Other };
-    Call("BindFirewallManualStartup", preference, unrelated);
-    Check(unrelated.FirewallManualStartupUpgradeCode == null, "different rollback identity cannot acquire Manual");
-    stash = RemoveLegacy();
-    Call("BindFirewallManualStartup", preference, stash);
-    Installed = Product(Other);
-    NativeProductState = 5;
-    Call("RestoreManualStartupAfterFirewallRetry",
-      new InstallerResult { Operation = InstallerOperation.Install, ExitCode = 1603 }, IncomingPath, stash);
-    Check(!Events.Contains("startup-restore"), "failed retry waits for verified rollback");
-    Incoming.UpgradeCode = Other;
-    Call("RestoreManualStartupAfterFirewallRetry", success, IncomingPath, stash);
-    Check(!Events.Contains("startup-restore"), "replacement from a different family cannot acquire Manual");
-    Incoming.UpgradeCode = UpgradeCode;
-    RegisteredMsiRoot = null;
-    Call("RestoreManualStartupAfterFirewallRetry", success, IncomingPath, stash);
-    Check(!Events.Contains("startup-restore"), "an unverified MSI root cannot authorize a write through the populated ARP path");
-    Installed.Kind = InstallerRunner.InstalledProductKind.Vibepollo;
-    Call("RestoreManualStartupAfterFirewallRetry", success, IncomingPath, stash);
-    Check(!Events.Contains("startup-restore"), "conflicting registered product cannot acquire Manual");
-  }
-  private static void CheckFirewallStashSelection() {
-    foreach (var sameProduct in new[] { true, false }) {
-      Reset(); EnableFirewallMode();
-      var preference = CaptureManualStartup();
-      var selected = (InstallerRunner.StashedVibeshinePayload)Call("TryStashInstalledProductPayload", Installed, "earlier_stash");
-      Check(selected != null, "an earlier stash is available");
-      if (!sameProduct) selected.ProductCode = Other;
-      var later = RemoveLegacy();
-      Call("BindFirewallManualStartup", preference, later);
-      var args = new object[] { selected, later };
-      Call("AdoptStashedPayload", args);
-      Check(object.ReferenceEquals(args[0], selected) && File.Exists(selected.MsiPath) && !File.Exists(later.MsiPath),
-        "the first package stays selected and the later copy is discarded");
-      Check((selected.FirewallManualStartupUpgradeCode == UpgradeCode) == sameProduct,
-        "the Manual marker travels only to an exact-product first stash");
-      NativeRegistrationPresent = false; NativeProductState = -1; RestoreMakesRegistration = true;
-      if (!sameProduct) {
-        RestoredProduct = null;
-        RestoredTarget = Product(Other);
-        RestoredTarget.Kind = InstallerRunner.InstalledProductKind.Vibepollo;
-      }
-      var failure = Recover(selected);
-      Check(failure.Message.Contains("automatically restored")
-        && Events.Contains("startup-restore") == sameProduct,
-        "the selected package restores under existing policy, with Manual only for the exact product");
-    }
-  }
   public static void Main() {
     Root = Path.Combine(Path.GetTempPath(), "vibeshine-rollback-" + Guid.NewGuid().ToString("N"));
     Directory.CreateDirectory(Root);
     try {
-      CheckFirewallStartupRecovery();
-      CheckFirewallStashSelection();
       // Equal, newer, and older installed versions all bypass standalone
       // pre-uninstall when the incoming MSI owns transactional replacement.
       foreach (var phase in new[] { "install_remove_source", "cli_remove_source" }) {
