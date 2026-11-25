@@ -20,6 +20,9 @@ PRODUCTION_METHODS = (
     "RequiresPreUninstallDowngradeWorkaround", "PayloadSupportsTransactionalReplacement",
     "HasDifferentProductCode", "NormalizeProductCode", "LooksLikeProductCode",
     "BuildProductDisplayName", "CreatePropertyArgument",
+    "CaptureFirewallManualStartup", "BindFirewallManualStartup", "RestoreManualStartupAfterFirewallRetry",
+    "RestoreFirewallManualStartup", "GetFirewallRecoveryServiceExecutable", "TryGetUnambiguousMsiRegistrationRecoveryProduct",
+    "IsRecoveryKindAllowed",
 )
 
 
@@ -32,17 +35,33 @@ def extract(source, pattern, description):
 
 def run(source_path=None):
     source = (source_path or HERE.parent / "VibeshineInstaller.cs").read_text(encoding="utf-8")
+    for start, attempt, end in (
+        ("public static InstallerResult RunInteractiveInstall(", "var installResult = RunInstallAttempt(", "private static bool IsCertificateThumbprint("),
+        ("public static InstallerResult RunCli(", "var exitCode = RunMsiexecWithSourceRecovery(", "private static void PreserveCliInstallDirectory("),
+    ):
+        flow = source.split(start, 1)[1].split(end, 1)[0]
+        checkpoints = (
+            "CaptureFirewallManualStartup(", attempt, "TryRecoverMsiFirewallCleanupFailure(",
+            "BindFirewallManualStartup(", "AdoptStashedPayload(ref stashedPreviousPayload, firewallRecoveryStash)",
+            "RestoreManualStartupAfterFirewallRetry(",
+        )
+        order = [flow.index(checkpoint) for checkpoint in checkpoints]
+        if order != sorted(set(order)):
+            raise RuntimeError("Incorrect firewall startup preservation order in " + start)
     namespace = "VibepolloInstaller" if "namespace VibepolloInstaller" in source else "VibeshineInstaller"
     methods = [extract(source, r"^    (?:private|public|internal) static [^\r\n]+\b" + name + r"\(.*?^    \}", name)
                for name in PRODUCTION_METHODS]
     types = [extract(source, r"^    internal (?:sealed class|enum) " + name + r"[^\r\n]*\{.*?^    \}", name)
              for name in ("InstalledProductInfo", "PayloadMsiInfo", "StashedVibeshinePayload", "InstalledProductKind", "MsiSourceIdentity", "MsiSourceRelease")]
     types.append(extract(source, r"^    private static readonly MsiSourceRelease\[\] RecoverableMsiSources = \{.*?^    \};", "source catalog"))
+    types.append(extract(source, r"^    private sealed class FirewallStartupPreference \{.*?^    \}", "firewall startup snapshot"))
+    types.append(extract(source, r"^    private const int MsiInstallStateDefault = \d+;", "MSI DEFAULT state"))
+    types.append(extract(source, r"^    private static readonly InstalledProductKind\[\] MsiRegistrationRecoveryKinds = \{.*?^    \};", "recovery product kinds"))
     result = extract(source, r"^  internal sealed class InstallerResult \{.*?^  \}", "InstallerResult")
     operation = extract(source, r"^  internal enum InstallerOperation \{.*?^  \}", "InstallerOperation")
     boundaries = (HERE / "rollback_boundary_methods.cs.in").read_text(encoding="utf-8")
     names = re.findall(r"^    (?:private|public) static [^\r\n]+\b(\w+)\(", boundaries, re.M)
-    if len(names) != 17 or set(names) & set(PRODUCTION_METHODS):
+    if len(names) != 19 or set(names) & set(PRODUCTION_METHODS):
         raise RuntimeError("External boundary list changed or includes production methods")
     for name in names:
         parameters = r"\(string msiPath\)" if name == "TryGetPayloadMsiInfo" else r"\("

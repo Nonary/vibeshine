@@ -1,5 +1,5 @@
 // Test-only replacement methods. Only inventory, MSI metadata/process, logging,
-// and secure-directory creation/deletion boundaries are replaced. The stash,
+// secure-directory, process elevation and service-control boundaries are replaced. The stash,
 // pre-uninstall decision/dispatch, restore, and recovery methods stay production.
     public static InstalledProductInfo GetInstalledVibeshineProduct() {
       return RollbackRegression.Installed;
@@ -11,10 +11,23 @@
       if (msiPath == RollbackRegression.IncomingPath) return RollbackRegression.Incoming;
       RollbackRegression.Events.Add("validate-stash");
       if (RollbackRegression.MetadataThrows) throw new IOException("mock unreadable MSI");
-      return RollbackRegression.Cached;
+      return RollbackRegression.FirewallMode && RollbackRegression.Installed != null
+        && RollbackRegression.Installed.ProductCode == RollbackRegression.Incoming.ProductCode
+        ? RollbackRegression.Incoming : RollbackRegression.Cached;
+    }
+    private static bool IsProcessElevated() {
+      return RollbackRegression.ProcessElevated;
+    }
+    private static bool AccessFirewallRecoveryManualStartup(string executable, bool restore) {
+      RollbackRegression.Check(executable == Path.Combine(RollbackRegression.Installed.InstallLocation, "tools", "sunshinesvc.exe"),
+        "firewall recovery selects the registered Vibeshine service executable");
+      RollbackRegression.Events.Add(restore ? "startup-restore" : "startup-capture");
+      return RollbackRegression.ManualStarts;
     }
     private static string TryGetProductLocalPackagePath(string productCode) {
-      RollbackRegression.Check(productCode == RollbackRegression.Code, "stash requests exact installed identity");
+      RollbackRegression.Check(productCode == RollbackRegression.Code
+        || (RollbackRegression.FirewallMode && productCode == RollbackRegression.Incoming.ProductCode),
+        "stash requests exact installed identity");
       RollbackRegression.Events.Add("locate-cache");
       return RollbackRegression.CachePath;
     }
@@ -60,7 +73,10 @@
       if (RollbackRegression.RestoreThrows) throw new IOException("mock restore start failure");
       RollbackRegression.Installed = RollbackRegression.RestoredProduct;
       RollbackRegression.InstalledTarget = RollbackRegression.RestoredTarget;
-      if (RollbackRegression.RestoreMakesRegistration) RollbackRegression.NativeRegistrationPresent = true;
+      if (RollbackRegression.RestoreMakesRegistration) {
+        RollbackRegression.NativeRegistrationPresent = true;
+        if (RollbackRegression.FirewallMode) RollbackRegression.NativeProductState = 5;
+      }
       return RollbackRegression.RestoreCode;
     }
     private static MsiSourceIdentity ReadMachineMsiSourceIdentity(InstalledProductInfo product) {

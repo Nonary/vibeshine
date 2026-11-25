@@ -2524,6 +2524,12 @@ namespace VibeshineInstaller {
       public string ProductCode { get; set; }
       public string InstallLocation { get; set; }
       public string RecoveryDirectory { get; set; }
+      public string FirewallManualStartupUpgradeCode { get; set; }
+    }
+
+    private sealed class FirewallStartupPreference {
+      public string ProductCode { get; set; }
+      public string UpgradeCode { get; set; }
     }
 
     internal sealed class LegacySunshineRegistration {
@@ -3932,6 +3938,7 @@ namespace VibeshineInstaller {
         }
       }
 
+      var firewallStartup = CaptureFirewallManualStartup(msiPath);
       var installResult = RunInstallAttempt(
         msiPath,
         installDirectory,
@@ -3988,6 +3995,7 @@ namespace VibeshineInstaller {
         out firewallRecoveryRequiresRestart,
         out firewallRecoveryDetail,
         out firewallRecoveryStash)) {
+        BindFirewallManualStartup(firewallStartup, firewallRecoveryStash);
         AdoptStashedPayload(ref stashedPreviousPayload, firewallRecoveryStash);
         recoveryDetails.Add(firewallRecoveryDetail);
         restartRequired |= firewallRecoveryRequiresRestart;
@@ -4030,6 +4038,7 @@ namespace VibeshineInstaller {
         }
       }
 
+      RestoreManualStartupAfterFirewallRetry(installResult, msiPath, firewallRecoveryStash);
       ApplyPreflightWarnings(installResult, preflight);
       AppendRecoveryDetails(installResult, recoveryDetails);
       return ApplyStashedPayloadRecovery(installResult, stashedPreviousPayload, "install_restore_previous");
@@ -5186,6 +5195,139 @@ namespace VibeshineInstaller {
       return true;
     }
 
+    // Read the original setting before the first MSI transaction. Its
+    // failure/rollback may already have recreated the old service as Automatic.
+    private static FirewallStartupPreference CaptureFirewallManualStartup(string incomingMsiPath) {
+      try {
+        if (!IsProcessElevated() || string.IsNullOrWhiteSpace(incomingMsiPath)) return null;
+        var incoming = TryGetPayloadMsiInfo(incomingMsiPath);
+        if (incoming == null || !LooksLikeProductCode(NormalizeProductCode(incoming.ProductCode))
+            || !LooksLikeProductCode(NormalizeProductCode(incoming.UpgradeCode))) return null;
+        var product = TryGetUnambiguousMsiRegistrationRecoveryProduct(InstalledProductKind.Vibeshine);
+        if (product == null) return null;
+        var executable = GetFirewallRecoveryServiceExecutable(product, product.ProductCode, incoming.UpgradeCode);
+        if (executable == null || !AccessFirewallRecoveryManualStartup(executable, false)) return null;
+        return new FirewallStartupPreference {
+          ProductCode = NormalizeProductCode(product.ProductCode),
+          UpgradeCode = NormalizeProductCode(incoming.UpgradeCode)
+        };
+      } catch {
+        return null;
+      }
+    }
+
+    private static void BindFirewallManualStartup(FirewallStartupPreference preference, StashedVibeshinePayload firewallStash) {
+      // Only a stash from the exact same-product firewall removal may carry
+      // this in-memory setting. The first-stash rollback policy is independent.
+      if (preference != null && firewallStash != null
+          && string.Equals(firewallStash.ProductCode, preference.ProductCode, StringComparison.OrdinalIgnoreCase)) {
+        firewallStash.FirewallManualStartupUpgradeCode = preference.UpgradeCode;
+      }
+    }
+
+    private static void RestoreManualStartupAfterFirewallRetry(
+      InstallerResult result, string incomingMsiPath, StashedVibeshinePayload firewallStash) {
+      if (result == null || !result.Succeeded || firewallStash == null
+          || string.IsNullOrEmpty(firewallStash.FirewallManualStartupUpgradeCode)) return;
+      try {
+        var incoming = TryGetPayloadMsiInfo(incomingMsiPath);
+        if (incoming != null && string.Equals(NormalizeProductCode(incoming.UpgradeCode),
+            firewallStash.FirewallManualStartupUpgradeCode, StringComparison.OrdinalIgnoreCase)) {
+          RestoreFirewallManualStartup(incoming.ProductCode, firewallStash.FirewallManualStartupUpgradeCode, result.LogPath);
+        }
+      } catch {
+        AppendInstallerLogMessage(result.LogPath, "Firewall recovery could not verify the replacement MSI for Manual startup.");
+      }
+    }
+
+    private static void RestoreFirewallManualStartup(string productCode, string upgradeCode, string logPath) {
+      if (string.IsNullOrEmpty(upgradeCode)) return;
+      try {
+        if (IsProcessElevated()) {
+          var product = TryGetUnambiguousMsiRegistrationRecoveryProduct(InstalledProductKind.Vibeshine);
+          var executable = GetFirewallRecoveryServiceExecutable(product, productCode, upgradeCode);
+          if (executable != null && AccessFirewallRecoveryManualStartup(executable, true)) {
+            AppendInstallerLogMessage(logPath, "Firewall recovery retained Manual startup for the verified Vibeshine service.");
+            return;
+          }
+        }
+      } catch {
+        // Keep the existing install or rollback outcome on access failure.
+      }
+      AppendInstallerLogMessage(logPath, "Firewall recovery could not restore Manual startup for the verified Vibeshine service.");
+    }
+
+    private static string GetFirewallRecoveryServiceExecutable(
+      InstalledProductInfo product, string productCode, string upgradeCode) {
+      var code = NormalizeProductCode(productCode);
+      if (product == null || !LooksLikeProductCode(code)
+          || !string.Equals(NormalizeProductCode(product.ProductCode), code, StringComparison.OrdinalIgnoreCase)
+          || QueryMsiProductStateForRollback(code) != MsiInstallStateDefault
+          || string.IsNullOrWhiteSpace(product.InstallLocation) || !Path.IsPathRooted(product.InstallLocation)) return null;
+      // InstallLocation for this machine-MSI row is obtained from the actual
+      // installed file component, never from a caller or an ARP path.
+      var cached = TryGetPayloadMsiInfo(TryGetProductLocalPackagePath(code));
+      return cached != null && string.Equals(NormalizeProductCode(cached.ProductCode), code, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(NormalizeProductCode(cached.UpgradeCode), NormalizeProductCode(upgradeCode), StringComparison.OrdinalIgnoreCase)
+        ? Path.Combine(product.InstallLocation, "tools", "sunshinesvc.exe")
+        : null;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FirewallRecoveryServiceConfig {
+      public uint ServiceType, StartType, ErrorControl;
+      public IntPtr BinaryPathName, LoadOrderGroup;
+      public uint TagId;
+      public IntPtr Dependencies, ServiceStartName, DisplayName;
+    }
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenSCManager(string machine, string database, uint access);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenService(IntPtr manager, string name, uint access);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool QueryServiceConfig(IntPtr service, IntPtr config, uint bytes, out uint needed);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool ChangeServiceConfig(IntPtr service, uint type, uint startup, uint errorControl,
+      string binary, string group, IntPtr tag, string dependencies, string account, string password, string displayName);
+    [DllImport("advapi32.dll")]
+    private static extern bool CloseServiceHandle(IntPtr handle);
+
+    private static bool AccessFirewallRecoveryManualStartup(string executable, bool restore) {
+      const uint queryConfig = 1, changeConfig = 2, ownProcess = 16, automatic = 2, manual = 3;
+      var manager = OpenSCManager(null, null, 1); // SC_MANAGER_CONNECT
+      if (manager == IntPtr.Zero) return false;
+      IntPtr service = IntPtr.Zero, buffer = IntPtr.Zero;
+      try {
+        service = OpenService(manager, "SunshineService", queryConfig | (restore ? changeConfig : 0));
+        if (service == IntPtr.Zero) return false;
+        uint size, needed;
+        QueryServiceConfig(service, IntPtr.Zero, 0, out size);
+        if (size < Marshal.SizeOf(typeof(FirewallRecoveryServiceConfig)) || size > 8192) return false;
+        buffer = Marshal.AllocHGlobal((int)size);
+        if (!QueryServiceConfig(service, buffer, size, out needed)) return false;
+        var config = (FirewallRecoveryServiceConfig)Marshal.PtrToStructure(buffer, typeof(FirewallRecoveryServiceConfig));
+        var command = Marshal.PtrToStringUni(config.BinaryPathName);
+        if (config.ServiceType != ownProcess
+            || !string.Equals(Marshal.PtrToStringUni(config.DisplayName), "Vibeshine Service", StringComparison.Ordinal)
+            || !(string.Equals(command, "\"" + executable + "\" --service", StringComparison.OrdinalIgnoreCase)
+              || (executable.IndexOfAny(new[] { ' ', '\t' }) < 0
+                && string.Equals(command, executable + " --service", StringComparison.OrdinalIgnoreCase)))) return false;
+        // Validate the registered executable and change only StartType on the
+        // same open service handle. Leave Disabled and other modes alone.
+        if (config.StartType == manual) return true;
+        if (!restore || config.StartType != automatic
+            || !ChangeServiceConfig(service, uint.MaxValue, manual, uint.MaxValue, null, null,
+              IntPtr.Zero, null, null, null, null)) return false;
+        return QueryServiceConfig(service, buffer, size, out needed)
+          && ((FirewallRecoveryServiceConfig)Marshal.PtrToStructure(buffer, typeof(FirewallRecoveryServiceConfig))).StartType == manual;
+      } finally {
+        if (buffer != IntPtr.Zero) Marshal.FreeHGlobal(buffer);
+        if (service != IntPtr.Zero) CloseServiceHandle(service);
+        CloseServiceHandle(manager);
+      }
+    }
+
     private static bool LogShowsMsiCacheOrSourceFailure(string logPath) {
       if (string.IsNullOrWhiteSpace(logPath) || !File.Exists(logPath)) {
         return false;
@@ -6284,6 +6426,7 @@ namespace VibeshineInstaller {
       var registrationRecoveryProduct = isInstallOperation
         ? TryGetUnambiguousMsiRegistrationRecoveryProduct(InstalledProductKind.Vibeshine)
         : null;
+      var firewallStartup = isInstallOperation ? CaptureFirewallManualStartup(GetMsiPathArgument(cliArgs)) : null;
       var exitCode = RunMsiexecWithSourceRecovery(cliArgs, arguments.IsCliQuietMode(), true,
         isUninstallOperation ? cliUninstallRecoveryProduct : registrationRecoveryProduct, ref logPath);
       if (!string.IsNullOrWhiteSpace(injectedMsiPath)
@@ -6361,6 +6504,7 @@ namespace VibeshineInstaller {
         }
       }
 
+      StashedVibeshinePayload firewallRecoveryStash = null;
       if (isInstallOperation) {
         var repairFailure = new InstallerResult {
           Operation = InstallerOperation.Install,
@@ -6376,7 +6520,6 @@ namespace VibeshineInstaller {
         }
         bool firewallRecoveryRequiresRestart;
         string firewallRecoveryDetail;
-        StashedVibeshinePayload firewallRecoveryStash;
         if (TryRecoverMsiFirewallCleanupFailure(
           repairFailure,
           MsiRegistrationRecoveryKinds,
@@ -6386,6 +6529,7 @@ namespace VibeshineInstaller {
           out firewallRecoveryRequiresRestart,
           out firewallRecoveryDetail,
           out firewallRecoveryStash)) {
+          BindFirewallManualStartup(firewallStartup, firewallRecoveryStash);
           AdoptStashedPayload(ref stashedPreviousPayload, firewallRecoveryStash);
           recoveryDetails.Add(firewallRecoveryDetail);
           vibeshineSourceRequiresRestart |= firewallRecoveryRequiresRestart;
@@ -6458,6 +6602,7 @@ namespace VibeshineInstaller {
           cliResult.Message += " Component warnings: " + string.Join(" ", componentWarnings);
         }
       }
+      RestoreManualStartupAfterFirewallRetry(cliResult, GetMsiPathArgument(cliArgs), firewallRecoveryStash);
       ApplyPreflightWarnings(cliResult, preflight);
       AppendRecoveryDetails(cliResult, recoveryDetails);
       return ApplyStashedPayloadRecovery(cliResult, stashedPreviousPayload, "cli_restore_previous");
@@ -6906,6 +7051,7 @@ namespace VibeshineInstaller {
         AppendInstallerLogMessage(logPath, "Restoring previously installed version from stashed package: " + stashedPayload.MsiPath);
         var exitCode = RunMsiexec(args, true, false);
         if ((exitCode == 0 || exitCode == 3010) && IsExactRollbackProductRegistered(stashedPayload)) {
+          RestoreFirewallManualStartup(stashedPayload.ProductCode, stashedPayload.FirewallManualStartupUpgradeCode, logPath);
           return "The previously installed version was automatically restored. Restore log: " + logPath;
         }
 
