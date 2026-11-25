@@ -173,6 +173,92 @@ int main() {
 """
 
 
+def tls_replay():
+    return r"""
+#include <display_device/windows/win_display_query_stop.h>
+#include <future>
+#include <iostream>
+#include <type_traits>
+
+bool stopped_in_peer();
+bool install_guard_in_peer(std::stop_token stop);
+
+bool stopped_in_main() {
+  try {
+    display_device::check_display_query_stop();
+    return false;
+  } catch (const display_device::DisplayQueryStopped &) {
+    return true;
+  }
+}
+
+int main() {
+  using display_device::DisplayQueryStopGuard;
+  using namespace std::chrono_literals;
+  static_assert(!std::is_copy_constructible_v<DisplayQueryStopGuard>);
+  static_assert(!std::is_move_constructible_v<DisplayQueryStopGuard>);
+  int failures = 0;
+  auto check = [&](bool ok, const char *description) {
+    if (!ok) {
+      ++failures;
+      std::cerr << "FAIL: " << description << '\n';
+    }
+  };
+  const auto uses_ordinary_sleep = [] {
+    bool slept = false;
+    display_device::wait_for_display_query_retry(25ms, [&](auto delay) { slept = delay == 25ms; });
+    return slept;
+  };
+
+  check(!stopped_in_peer() && uses_ordinary_sleep(), "initial thread uses the ordinary sleep path");
+  std::stop_source outer;
+  outer.request_stop();
+  {
+    DisplayQueryStopGuard guard {outer.get_token()};
+    check(stopped_in_peer(), "guard installed in main is visible to a separate object file");
+    check(install_guard_in_peer(outer.get_token()), "guard installed in a separate object file is visible to main");
+    {
+      DisplayQueryStopGuard no_token {std::stop_token {}};
+      check(!stopped_in_peer() && uses_ordinary_sleep(), "an empty inner guard masks the outer stop");
+    }
+    std::stop_source inner;
+    {
+      DisplayQueryStopGuard live {inner.get_token()};
+      check(!stopped_in_peer(), "the live inner token wins over a stopped outer token");
+      inner.request_stop();
+      check(stopped_in_peer(), "the inner stop is observed");
+    }
+    check(stopped_in_peer(), "leaving the inner guard restores the outer stop");
+    auto other = std::async(std::launch::async, [token = outer.get_token()] {
+      return !stopped_in_peer() && install_guard_in_peer(token) && !stopped_in_peer();
+    });
+    check(other.get(), "an independent thread starts and ends with no guard");
+    check(stopped_in_peer(), "the independent guard leaves the caller's guard intact");
+  }
+  check(!stopped_in_peer() && uses_ordinary_sleep(), "leaving the outer guard restores the ordinary sleep path");
+  return failures != 0;
+}
+""", r"""
+#include <display_device/windows/win_display_query_stop.h>
+
+bool stopped_in_main();
+
+bool stopped_in_peer() {
+  try {
+    display_device::check_display_query_stop();
+    return false;
+  } catch (const display_device::DisplayQueryStopped &) {
+    return true;
+  }
+}
+
+bool install_guard_in_peer(std::stop_token stop) {
+  display_device::DisplayQueryStopGuard guard {std::move(stop)};
+  return stopped_in_main();
+}
+"""
+
+
 if __name__ == "__main__":
     root = Path(sys.argv[1]).resolve()
     lib = Path(sys.argv[3]).resolve() if len(sys.argv) > 3 else root / "third-party/libdisplaydevice"
@@ -180,8 +266,16 @@ if __name__ == "__main__":
         fixture = Path(directory) / "fixture.cpp"
         binary = Path(directory) / ("fixture.exe" if os.name == "nt" else "fixture")
         fixture.write_text(replay(root, lib))
-        subprocess.run([sys.argv[2], "-std=c++20", "-pthread", "-Wall", "-Wextra", "-Werror",
-                        "-I", str(lib / "src/windows/include"), str(fixture), "-o", str(binary)],
-                       check=True)
+        compile_command = [sys.argv[2], "-std=c++20", "-pthread", "-Wall", "-Wextra", "-Werror",
+                           "-I", str(lib / "src/windows/include")]
+        subprocess.run([*compile_command, str(fixture), "-o", str(binary)], check=True)
         subprocess.run([str(binary)], check=True)
+
+        tls_main, tls_peer = (Path(directory) / name for name in ("tls_main.cpp", "tls_peer.cpp"))
+        main_source, peer_source = tls_replay()
+        tls_main.write_text(main_source)
+        tls_peer.write_text(peer_source)
+        subprocess.run([*compile_command, str(tls_main), str(tls_peer), "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
+    print("Multi-object stop-guard nesting, no-token sleep and thread isolation passed")
     print("Windows display query retry ladder, live churn, native-result cancellation and worker wiring passed")
