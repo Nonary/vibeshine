@@ -1398,10 +1398,25 @@ namespace platf {
         plane_t plane = drmModeGetPlane(card.fd.el, plane_id);
         frame_timestamp = std::chrono::steady_clock::now();
 
-        // A disconnected output temporarily has no plane framebuffer. End this
-        // capture generation instead of retrying and logging at the frame rate.
+        // A modeset can clear the plane's framebuffer for a moment. Returning
+        // reinit at once tears the capture generation down while the output is
+        // still reconfiguring, and the new generation cannot find a plane with a
+        // framebuffer yet. Hold the last frame instead, and reinitialize only
+        // when the gap lasts. Log once per gap, not at the frame rate.
         if (!plane || plane->fb_id == 0) {
-          return capture_e::reinit;
+          const auto step = framebuffer_gap.missing(std::chrono::steady_clock::now());
+          if (step == framebuffer_gap_t::step_e::expired) {
+            BOOST_LOG(warning) << "KMS plane ["sv << plane_id << "] had no framebuffer for "sv
+                               << framebuffer_gap_t::limit.count() << " seconds; reinitializing capture"sv;
+            return capture_e::reinit;
+          }
+          if (step == framebuffer_gap_t::step_e::started) {
+            BOOST_LOG(warning) << "KMS plane ["sv << plane_id << "] has no framebuffer; holding the last frame"sv;
+          }
+          return capture_e::timeout;
+        }
+        if (framebuffer_gap.present()) {
+          BOOST_LOG(info) << "KMS plane ["sv << plane_id << "] framebuffer returned"sv;
         }
 
         auto fb = card.fb(plane.get());
@@ -2116,6 +2131,7 @@ namespace platf {
       int img_offset_y;
 
       int plane_id;
+      framebuffer_gap_t framebuffer_gap;
       int crtc_id;
       int crtc_index;
 
@@ -2693,6 +2709,28 @@ namespace platf {
 
     if (!wl::init()) {
       correlate_to_wayland(cds);
+    }
+
+    // A reenumeration during a stream can run while a modeset has cleared every
+    // plane's framebuffer. Publishing that empty map would leave the old names
+    // in video::refresh_displays while resolve_named_monitor() can no longer
+    // find them, so capture would not reattach until a new session. Keep the
+    // previous map, and return before the desktop size below is reset: a
+    // display created from the kept map copies that size.
+    const auto has_active_monitor = std::ranges::any_of(cds, [](const auto &card_descriptor) {
+      return std::ranges::any_of(card_descriptor.crtc_to_monitor, [](const auto &entry) {
+        return entry.second.monitor_index.has_value();
+      });
+    });
+    if (!has_active_monitor && !kms::named_monitors.empty()) {
+      BOOST_LOG(warning) << "KMS reenumeration found no active planes; keeping the previous monitor map ("sv
+                         << kms::named_monitors.size() << " monitor(s))"sv;
+      std::vector<std::string> previous_names;
+      previous_names.reserve(kms::named_monitors.size());
+      for (const auto &named_monitor : kms::named_monitors) {
+        previous_names.emplace_back(named_monitor.display_name);
+      }
+      return previous_names;
     }
 
     // Deduce the full virtual desktop size
