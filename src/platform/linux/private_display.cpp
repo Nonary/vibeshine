@@ -2188,16 +2188,12 @@ namespace platf::linux_private_display {
       primary_index = 0;
     }
 
-    std::set<std::string> desired_names;
     std::vector<std::string> activate_arguments;
     std::vector<std::string> hdr_rearm_arguments;
     std::vector<std::string> hdr_arguments;
-    std::vector<std::string> deactivate_arguments;
-    bool retiring_active_scanout = false;
     int next_priority = 2;
     for (std::size_t i = 0; i < desired.size(); ++i) {
       auto &entry = desired[i];
-      desired_names.insert(entry.name);
       const auto prefix = "output." + entry.name + ".";
       activate_arguments.push_back(prefix + "enable");
       if (entry.owned_client) {
@@ -2242,15 +2238,8 @@ namespace platf::linux_private_display {
       activate_arguments.push_back(prefix + "priority." + std::to_string(i == primary_index ? 1 : next_priority++));
     }
 
-    for (const auto &output : (*configuration)["outputs"]) {
-      const auto name = output.value("name", std::string {});
-      if (connected(output) && !desired_names.contains(name)) {
-        deactivate_arguments.push_back("output." + name + ".disable");
-      }
-    }
-
-    // Activate and verify the destination before retiring previous scanouts.
-    // A successful KScreen transaction alone does not prove capture readiness.
+    // The desired composition can miss a physical connector that just
+    // reappeared. Only the explicit owner release may retire a connector.
     activate_arguments.insert(activate_arguments.end(), hdr_rearm_arguments.begin(), hdr_rearm_arguments.end());
     if (!execute_configuration(activate_arguments, "Remote Monitor topology activation")) {
       return false;
@@ -2288,12 +2277,6 @@ namespace platf::linux_private_display {
       return false;
     }
     const bool verified = wait_for_configuration([&](const json &current) {
-      // Base guard admission on the post-activation observation: KWin may
-      // change a previously disabled output while applying the new topology.
-      retiring_active_scanout = std::ranges::any_of(current["outputs"], [&](const auto &output) {
-        return connected(output) && enabled(output) &&
-               std::ranges::find(deactivate_arguments, "output." + output.value("name", std::string {}) + ".disable") != deactivate_arguments.end();
-      });
       return topology_matches(current) && std::ranges::all_of(desired, [&](const auto &entry) {
         if (!entry.owned_client) {
           return true;
@@ -2306,29 +2289,6 @@ namespace platf::linux_private_display {
     }, !hdr_rearm_arguments.empty());
     if (!verified) {
       BOOST_LOG(error) << "Linux Remote Monitor: timed out verifying the composed mode/HDR/WCG/scale state.";
-      return false;
-    }
-    const bool retired = restore_policy::retire_with_capture_guard(retiring_active_scanout, [&]() -> std::optional<std::string> {
-      std::optional<std::string> guard;
-      const bool published = wait_for_configuration([&](const json &current) {
-        const auto capture_outputs = capture_output_names();
-        guard = restore_policy::select_capture_ready_guard(current, desired_names, capture_outputs);
-        return guard.has_value();
-      });
-      return published ? guard : std::nullopt;
-    }, [&](const std::string &guard) {
-      // Capture publication can take time. Reread KScreen immediately before
-      // retiring the previous scanout rather than trusting the earlier modeset.
-      const auto current = query_configuration();
-      const auto *output = current ? find_output(*current, guard) : nullptr;
-      return output && connected(*output) && enabled(*output);
-    }, [] {
-      return !process_shutdown_preserve_requested() && restore_allowed();
-    }, [&] {
-      return execute_configuration(deactivate_arguments, "Remote Monitor topology retirement");
-    });
-    if (!retired) {
-      BOOST_LOG(error) << "Linux Remote Monitor: capture-ready topology retirement was not confirmed; preserving the previous outputs.";
       return false;
     }
     for (const auto &entry : desired) {
@@ -2422,27 +2382,59 @@ namespace platf::linux_private_display {
       return true;
     }
     const auto output_name = reservation->second;
-    if (const auto configuration = query_configuration()) {
-      remember_scale(manager, reservation->first, find_output(*configuration, output_name));
-    }
+    const auto configuration = query_configuration();
+    const auto *departing = configuration ? find_output(*configuration, output_name) : nullptr;
+    if (configuration) remember_scale(manager, reservation->first, departing);
     const bool still_reserved = std::ranges::any_of(manager.reservations, [&](const auto &entry) {
       return entry.first != reservation->first && entry.second == output_name;
     });
     if (!still_reserved) {
-      const auto configuration = query_configuration();
-      const auto capture_outputs = capture_output_names();
-      const bool has_capture_ready_survivor = configuration &&
-                                              std::ranges::any_of((*configuration)["outputs"], [&](const json &output) {
-                                                const auto name = output.value("name", std::string {});
-                                                return name != output_name && connected(output) && enabled(output) &&
-                                                       std::ranges::find(capture_outputs, name) != capture_outputs.end();
-                                              });
-      if (!has_capture_ready_survivor) {
-        BOOST_LOG(warning) << "Linux private display: preserving released output " << output_name
-                           << " because no distinct capture-ready scanout can guard its disconnect.";
-      } else if (!disconnect_managed_output(output_name)) {
-        BOOST_LOG(error) << "Linux private display: failed to disconnect released output " << output_name << '.';
+      const auto managed_identities = managed_connector_identities();
+      const auto identity = managed_identities.find(output_name);
+      if (identity == managed_identities.end()) {
+        // A reservation alone cannot authorize mutation of a physical output.
         return false;
+      }
+      const bool already_disconnected = configuration && (!departing || !connected(*departing)) &&
+                                        managed_connector_verified_disconnected(output_name, identity->second);
+      if (!already_disconnected) {
+        const auto private_names = private_output_set();
+        std::optional<std::string> guard;
+        const bool capture_ready = wait_for_configuration([&](const json &current) {
+          const auto capture_outputs = capture_output_names();
+          std::set<std::string> survivors;
+          for (const auto &output : current["outputs"]) {
+            const auto name = output.value("name", std::string {});
+            if (name.empty() || name == output_name) continue;
+            const bool private_output = private_names.contains(name) || managed_identities.contains(name) ||
+                                        mode_policy::managed_connector_name(name);
+            const bool still_owned = std::ranges::any_of(manager.reservations, [&](const auto &entry) {
+              return entry.second == name;
+            });
+            if (!private_output || still_owned) survivors.insert(name);
+          }
+          guard = restore_policy::select_capture_ready_guard(current, survivors, capture_outputs);
+          return guard.has_value();
+        });
+        if (!restore_allowed() || process_shutdown_preserve_requested()) return false;
+        const auto fresh = capture_ready ? query_configuration() : std::nullopt;
+        const auto *survivor = fresh && guard ? find_output(*fresh, *guard) : nullptr;
+        if (!survivor || !connected(*survivor) || !enabled(*survivor)) {
+          BOOST_LOG(warning) << "Linux private display: preserving released output " << output_name
+                             << " because no distinct capture-ready scanout can guard its disconnect.";
+          // Another owner can prevent idle restore. Keep this release pending
+          // until it has a safe survivor. The final owner can use idle restore.
+          if (manager.reservations.size() > 1) return false;
+        } else if (!managed_connector_identity_matches(output_name, identity->second) ||
+                   !restore_allowed() || !disconnect_managed_output(output_name) ||
+                   !wait_for_configuration([&](const json &current) {
+                     const auto *output = find_output(current, output_name);
+                     return (!output || !connected(*output)) &&
+                            managed_connector_verified_disconnected(output_name, identity->second);
+                   }, true)) {
+          BOOST_LOG(error) << "Linux private display: could not verify disconnect of released output " << output_name << '.';
+          return false;
+        }
       }
     }
     manager.newly_connected_reservations.erase(reservation->first);

@@ -1228,6 +1228,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     sunshine_register_component(NAME test_component_linux_private_display_restore_transaction TEST_SOURCE unit/platform/linux/test_private_display_restore_transaction.cpp
         LINK_LIBRARIES nlohmann_json::nlohmann_json)
     sunshine_register_component(NAME test_component_linux_private_display_resume_policy TEST_SOURCE unit/platform/linux/test_private_display_resume_policy.cpp)
+    if(SUNSHINE_TEST_PYTHON_EXECUTABLE)
+        add_test(NAME test_component_linux_private_display_retirement
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_private_display_retirement.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}"
+                "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>")
+        set_tests_properties(test_component_linux_private_display_retirement PROPERTIES LABELS "component" TIMEOUT 45)
+    endif()
 endif()
 
 # Compile the actual Windows recovery wrapper with the portable display core.
