@@ -99,14 +99,15 @@ namespace service_ctrl {
     return service.state;
   }
 
-  inline startup_state set_service_startup(bool automatic) {
+  inline startup_state set_service_startup(bool automatic, DWORD expected_start_type = SERVICE_NO_CHANGE) {
     startup_detail::service service {SERVICE_QUERY_CONFIG | SERVICE_CHANGE_CONFIG};
     if (!service.read()) {
       return service.state;
     }
     service.state.can_change = true;
     const DWORD desired = automatic ? SERVICE_AUTO_START : SERVICE_DEMAND_START;
-    if (service.state.start_type == desired) {
+    if (service.state.start_type == desired ||
+        (expected_start_type != SERVICE_NO_CHANGE && service.state.start_type != expected_start_type)) {
       return service.state;
     }
     // Manual startup keeps the app launchable. Only future startup changes:

@@ -57,7 +57,9 @@
       <!-- Remove conflicting products before installation starts. -->
       <Custom Action="ValidateInstallRootPreview" After="CostFinalize">1</Custom>
       <Custom Action="ValidateInstallRoot" After="StopSvcQuietImmediate">1</Custom>
-      <Custom Action="RemoveConflictingProducts" After="ValidateInstallRoot">NOT Installed AND NOT REMOVE AND SKIP_REMOVE_CONFLICTING_PRODUCTS &lt;&gt; "1"</Custom>
+      <!-- Read the original service configuration before product removal. -->
+      <Custom Action="CaptureManualServiceStartup" After="ValidateInstallRoot">(Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE</Custom>
+      <Custom Action="RemoveConflictingProducts" After="CaptureManualServiceStartup">NOT Installed AND NOT REMOVE AND SKIP_REMOVE_CONFLICTING_PRODUCTS &lt;&gt; "1"</Custom>
 
       <!-- Pre-validate stop/kill when UI can't prompt.  Major upgrades are
            not "Installed" from the incoming package's perspective, but they
@@ -70,6 +72,9 @@
       <!-- Stop service proactively on repair or uninstall -->
       <Custom Action="SetStopSvcQuiet" After="InstallInitialize">((Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE AND UILevel &lt; 5) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
       <Custom Action="StopSvcQuiet" After="SetStopSvcQuiet">((Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE AND UILevel &lt; 5) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+
+      <!-- InstallServices may have recreated the service with its fresh-install default. -->
+      <Custom Action="RestoreManualServiceStartup" After="InstallServices">VibeshineManualServiceStartup = "1" AND (Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE</Custom>
 
       <!-- Start quietly on repair with basic/silent UI -->
       <Custom Action="SetStartSvcQuiet" Before="StartSvcQuiet">Installed AND NOT REMOVE AND UILevel &lt; 5</Custom>

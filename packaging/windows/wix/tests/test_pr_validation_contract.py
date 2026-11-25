@@ -225,6 +225,58 @@ class ValidationContractTest(unittest.TestCase):
             msi.close()
 
 
+    @unittest.skipUnless(os.name == "nt", "compiled MSI inspection requires Windows Installer")
+    def test_packaged_service_startup_preservation(self):
+        if MSI_PATH is None:
+            self.skipTest("pass --msi after packaging to inspect the actual artifact")
+        capture = "CaptureManualServiceStartup"
+        restore = "RestoreManualServiceStartup"
+        msi = Msi(MSI_PATH)
+        try:
+            actions = {
+                action: (int(kind), source, target)
+                for action, kind, source, target in msi.query(
+                    "SELECT `Action`, `Type`, `Source`, `Target` FROM `CustomAction`"
+                )
+            }
+            self.assertEqual(actions[capture], (0x041, "InstallRootGuard", capture))
+            self.assertEqual(actions[restore], (0xC41, "InstallRootGuard", restore))
+            self.assertEqual(
+                msi.query("SELECT `Name`, `StartType` FROM `ServiceInstall`"),
+                [["SunshineService", "2"]],
+            )
+            sequence = {
+                name: (int(order), condition)
+                for name, condition, order in msi.query(
+                    "SELECT `Action`, `Condition`, `Sequence` FROM `InstallExecuteSequence`"
+                )
+            }
+            order = [sequence[name][0] for name in (
+                "ValidateInstallRoot", capture, "RemoveConflictingProducts",
+                "RemoveExistingProducts", "InstallServices", restore, "StartServices",
+            )]
+            self.assertEqual(order, sorted(set(order)))
+            for installed, related, remove, manual, expected in (
+                ("", "", "", "", (False, False)),      # Fresh install
+                ("", "", "", "1", (False, False)),     # Fresh install with a stale flag
+                ("1", "", "", "", (True, False)),      # Automatic/unknown repair
+                ("1", "", "", "1", (True, True)),      # Manual repair
+                ("", "1", "", "1", (True, True)),      # Manual major upgrade
+                ("", "1", "", "", (True, False)),      # Automatic/unknown major upgrade
+                ("1", "", "ALL", "1", (False, False)), # Uninstall
+            ):
+                for ui_level in ("2", "5"):
+                    with self.subTest(installed=installed, related=related, remove=remove, manual=manual, ui=ui_level):
+                        properties = dict(
+                            Installed=installed, WIX_UPGRADE_DETECTED=related, REMOVE=remove,
+                            VibeshineManualServiceStartup=manual, UILevel=ui_level,
+                        )
+                        actual = tuple(msi.evaluate(sequence[name][1], **properties) for name in (capture, restore))
+                        self.assertEqual(actual, expected)
+        finally:
+            msi.close()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--msi", type=Path)

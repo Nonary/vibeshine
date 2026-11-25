@@ -14,7 +14,8 @@ assert seq.find('.//Custom[@Action="ValidateInstallRootPreview"]').text=='1'
 assert seq.find('.//Custom[@Action="ValidateInstallRoot"]').text=='1'
 assert seq.find('.//Custom[@Action="SetKillProcsQuietImmediate"]').attrib['After']=='ValidateInstallRootPreview'
 assert seq.find('.//Custom[@Action="ValidateInstallRoot"]').attrib['After']=='StopSvcQuietImmediate'
-assert seq.find('.//Custom[@Action="RemoveConflictingProducts"]').attrib['After']=='ValidateInstallRoot'
+assert seq.find('.//Custom[@Action="CaptureManualServiceStartup"]').attrib['After']=='ValidateInstallRoot'
+assert seq.find('.//Custom[@Action="RemoveConflictingProducts"]').attrib['After']=='CaptureManualServiceStartup'
 assert custom.find('.//w:CustomAction[@Id="BlockLegacySunshine"]',ns).get('Error')
 # Repair must run as SYSTEM, never fail the install, and precede every helper.
 repair=custom.find('.//w:CustomAction[@Id="RepairInstallRoot"]',ns)

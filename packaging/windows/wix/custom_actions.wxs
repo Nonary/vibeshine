@@ -133,6 +133,9 @@
     <CustomAction Id="SetRepairInstallRoot" Property="RepairInstallRoot" Value="[INSTALL_ROOT]" />
     <CustomAction Id="RepairInstallRoot" BinaryKey="InstallRootGuard" DllEntry="RepairInstallRoot" Execute="deferred" Return="ignore" Impersonate="no" />
 
+    <CustomAction Id="CaptureManualServiceStartup" BinaryKey="InstallRootGuard" DllEntry="CaptureManualServiceStartup" Execute="immediate" Return="ignore" />
+    <CustomAction Id="RestoreManualServiceStartup" BinaryKey="InstallRootGuard" DllEntry="RestoreManualServiceStartup" Execute="deferred" Return="ignore" Impersonate="no" />
+
     <!-- Post-install housekeeping runs after InstallFiles. Migration and optional
          driver/Vulkan-layer failures remain best-effort because the core application
          can still install and the bootstrapper reports component warnings from logs. -->

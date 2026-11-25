@@ -197,7 +197,9 @@ add_custom_target(package_installer
 
 # Check the install folder from the MSI Binary table before any action can
 # execute files from INSTALL_ROOT, including direct MSI maintenance.
-add_library(sunshine_install_guard SHARED "${CMAKE_SOURCE_DIR}/packaging/windows/install_root_guard.cpp")
+add_library(sunshine_install_guard SHARED
+    "${CMAKE_SOURCE_DIR}/packaging/windows/install_root_guard.cpp"
+    "${CMAKE_SOURCE_DIR}/packaging/windows/install_service_startup.cpp")
 target_compile_definitions(sunshine_install_guard PRIVATE UNICODE _UNICODE WINVER=0x0A00 _WIN32_WINNT=0x0A00 NOMINMAX)
 target_link_libraries(sunshine_install_guard PRIVATE msi advapi32)
 target_link_options(sunshine_install_guard PRIVATE -static)
