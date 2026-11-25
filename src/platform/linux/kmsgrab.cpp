@@ -1339,6 +1339,53 @@ namespace platf {
         }
       }
 
+      /**
+       * Records a capture attempt that found no framebuffer for the captured
+       * output. Returns true when the gap lasted long enough that capture must
+       * reinitialize. Logs once per gap, not at the frame rate.
+       */
+      bool framebuffer_gap_expired() {
+        const auto step = framebuffer_gap.missing(std::chrono::steady_clock::now());
+        if (step == framebuffer_gap_t::step_e::expired) {
+          BOOST_LOG(warning) << "KMS CRTC ["sv << crtc_id << "] had no framebuffer for "sv
+                             << framebuffer_gap_t::limit.count() << " seconds; reinitializing capture"sv;
+          return true;
+        }
+        if (step == framebuffer_gap_t::step_e::started) {
+          BOOST_LOG(warning) << "KMS CRTC ["sv << crtc_id << "] has no framebuffer; holding the last frame"sv;
+        }
+        return false;
+      }
+
+      /**
+       * Records a capture attempt that found a framebuffer. The first
+       * framebuffer after a gap can belong to another output, so this rereads
+       * the selected connector's live binding, and the plane's CRTC when
+       * capture reads a plane. Returns false when either binding changed.
+       */
+      bool recovered_framebuffer_belongs_to_output(std::optional<std::uint32_t> plane_crtc_id) {
+        if (!framebuffer_gap.present()) {
+          return true;
+        }
+
+        std::optional<std::uint32_t> connector_crtc_id;
+        if (connector_id) {
+          auto connector = card.connector(*connector_id);
+          if (connector && connector->connection == DRM_MODE_CONNECTED && connector->encoder_id) {
+            if (auto encoder = card.encoder(connector->encoder_id)) {
+              connector_crtc_id = encoder->crtc_id;
+            }
+          }
+        }
+
+        if (!recovered_framebuffer_matches(static_cast<std::uint32_t>(crtc_id), connector_crtc_id, plane_crtc_id)) {
+          BOOST_LOG(warning) << "KMS CRTC ["sv << crtc_id << "] framebuffer returned for another output; reinitializing capture"sv;
+          return false;
+        }
+        BOOST_LOG(info) << "KMS CRTC ["sv << crtc_id << "] framebuffer returned"sv;
+        return true;
+      }
+
       inline capture_e refresh(egl::owned_surface_t &surface, std::optional<std::chrono::steady_clock::time_point> &frame_timestamp) {
         auto *sd = &surface.sd;
         // Recheck current connector state before delivering any frame. This
@@ -1402,21 +1449,14 @@ namespace platf {
         // reinit at once tears the capture generation down while the output is
         // still reconfiguring, and the new generation cannot find a plane with a
         // framebuffer yet. Hold the last frame instead, and reinitialize only
-        // when the gap lasts. Log once per gap, not at the frame rate.
+        // when the gap lasts.
         if (!plane || plane->fb_id == 0) {
-          const auto step = framebuffer_gap.missing(std::chrono::steady_clock::now());
-          if (step == framebuffer_gap_t::step_e::expired) {
-            BOOST_LOG(warning) << "KMS plane ["sv << plane_id << "] had no framebuffer for "sv
-                               << framebuffer_gap_t::limit.count() << " seconds; reinitializing capture"sv;
-            return capture_e::reinit;
-          }
-          if (step == framebuffer_gap_t::step_e::started) {
-            BOOST_LOG(warning) << "KMS plane ["sv << plane_id << "] has no framebuffer; holding the last frame"sv;
-          }
-          return capture_e::timeout;
+          return framebuffer_gap_expired() ? capture_e::reinit : capture_e::timeout;
         }
-        if (framebuffer_gap.present()) {
-          BOOST_LOG(info) << "KMS plane ["sv << plane_id << "] framebuffer returned"sv;
+        // During the gap the plane can move to another CRTC, or another
+        // connector can take over this CRTC, with a framebuffer of the same size.
+        if (!recovered_framebuffer_belongs_to_output(plane->crtc_id)) {
+          return capture_e::reinit;
         }
 
         auto fb = card.fb(plane.get());
@@ -1908,9 +1948,23 @@ namespace platf {
             // coherent presentation.
             switch (dequeue_presentation_frame()) {
               case frame_export_e::ready:
+                if (!recovered_framebuffer_belongs_to_output(std::nullopt)) {
+                  return platf::capture_e::reinit;
+                }
                 break;
               case frame_export_e::empty:
-                return platf::capture_e::reinit;
+                // A modeset can leave the CRTC without a completed framebuffer
+                // for a moment. Keep this capture generation and hold the last
+                // frame. The idle presentation wait below paces the next export,
+                // and only a lasting gap reinitializes.
+                if (framebuffer_gap_expired()) {
+                  return platf::capture_e::reinit;
+                }
+                presentation_pending = false;
+                if (!push_captured_image_cb({}, false)) {
+                  return platf::capture_e::ok;
+                }
+                continue;
               case frame_export_e::unsupported:
                 return std::nullopt;
             }
@@ -2709,28 +2763,6 @@ namespace platf {
 
     if (!wl::init()) {
       correlate_to_wayland(cds);
-    }
-
-    // A reenumeration during a stream can run while a modeset has cleared every
-    // plane's framebuffer. Publishing that empty map would leave the old names
-    // in video::refresh_displays while resolve_named_monitor() can no longer
-    // find them, so capture would not reattach until a new session. Keep the
-    // previous map, and return before the desktop size below is reset: a
-    // display created from the kept map copies that size.
-    const auto has_active_monitor = std::ranges::any_of(cds, [](const auto &card_descriptor) {
-      return std::ranges::any_of(card_descriptor.crtc_to_monitor, [](const auto &entry) {
-        return entry.second.monitor_index.has_value();
-      });
-    });
-    if (!has_active_monitor && !kms::named_monitors.empty()) {
-      BOOST_LOG(warning) << "KMS reenumeration found no active planes; keeping the previous monitor map ("sv
-                         << kms::named_monitors.size() << " monitor(s))"sv;
-      std::vector<std::string> previous_names;
-      previous_names.reserve(kms::named_monitors.size());
-      for (const auto &named_monitor : kms::named_monitors) {
-        previous_names.emplace_back(named_monitor.display_name);
-      }
-      return previous_names;
     }
 
     // Deduce the full virtual desktop size

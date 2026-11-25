@@ -1,7 +1,7 @@
 /**
  * @file tests/unit/platform/linux/test_kmsgrab_framebuffer.cpp
- * @brief GEM framebuffer ownership and framebuffer gap checks without a DRM
- * device.
+ * @brief GEM framebuffer ownership, framebuffer gap, and recovered output
+ * checks without a DRM device.
  */
 #include "../../../tests_common.h"
 
@@ -69,8 +69,8 @@ namespace {
   }
 
   TEST(KmsFramebufferGap, LastingGapReinitializesOnce) {
-    // An output that stays without a framebuffer (display off, or the output
-    // moved to another plane) must reinitialize instead of freezing.
+    // An output that stays without a framebuffer (for example, a display that
+    // is off) must reinitialize instead of freezing.
     gap_t gap;
     const auto start = gap_t::clock::time_point {} + 1h;
 
@@ -93,5 +93,36 @@ namespace {
     EXPECT_TRUE(gap.present());
     EXPECT_EQ(gap.missing(start + gap_t::limit), step_e::started);
     EXPECT_EQ(gap.missing(start + gap_t::limit + gap_t::limit - 1s), step_e::holding);
+  }
+
+  constexpr std::uint32_t captured_crtc = 41;
+  constexpr std::uint32_t other_crtc = 42;
+
+  TEST(KmsRecoveredFramebuffer, AcceptsTheUnchangedOutput) {
+    EXPECT_TRUE(platf::kms::recovered_framebuffer_matches(captured_crtc, captured_crtc, captured_crtc));
+    // CRTC export reads no plane, so only the connector binding applies.
+    EXPECT_TRUE(platf::kms::recovered_framebuffer_matches(captured_crtc, captured_crtc, std::nullopt));
+  }
+
+  TEST(KmsRecoveredFramebuffer, RejectsAPlaneThatMovedToAnotherCrtc) {
+    // The saved plane now scans out another output. A frame of the same size
+    // would pass the dimensions check.
+    EXPECT_FALSE(platf::kms::recovered_framebuffer_matches(captured_crtc, captured_crtc, other_crtc));
+  }
+
+  TEST(KmsRecoveredFramebuffer, RejectsAConnectorThatNoLongerDrivesTheCrtc) {
+    // The selected connector moved to another CRTC, and another connector
+    // took over the captured one.
+    EXPECT_FALSE(platf::kms::recovered_framebuffer_matches(captured_crtc, other_crtc, captured_crtc));
+    EXPECT_FALSE(platf::kms::recovered_framebuffer_matches(captured_crtc, other_crtc, std::nullopt));
+    // An encoder without a CRTC reports CRTC 0.
+    EXPECT_FALSE(platf::kms::recovered_framebuffer_matches(captured_crtc, 0, captured_crtc));
+  }
+
+  TEST(KmsRecoveredFramebuffer, RejectsAConnectorItCannotConfirm) {
+    // A connector that cannot be read, is disconnected, or has no encoder
+    // cannot confirm that the framebuffer belongs to the captured output.
+    EXPECT_FALSE(platf::kms::recovered_framebuffer_matches(captured_crtc, std::nullopt, captured_crtc));
+    EXPECT_FALSE(platf::kms::recovered_framebuffer_matches(captured_crtc, std::nullopt, std::nullopt));
   }
 }  // namespace

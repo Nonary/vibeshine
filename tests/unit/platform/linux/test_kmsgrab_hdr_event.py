@@ -21,6 +21,7 @@ spec.loader.exec_module(worker)
 PRELUDE = r'''
 #include "src/platform/linux/kmsgrab_hdr.h"
 #include "src/platform/linux/session_backend.h"
+#include "src/platform/linux/kmsgrab_framebuffer.h"
 #include "src/platform/linux/kmsgrab_pacing.h"
 #include <cassert>
 #include <vector>
@@ -32,7 +33,7 @@ PRELUDE = r'''
 using namespace std::literals;
 struct NullLog { template<class T> NullLog &operator<<(const T&) { return *this; } };
 #define BOOST_LOG(x) NullLog{}
-namespace probe { unsigned eotf=2, luminance=1000, cll=900, reads=0; bool fail=false; std::string scenario; }
+namespace probe { unsigned eotf=2, luminance=1000, cll=900, reads=0, empty_exports=0, connector_crtc=1, holds=0; bool fail=false; std::string scenario; }
 extern "C" drmModePropertyBlobPtr drmModeGetPropertyBlob(int,uint32_t) {
   ++probe::reads;
   const bool strict_bad=probe::scenario.starts_with("hyprland-second-") && probe::reads>=3;
@@ -61,7 +62,7 @@ namespace platf {
   struct card_t {
    struct { int el=7; } fd;
    struct connector_t { int connection=DRM_MODE_CONNECTED;unsigned encoder_id=4; };
-   struct encoder_t { unsigned crtc_id=1; };
+   struct encoder_t { unsigned crtc_id=probe::connector_crtc; };
    auto connector(unsigned){return std::optional<connector_t>(connector_t{});}
    auto encoder(unsigned){return std::optional<encoder_t>(encoder_t{});}
    using properties_t=std::vector<std::pair<std::shared_ptr<int>,uint64_t>>;
@@ -70,6 +71,7 @@ namespace platf {
   } card;
   std::optional<unsigned> connector_id=1;
   std::optional<uint64_t> hdr_metadata_blob_id=10;
+  framebuffer_gap_t framebuffer_gap;
 @@STRICT@@
   capture_e metadata_status(){
 @@REFRESH@@
@@ -90,7 +92,7 @@ namespace platf {
   enum class frame_export_e{ready,empty,unsupported};
   event_probe_t() { presentation_mode.activate(); presentation_latch.request_capture(); assert(hdr_metadata_generation.selected(7,10)); }
   presentation_wait_e wait_for_presentation(std::chrono::milliseconds) { ++waits; presentation_latch.observe_response(pacing::presentation_response_e::timeout,false,std::chrono::steady_clock::now()); return presentation_wait_e::timeout; }
-  frame_export_e dequeue_presentation_frame() { ++dequeues; pending_exported_frame=1; presentation_timestamp=std::chrono::steady_clock::now(); return frame_export_e::ready; }
+  frame_export_e dequeue_presentation_frame() { ++dequeues; if(probe::empty_exports) { --probe::empty_exports; pending_exported_frame.reset(); return frame_export_e::empty; } pending_exported_frame=1; presentation_timestamp=std::chrono::steady_clock::now(); return frame_export_e::ready; }
   void wait_until_capture_deadline(auto) {}
   capture_e snapshot(const pull_free_image_cb_t& pull,std::shared_ptr<platf::img_t>& out,std::chrono::milliseconds,bool) {
    const auto status=metadata_status(); if(status!=capture_e::ok) return status;
@@ -115,6 +117,7 @@ int main(int argc,char**argv) {
  kms::event_probe_t p; bool cursor=false; unsigned delivered=0,restarts=0;
  auto pull=[](std::shared_ptr<img_t>& out){out=std::make_shared<img_t>();return true;};
  auto push=[&](std::shared_ptr<img_t>&& out,bool captured){
+   if(!captured && scenario.starts_with("empty-")) { assert(!out); ++probe::holds; return true; }
    assert(captured && out);
    const auto selected=p.hdr_metadata_generation.selected(7,10);
    if(!probe::fail) {
@@ -130,6 +133,27 @@ int main(int argc,char**argv) {
   assert(!p.commit_pending_capture_metadata());
   assert(!p.hdr_metadata_generation.selected(7,10)->is_hdr());
   std::cout<<"event "<<scenario<<": deliveries=0 handoffs=0 selected_hdr=0\n";return 0;
+ }
+ if(scenario=="empty-then-ready") {
+  // The managed CRTC has no framebuffer for a few exports. The running
+  // generation holds the last frame, then delivers the returned framebuffer.
+  probe::empty_exports=3;
+  assert(attempt()==capture_e::ok); assert(delivered==1); assert(probe::holds==3); assert(p.dequeues==4);
+  std::cout<<"event "<<scenario<<": deliveries="<<delivered<<" holds="<<probe::holds<<" dequeues="<<p.dequeues<<"\n";return 0;
+ }
+ if(scenario=="empty-then-other-output") {
+  // During the gap, the selected connector moved to another CRTC. The
+  // returned framebuffer belongs to another output and is never delivered.
+  probe::empty_exports=2; probe::connector_crtc=2;
+  assert(attempt()==capture_e::reinit); assert(delivered==0); assert(probe::holds==2);
+  std::cout<<"event "<<scenario<<": deliveries=0 holds="<<probe::holds<<"\n";return 0;
+ }
+ if(scenario=="empty-lasting") {
+  // The gap began a full limit ago, so the next empty export reinitializes.
+  (void)p.framebuffer_gap.missing(std::chrono::steady_clock::now()-kms::framebuffer_gap_t::limit);
+  probe::empty_exports=1000;
+  assert(attempt()==capture_e::reinit); assert(delivered==0); assert(probe::holds==0);
+  std::cout<<"event "<<scenario<<": deliveries=0 holds=0\n";return 0;
  }
  if(scenario=="teardown-recovery") {
    probe::luminance=1200; assert(attempt()==capture_e::reinit); assert(delivered==0);
@@ -175,6 +199,8 @@ def main():
         '      bool commit_pending_capture_metadata() override {',
         '      void request_refresh() override {',
         '      std::optional<capture_e> capture_presentation_events(',
+        '      bool framebuffer_gap_expired() {',
+        '      bool recovered_framebuffer_belongs_to_output(',
     ]]
     refresh=worker.function(kms,'      inline capture_e refresh(')
     refresh=refresh[refresh.index('        // Recheck current connector state'):refresh.index('        if (pending_exported_frame)')]
@@ -194,7 +220,7 @@ def main():
             print(compiled.stdout + compiled.stderr)
             return compiled.returncode
         results, failed = [], False
-        for scenario in ['nonpq-churn-0', 'nonpq-churn-1', 'nonpq-churn-3', 'nonpq-hdr-transitions', 'teardown-recovery', 'hyprland-sdr', 'hyprland-second-pq', 'hyprland-second-gamma', 'hyprland-second-hlg', 'hyprland-second-unknown']:
+        for scenario in ['nonpq-churn-0', 'nonpq-churn-1', 'nonpq-churn-3', 'nonpq-hdr-transitions', 'teardown-recovery', 'hyprland-sdr', 'hyprland-second-pq', 'hyprland-second-gamma', 'hyprland-second-hlg', 'hyprland-second-unknown', 'empty-then-ready', 'empty-then-other-output', 'empty-lasting']:
             result = subprocess.run([str(binary), scenario], capture_output=True, text=True, timeout=10, env=os.environ.copy())
             results.append(result.stdout + result.stderr)
             failed |= result.returncode != 0
