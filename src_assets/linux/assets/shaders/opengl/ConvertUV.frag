@@ -6,6 +6,7 @@ precision highp float;
 
 uniform sampler2D image;
 uniform sampler2D output_lut;
+uniform vec2 chroma_coord_delta;
 
 layout(shared) uniform ColorMatrix {
   vec4 color_vec_y;
@@ -28,8 +29,9 @@ float output_lut_coordinate(float value)
 // Pixel Shader
 //--------------------------------------------------------------------------------------
 void main() {
-  vec3 rgb_left  = texture(image, uuv.xz).rgb;
-  vec3 rgb_right = texture(image, uuv.yz).rgb;
+  vec2 sample_offset = uuv.yz * chroma_coord_delta;
+  vec3 rgb_left  = texture(image, uuv.xz + sample_offset).rgb;
+  vec3 rgb_right = texture(image, uuv.yz + sample_offset).rgb;
   rgb_left = vec3(
     texture(output_lut, vec2(output_lut_coordinate(rgb_left.r), 0.5)).r,
     texture(output_lut, vec2(output_lut_coordinate(rgb_left.g), 0.5)).g,

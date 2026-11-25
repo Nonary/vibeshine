@@ -347,6 +347,8 @@ namespace va {
         return -1;
       }
 
+      const auto format = hw_frames_ctx->sw_format;
+      const bool is_yuv420 = format == AV_PIX_FMT_NV12 || format == AV_PIX_FMT_P010;
       egl::surface_descriptor_t sds[2] = {};
       for (int plane = 0; plane < 2; ++plane) {
         auto &sd = sds[plane];
@@ -354,9 +356,9 @@ namespace va {
 
         sd.fourcc = layer.drm_format;
 
-        // UV plane is subsampled
-        sd.width = prime.width / (plane == 0 ? 1 : 2);
-        sd.height = prime.height / (plane == 0 ? 1 : 2);
+        // A trailing odd luma pixel still has a sample in the NV12/P010 UV plane.
+        sd.width = plane == 0 ? prime.width : prime.width / 2 + (is_yuv420 ? prime.width % 2 : 0);
+        sd.height = plane == 0 ? prime.height : prime.height / 2 + (is_yuv420 ? prime.height % 2 : 0);
 
         // The modifier must be the same for all planes
         sd.modifier = prime.objects[layer.object_index[0]].drm_format_modifier;
@@ -374,11 +376,14 @@ namespace va {
         return -1;
       }
 
-      auto sws_opt = egl::sws_t::make(width, height, frame->width, frame->height, hw_frames_ctx->sw_format);
+      auto sws_opt = egl::sws_t::make(width, height, frame->width, frame->height, format);
       if (!sws_opt) {
         return -1;
       }
 
+      if (is_yuv420) {
+        sws_opt->include_partial_chroma(frame->width, frame->height);
+      }
       this->sws = std::move(*sws_opt);
       this->nv12 = std::move(*nv12_opt);
 

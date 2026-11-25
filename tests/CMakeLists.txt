@@ -889,6 +889,17 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         LINK_LIBRARIES Threads::Threads)
     sunshine_register_component(NAME test_component_linux_render_device TEST_SOURCE unit/platform/linux/test_render_device.cpp)
     sunshine_register_component(NAME test_component_linux_dmabuf_surface TEST_SOURCE unit/platform/linux/test_dmabuf_surface.cpp)
+    if(SUNSHINE_TEST_ENABLE_COMPONENT)
+        pkg_check_modules(SUNSHINE_TEST_VAAPI_GL QUIET IMPORTED_TARGET egl>=1.5 glesv2)
+        if(TARGET PkgConfig::SUNSHINE_TEST_VAAPI_GL)
+            sunshine_register_component(NAME test_component_linux_vaapi_uv_shader
+                TEST_SOURCE unit/platform/linux/test_vaapi_uv_shader.cpp
+                DEFINITIONS "VAAPI_TEST_SHADER_DIR=\"${SUNSHINE_TEST_REPOSITORY_ROOT}/src_assets/linux/assets/shaders/opengl\""
+                LINK_LIBRARIES PkgConfig::SUNSHINE_TEST_VAAPI_GL)
+            set_tests_properties(test_component_linux_vaapi_uv_shader PROPERTIES
+                ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=true;MESA_SHADER_CACHE_DISABLE=true")
+        endif()
+    endif()
     pkg_check_modules(TEST_PYROWAVE_IMPORT_DRM QUIET IMPORTED_TARGET libdrm)
     if(TEST_PYROWAVE_IMPORT_DRM_FOUND)
         sunshine_register_component(NAME test_component_linux_pyrowave_linear_upload
@@ -950,6 +961,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_vaapi_output_lut.py"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
         set_tests_properties(test_component_linux_vaapi_output_lut PROPERTIES LABELS "component" TIMEOUT 45)
+        add_test(NAME test_component_linux_vaapi_chroma_geometry
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_vaapi_chroma_geometry.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_linux_vaapi_chroma_geometry PROPERTIES LABELS "component" TIMEOUT 45)
         add_test(NAME test_component_cached_game_launch_composition
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/scripts/test_cached_game_launch_composition.py"

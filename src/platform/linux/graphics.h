@@ -323,6 +323,9 @@ namespace egl {
     static std::optional<sws_t> make(int in_width, int in_height, int out_width, int out_height, gl::tex_t &&tex);
     static std::optional<sws_t> make(int in_width, int in_height, int out_width, int out_height, AVPixelFormat format);
 
+    // Include the trailing chroma sample on full odd axes of a 4:2:0 target.
+    void include_partial_chroma(int frame_width, int frame_height);
+
     // Convert the loaded image into the first two framebuffers
     int convert(gl::frame_buf_t &fb);
 
@@ -354,6 +357,10 @@ namespace egl {
     int in_height;
     int offsetX;
     int offsetY;
+
+    GLint chroma_coord_delta_location;
+    int partial_chroma_width = 0;
+    int partial_chroma_height = 0;
 
     // Pointer to the texture to be converted to nv12
     int loaded_texture;

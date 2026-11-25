@@ -1152,8 +1152,9 @@ namespace egl {
     }
 
     auto loc_width_i = gl::ctx.GetUniformLocation(sws.program[1].handle(), "width_i");
-    if (loc_width_i < 0) {
-      BOOST_LOG(error) << "Couldn't find uniform [width_i]"sv;
+    sws.chroma_coord_delta_location = gl::ctx.GetUniformLocation(sws.program[1].handle(), "chroma_coord_delta");
+    if (loc_width_i < 0 || sws.chroma_coord_delta_location < 0) {
+      BOOST_LOG(error) << "Couldn't find UV sampling uniforms"sv;
       return std::nullopt;
     }
 
@@ -1328,6 +1329,11 @@ namespace egl {
     }
   }
 
+  void sws_t::include_partial_chroma(int frame_width, int frame_height) {
+    partial_chroma_width = frame_width % 2 ? frame_width : 0;
+    partial_chroma_height = frame_height % 2 ? frame_height : 0;
+  }
+
   int sws_t::convert(gl::frame_buf_t &fb) {
     gl::ctx.ActiveTexture(GL_TEXTURE0);
     gl::ctx.BindTexture(GL_TEXTURE_2D, loaded_texture);
@@ -1350,7 +1356,18 @@ namespace egl {
 #endif
 
       gl::ctx.UseProgram(program[x].handle());
-      gl::ctx.Viewport(offsetX / (x + 1), offsetY / (x + 1), out_width / (x + 1), out_height / (x + 1));
+      const int divisor = x + 1;
+      int viewport_width = out_width / divisor;
+      int viewport_height = out_height / divisor;
+      if (x == 1 && (partial_chroma_width || partial_chroma_height)) {
+        const bool include_column = out_width > 0 && offsetX == 0 && out_width == partial_chroma_width;
+        const bool include_row = out_height > 0 && offsetY == 0 && out_height == partial_chroma_height;
+        viewport_width += include_column;
+        viewport_height += include_row;
+        // Keep existing chroma sample centers when the viewport gains one cell.
+        gl::ctx.Uniform2f(chroma_coord_delta_location, include_column ? 1.0f / out_width : 0.0f, include_row ? 1.0f / out_height : 0.0f);
+      }
+      gl::ctx.Viewport(offsetX / divisor, offsetY / divisor, viewport_width, viewport_height);
       gl::ctx.DrawArrays(GL_TRIANGLES, 0, 3);
     }
 
