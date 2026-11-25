@@ -18,9 +18,22 @@
     private static bool IsProcessElevated() {
       return RollbackRegression.ProcessElevated;
     }
+    private static string ReadMachineMsiProperty(string productCode, string property) {
+      RollbackRegression.Check(productCode == RollbackRegression.Installed.ProductCode,
+        "firewall recovery queries the exact machine MSI registration");
+      if (property == "ProductState")
+        return RollbackRegression.MachineProductRegistered ? RollbackRegression.NativeProductState.ToString() : null;
+      RollbackRegression.Check(property == "LocalPackage", "only machine-MSI state and cache are consulted");
+      return RollbackRegression.MachineCacheMatches ? RollbackRegression.CachePath : RollbackRegression.IncomingPath;
+    }
+    private static string ReadInstalledMsiRoot(string productCode) {
+      RollbackRegression.Check(productCode == RollbackRegression.Installed.ProductCode, "MSI root is looked up by exact ProductCode");
+      return RollbackRegression.RegisteredMsiRoot;
+    }
     private static bool AccessFirewallRecoveryManualStartup(string executable, bool restore) {
-      RollbackRegression.Check(executable == Path.Combine(RollbackRegression.Installed.InstallLocation, "tools", "sunshinesvc.exe"),
-        "firewall recovery selects the registered Vibeshine service executable");
+      RollbackRegression.Check(RollbackRegression.RegisteredMsiRoot != null
+        && executable == Path.Combine(RollbackRegression.RegisteredMsiRoot, "tools", "sunshinesvc.exe"),
+        "firewall recovery uses only the authoritative MSI component root");
       RollbackRegression.Events.Add(restore ? "startup-restore" : "startup-capture");
       return RollbackRegression.ManualStarts;
     }

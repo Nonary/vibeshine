@@ -5262,14 +5262,19 @@ namespace VibeshineInstaller {
       var code = NormalizeProductCode(productCode);
       if (product == null || !LooksLikeProductCode(code)
           || !string.Equals(NormalizeProductCode(product.ProductCode), code, StringComparison.OrdinalIgnoreCase)
-          || QueryMsiProductStateForRollback(code) != MsiInstallStateDefault
-          || string.IsNullOrWhiteSpace(product.InstallLocation) || !Path.IsPathRooted(product.InstallLocation)) return null;
-      // InstallLocation for this machine-MSI row is obtained from the actual
-      // installed file component, never from a caller or an ARP path.
-      var cached = TryGetPayloadMsiInfo(TryGetProductLocalPackagePath(code));
-      return cached != null && string.Equals(NormalizeProductCode(cached.ProductCode), code, StringComparison.OrdinalIgnoreCase)
-        && string.Equals(NormalizeProductCode(cached.UpgradeCode), NormalizeProductCode(upgradeCode), StringComparison.OrdinalIgnoreCase)
-        ? Path.Combine(product.InstallLocation, "tools", "sunshinesvc.exe")
+          || !string.Equals(ReadMachineMsiProperty(code, "ProductState"), "5", StringComparison.Ordinal)) return null;
+      var cache = TryGetProductLocalPackagePath(code);
+      if (string.IsNullOrWhiteSpace(cache)
+          || !string.Equals(cache, ReadMachineMsiProperty(code, "LocalPackage"), StringComparison.OrdinalIgnoreCase)) return null;
+      var cached = TryGetPayloadMsiInfo(cache);
+      if (cached == null || !string.Equals(NormalizeProductCode(cached.ProductCode), code, StringComparison.OrdinalIgnoreCase)
+          || !string.Equals(NormalizeProductCode(cached.UpgradeCode), NormalizeProductCode(upgradeCode), StringComparison.OrdinalIgnoreCase)) return null;
+
+      // Only Windows Installer's registered executable component can supply
+      // the root for an elevated service write. ARP metadata is for discovery.
+      var root = ReadInstalledMsiRoot(code);
+      return !string.IsNullOrWhiteSpace(root) && Path.IsPathRooted(root)
+        ? Path.Combine(root, "tools", "sunshinesvc.exe")
         : null;
     }
 
@@ -6959,6 +6964,15 @@ namespace VibeshineInstaller {
       if (selectedPayload == null) {
         selectedPayload = candidatePayload;
         return;
+      }
+      // Keep the first rollback package, but retain a later verified Manual
+      // setting for that exact ProductCode before discarding the duplicate.
+      var candidateCode = NormalizeProductCode(candidatePayload.ProductCode);
+      if (!string.IsNullOrEmpty(candidatePayload.FirewallManualStartupUpgradeCode)
+          && string.IsNullOrEmpty(selectedPayload.FirewallManualStartupUpgradeCode)
+          && LooksLikeProductCode(candidateCode)
+          && string.Equals(NormalizeProductCode(selectedPayload.ProductCode), candidateCode, StringComparison.OrdinalIgnoreCase)) {
+        selectedPayload.FirewallManualStartupUpgradeCode = candidatePayload.FirewallManualStartupUpgradeCode;
       }
       TryDeleteStashedPayload(candidatePayload);
     }

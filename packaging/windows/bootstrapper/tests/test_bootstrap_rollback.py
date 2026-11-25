@@ -22,7 +22,7 @@ PRODUCTION_METHODS = (
     "BuildProductDisplayName", "CreatePropertyArgument",
     "CaptureFirewallManualStartup", "BindFirewallManualStartup", "RestoreManualStartupAfterFirewallRetry",
     "RestoreFirewallManualStartup", "GetFirewallRecoveryServiceExecutable", "TryGetUnambiguousMsiRegistrationRecoveryProduct",
-    "IsRecoveryKindAllowed",
+    "IsRecoveryKindAllowed", "AdoptStashedPayload", "TryDeleteStashedPayload",
 )
 
 
@@ -55,13 +55,12 @@ def run(source_path=None):
              for name in ("InstalledProductInfo", "PayloadMsiInfo", "StashedVibeshinePayload", "InstalledProductKind", "MsiSourceIdentity", "MsiSourceRelease")]
     types.append(extract(source, r"^    private static readonly MsiSourceRelease\[\] RecoverableMsiSources = \{.*?^    \};", "source catalog"))
     types.append(extract(source, r"^    private sealed class FirewallStartupPreference \{.*?^    \}", "firewall startup snapshot"))
-    types.append(extract(source, r"^    private const int MsiInstallStateDefault = \d+;", "MSI DEFAULT state"))
     types.append(extract(source, r"^    private static readonly InstalledProductKind\[\] MsiRegistrationRecoveryKinds = \{.*?^    \};", "recovery product kinds"))
     result = extract(source, r"^  internal sealed class InstallerResult \{.*?^  \}", "InstallerResult")
     operation = extract(source, r"^  internal enum InstallerOperation \{.*?^  \}", "InstallerOperation")
     boundaries = (HERE / "rollback_boundary_methods.cs.in").read_text(encoding="utf-8")
     names = re.findall(r"^    (?:private|public) static [^\r\n]+\b(\w+)\(", boundaries, re.M)
-    if len(names) != 19 or set(names) & set(PRODUCTION_METHODS):
+    if len(names) != 21 or set(names) & set(PRODUCTION_METHODS):
         raise RuntimeError("External boundary list changed or includes production methods")
     for name in names:
         parameters = r"\(string msiPath\)" if name == "TryGetPayloadMsiInfo" else r"\("
