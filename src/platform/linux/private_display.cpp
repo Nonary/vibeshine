@@ -99,6 +99,12 @@ namespace platf::linux_private_display {
              restore_context->deadline - std::chrono::steady_clock::now() >= budget);
     }
 
+    struct reservation_t {
+      std::string output_name;
+      std::string sysfs_identity;
+      bool managed;
+    };
+
     struct state_t {
       std::mutex mutex;
       std::optional<json> snapshot;
@@ -106,7 +112,7 @@ namespace platf::linux_private_display {
       bool snapshot_legacy_record {false};
       bool snapshot_greeter_handoff {false};
       std::map<std::string, std::string> snapshot_physical_identities;
-      std::map<std::string, std::string> reservations;
+      std::map<std::string, reservation_t> reservations;
       std::map<std::string, double> retained_scales;
       std::set<std::string> newly_connected_reservations;
       // KDE's idle screen-off reconfigures every GPU. On NVIDIA it wedged GSP
@@ -441,6 +447,31 @@ namespace platf::linux_private_display {
         return matching_connectors.front().string();
       }
       return {};
+    }
+
+    std::optional<reservation_t> probe_reservation_connector(const std::string &name) {
+      std::error_code error;
+      const std::filesystem::path drm_class {"/sys/class/drm"};
+      const auto suffix = "-" + name;
+      std::filesystem::path identity;
+      for (std::filesystem::directory_iterator it {drm_class, error}, end; !error && it != end; it.increment(error)) {
+        const auto filename = it->path().filename().string();
+        if (!filename.ends_with(suffix)) continue;
+        const auto card = std::string_view {filename}.substr(0, filename.size() - suffix.size());
+        if (!card.starts_with("card") || card.size() == 4 ||
+            !std::ranges::all_of(card.substr(4), [](const char ch) { return ch >= '0' && ch <= '9'; })) continue;
+        if (!identity.empty()) return std::nullopt;
+        identity = std::filesystem::canonical(it->path(), error);
+      }
+      if (error || identity.empty()) return std::nullopt;
+      const auto canonical = identity.string();
+      const bool managed = canonical.find("/devices/faux/vibeshine/") != std::string::npos;
+      return reservation_t {name, canonical, managed};
+    }
+
+    bool reservation_connector_matches(const reservation_t &reservation) {
+      const auto current = probe_reservation_connector(reservation.output_name);
+      return current && current->sysfs_identity == reservation.sysfs_identity && current->managed == reservation.managed;
     }
 
     bool connector_is_connected(const std::string &name) {
@@ -927,8 +958,8 @@ namespace platf::linux_private_display {
     }
 
     void remember_reserved_scales(state_t &manager, const json &configuration) {
-      for (const auto &[identity, output_name] : manager.reservations) {
-        remember_scale(manager, identity, find_output(configuration, output_name));
+      for (const auto &[identity, reservation] : manager.reservations) {
+        remember_scale(manager, identity, find_output(configuration, reservation.output_name));
       }
     }
 
@@ -1107,16 +1138,18 @@ namespace platf::linux_private_display {
         });
       };
       if (const auto existing = manager.reservations.find(identity); existing != manager.reservations.end()) {
+        const auto &lease = existing->second;
+        if (!reservation_connector_matches(lease)) return std::nullopt;
         if (const auto configuration = query_configuration()) {
-          if (const auto *output = find_output(*configuration, existing->second); output && connected(*output)) {
-            return existing->second;
+          if (const auto *output = find_output(*configuration, lease.output_name); output && connected(*output)) {
+            return lease.output_name;
           }
         }
-        if (is_managed_output(existing->second)) {
-          const auto connection = connect(existing->second);
+        if (lease.managed) {
+          const auto connection = connect(lease.output_name);
           if (connection != restore_policy::connection_result_e::failed) {
             manager.newly_connected_reservations.insert(identity);
-            if (connection == restore_policy::connection_result_e::published) return existing->second;
+            if (connection == restore_policy::connection_result_e::published) return lease.output_name;
             // Acknowledged hotplug may already be the only live scanout. Keep
             // ownership for guarded recovery and stop trying other connectors.
             return std::nullopt;
@@ -1129,36 +1162,42 @@ namespace platf::linux_private_display {
       // active, keep capturing the already-active private desktop instead of modesetting
       // a second per-client connector and invalidating the first stream's exclusive layout.
       if (reuse_active_reservation && !no_active_sessions && !manager.reservations.empty()) {
-        const auto &active_output = manager.reservations.begin()->second;
-        if (const auto configuration = query_configuration()) {
-          if (const auto *output = find_output(*configuration, active_output); output && connected(*output) && enabled(*output)) {
-            manager.reservations.emplace(identity, active_output);
-            return active_output;
+        const auto &active = manager.reservations.begin()->second;
+        if (reservation_connector_matches(active)) {
+          if (const auto configuration = query_configuration()) {
+            if (const auto *output = find_output(*configuration, active.output_name); output && connected(*output) && enabled(*output)) {
+              manager.reservations.emplace(identity, active);
+              return active.output_name;
+            }
           }
         }
       }
 
       std::set<std::string> used;
-      for (const auto &[_, output] : manager.reservations) {
-        used.insert(output);
+      for (const auto &[_, lease] : manager.reservations) {
+        used.insert(lease.output_name);
       }
       for (const auto &candidate : configured_outputs()) {
         if (used.contains(candidate)) {
           continue;
         }
-        if (is_managed_output(candidate)) {
+        const auto connector = probe_reservation_connector(candidate);
+        if (!connector) continue;
+        if (connector->managed) {
           const auto connection = connect(candidate);
           if (connection != restore_policy::connection_result_e::failed) {
-            manager.reservations.emplace(identity, candidate);
+            manager.reservations.emplace(identity, *connector);
             manager.newly_connected_reservations.insert(identity);
             if (connection == restore_policy::connection_result_e::published) return candidate;
             return std::nullopt;
           }
           continue;
         }
+        // Only an explicit configuration can supply an external connector.
+        if (config::video.dd.virtual_display_outputs.empty()) continue;
         if (const auto configuration = query_configuration()) {
           if (const auto *output = find_output(*configuration, candidate); output && connected(*output)) {
-            manager.reservations.emplace(identity, candidate);
+            manager.reservations.emplace(identity, *connector);
             return candidate;
           }
         }
@@ -1644,8 +1683,8 @@ namespace platf::linux_private_display {
         log_mode_diagnostic("snapshot_failed");
         return false;
       }
-      for (const auto &[_, output_name] : manager.reservations) {
-        reserved_outputs.insert(output_name);
+      for (const auto &[_, lease] : manager.reservations) {
+        reserved_outputs.insert(lease.output_name);
       }
       const auto mode = session.virtual_display_mode_override.value_or(config::video.virtual_display_mode);
       identity = reservation_identity(session, mode == config::video_t::virtual_display_mode_e::shared);
@@ -2089,7 +2128,7 @@ namespace platf::linux_private_display {
                            << "' has no private connector reservation.";
           return false;
         }
-        output_name = reservation->second;
+        output_name = reservation->second.output_name;
       } else {
         output_name = node.device_id.empty() ? node.id : node.device_id;
       }
@@ -2358,7 +2397,7 @@ namespace platf::linux_private_display {
       const bool managed = is_managed_output(name);
       if ((target.kind == display_target::kind_e::physical && managed) ||
           (target.kind == display_target::kind_e::shared_virtual &&
-           (!managed || !manager.reservations.contains("shared") || manager.reservations.at("shared") != name))) return std::nullopt;
+           (!managed || !manager.reservations.contains("shared") || manager.reservations.at("shared").output_name != name))) return std::nullopt;
       if (std::ranges::find(captures, name) == captures.end() || match) return std::nullopt;
       const auto size = output.value("size", json::object());
       const auto refresh = output_refresh(output) * 1000.0;
@@ -2369,7 +2408,7 @@ namespace platf::linux_private_display {
     return match;
   }
 
-  bool remote_remove_owned_display(const std::string &client_uuid) {
+  static bool release_remote_reservation(const std::string &client_uuid, const bool unadmitted) {
     auto target_mutation = display_target::leases().begin_mutation();
     if (!target_mutation) return false;
     if (process_shutdown_preserve_requested()) {
@@ -2381,24 +2420,27 @@ namespace platf::linux_private_display {
     if (reservation == manager.reservations.end()) {
       return true;
     }
-    const auto output_name = reservation->second;
+    const auto &lease = reservation->second;
+    const auto &output_name = lease.output_name;
+    const bool still_reserved = std::ranges::any_of(manager.reservations, [&](const auto &entry) {
+      return entry.first != reservation->first && entry.second.output_name == output_name;
+    });
+    const bool detach_managed_output = !still_reserved && lease.managed;
+    const bool identity_matches = reservation_connector_matches(lease);
+    if (detach_managed_output && !identity_matches) {
+      BOOST_LOG(warning) << "Linux private display: cannot verify the reserved identity of " << output_name << "; keeping release pending.";
+      return false;
+    }
     const auto configuration = query_configuration();
     const auto *departing = configuration ? find_output(*configuration, output_name) : nullptr;
-    if (configuration) remember_scale(manager, reservation->first, departing);
-    const bool still_reserved = std::ranges::any_of(manager.reservations, [&](const auto &entry) {
-      return entry.first != reservation->first && entry.second == output_name;
-    });
-    if (!still_reserved) {
-      const auto managed_identities = managed_connector_identities();
-      const auto identity = managed_identities.find(output_name);
-      if (identity == managed_identities.end()) {
-        // A reservation alone cannot authorize mutation of a physical output.
-        return false;
-      }
+    if (identity_matches) remember_scale(manager, reservation->first, departing);
+    // External outputs were leased logically. Only an exact managed lease can detach.
+    if (detach_managed_output) {
       const bool already_disconnected = configuration && (!departing || !connected(*departing)) &&
-                                        managed_connector_verified_disconnected(output_name, identity->second);
+                                        managed_connector_verified_disconnected(output_name, lease.sysfs_identity);
       if (!already_disconnected) {
         const auto private_names = private_output_set();
+        const auto managed_identities = managed_connector_identities();
         std::optional<std::string> guard;
         const bool capture_ready = wait_for_configuration([&](const json &current) {
           const auto capture_outputs = capture_output_names();
@@ -2409,7 +2451,7 @@ namespace platf::linux_private_display {
             const bool private_output = private_names.contains(name) || managed_identities.contains(name) ||
                                         mode_policy::managed_connector_name(name);
             const bool still_owned = std::ranges::any_of(manager.reservations, [&](const auto &entry) {
-              return entry.second == name;
+              return entry.second.output_name == name;
             });
             if (!private_output || still_owned) survivors.insert(name);
           }
@@ -2422,15 +2464,16 @@ namespace platf::linux_private_display {
         if (!survivor || !connected(*survivor) || !enabled(*survivor)) {
           BOOST_LOG(warning) << "Linux private display: preserving released output " << output_name
                              << " because no distinct capture-ready scanout can guard its disconnect.";
-          // Another owner can prevent idle restore. Keep this release pending
-          // until it has a safe survivor. The final owner can use idle restore.
-          if (manager.reservations.size() > 1) return false;
-        } else if (!managed_connector_identity_matches(output_name, identity->second) ||
+          // An admitted peer can retry under its coordinator lease. A failed
+          // launch no longer has that lease: the saved topology owns its
+          // still-connected connector until guarded idle recovery.
+          if (manager.reservations.size() > 1 && (!unadmitted || !manager.snapshot)) return false;
+        } else if (!reservation_connector_matches(lease) ||
                    !restore_allowed() || !disconnect_managed_output(output_name) ||
                    !wait_for_configuration([&](const json &current) {
                      const auto *output = find_output(current, output_name);
                      return (!output || !connected(*output)) &&
-                            managed_connector_verified_disconnected(output_name, identity->second);
+                            managed_connector_verified_disconnected(output_name, lease.sysfs_identity);
                    }, true)) {
           BOOST_LOG(error) << "Linux private display: could not verify disconnect of released output " << output_name << '.';
           return false;
@@ -2440,6 +2483,14 @@ namespace platf::linux_private_display {
     manager.newly_connected_reservations.erase(reservation->first);
     manager.reservations.erase(reservation);
     return true;
+  }
+
+  bool remote_remove_owned_display(const std::string &client_uuid) {
+    return release_remote_reservation(client_uuid, false);
+  }
+
+  bool remote_release_unadmitted_display(const std::string &client_uuid) {
+    return release_remote_reservation(client_uuid, true);
   }
 
   bool is_kernel_output(const std::string &output_name) {
@@ -2454,7 +2505,7 @@ namespace platf::linux_private_display {
     auto &manager = state();
     std::lock_guard lock {manager.mutex};
     const auto reservation = manager.reservations.find(client_reservation_identity(client_uuid));
-    return reservation == manager.reservations.end() ? std::nullopt : std::make_optional(reservation->second);
+    return reservation == manager.reservations.end() ? std::nullopt : std::make_optional(reservation->second.output_name);
   }
 
   static bool revert_locked(
@@ -2479,8 +2530,8 @@ namespace platf::linux_private_display {
       return true;
     }
     std::set<std::string> reserved_outputs;
-    for (const auto &[_, output_name] : manager.reservations) {
-      reserved_outputs.insert(output_name);
+    for (const auto &[_, lease] : manager.reservations) {
+      reserved_outputs.insert(lease.output_name);
     }
     const auto current = query_configuration();
     if (current) {

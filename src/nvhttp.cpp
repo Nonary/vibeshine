@@ -784,7 +784,9 @@ namespace nvhttp {
       if (!reservation.accepted) {
         // prepare_session() already leased the connector. No coordinator token
         // exists for the usual rollback guard to retire this rejected owner.
-        if (!platf::linux_private_display::remote_remove_owned_display(owner_uuid)) {
+        const auto managed_clients = remote_display_topology::instance().managed_client_identity_ids();
+        if (std::ranges::find(managed_clients, owner_uuid) == managed_clients.end() &&
+            !platf::linux_private_display::remote_release_unadmitted_display(owner_uuid)) {
           BOOST_LOG(error) << "Linux private display: failed to release the capacity-rejected client output.";
         }
         launch_session->normal_vdd_capacity_rejected = true;
@@ -827,7 +829,7 @@ namespace nvhttp {
           const auto protected_clients = remote_display_topology::instance().protected_remote_monitor_client_ids();
           const bool topology_restored = can_retire && remote_display_topology::instance().reapply_composed_topology();
           if (topology_restored && std::find(protected_clients.begin(), protected_clients.end(), owner_uuid) == protected_clients.end()) {
-            (void) platf::linux_private_display::remote_remove_owned_display(owner_uuid);
+            (void) platf::linux_private_display::remote_release_unadmitted_display(owner_uuid);
           }
         }
         launch_session->normal_vdd_identity_token = 0;
@@ -843,7 +845,7 @@ namespace nvhttp {
             reservation.token
           );
           if (can_retire && remote_display_topology::instance().reapply_composed_topology()) {
-            (void) platf::linux_private_display::remote_remove_owned_display(owner_uuid);
+            (void) platf::linux_private_display::remote_release_unadmitted_display(owner_uuid);
           }
         }
         launch_session->normal_vdd_identity_token = 0;
@@ -869,7 +871,7 @@ namespace nvhttp {
       const auto protected_clients = remote_display_topology::instance().protected_remote_monitor_client_ids();
       const bool topology_restored = can_retire && remote_display_topology::instance().reapply_composed_topology();
       if (topology_restored && std::find(protected_clients.begin(), protected_clients.end(), owner_uuid) == protected_clients.end()) {
-        (void) platf::linux_private_display::remote_remove_owned_display(owner_uuid);
+        (void) platf::linux_private_display::remote_release_unadmitted_display(owner_uuid);
       }
     }
 

@@ -71,8 +71,11 @@ namespace platf::linux_private_display {
     const remote_display_topology::mode_t &mode
   );
 
-  /** Release only this client's connector reservation; topology apply performs the disable. */
+  /** Release a client lease, guarding any detach of its managed connector. */
   bool remote_remove_owned_display(const std::string &client_uuid);
+
+  /** Unwind a failed launch which has no coordinator owner to retry release. */
+  bool remote_release_unadmitted_display(const std::string &client_uuid);
 
   std::optional<display_target::observation_t> observe_exact_target(const display_target::descriptor_t &target);
 
