@@ -1367,6 +1367,11 @@ if(SUNSHINE_TEST_ENABLE_COMPONENT AND SUNSHINE_TEST_PYTHON_EXECUTABLE
             "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_display_query_stop.py"
             "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
     set_tests_properties(test_component_display_query_stop PROPERTIES LABELS "component" TIMEOUT 30)
+    add_test(NAME test_component_display_lookup_query_stop
+        COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_display_lookup_query_stop.py"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+    set_tests_properties(test_component_display_lookup_query_stop PROPERTIES LABELS "component" TIMEOUT 30)
 endif()
 sunshine_register_component(NAME test_component_video_colorspace TEST_SOURCE unit/test_video_colorspace.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_colorspace.cpp"

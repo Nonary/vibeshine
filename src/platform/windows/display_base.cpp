@@ -854,7 +854,11 @@ namespace platf::dxgi {
     std::optional<platf::adapter_resolution_t> configured_adapter;
     if (!config::video.adapter_pnp_id.empty()) {
       configured_adapter = display_device::run_display_query([&] {
-        return platf::resolve_adapter(config::video.adapter_name, config::video.adapter_pnp_id);
+        return platf::resolve_adapter(
+          config::video.adapter_name,
+          config::video.adapter_pnp_id,
+          display_device::check_display_query_stop
+        );
       });
       if (!*configured_adapter) {
         BOOST_LOG(error)

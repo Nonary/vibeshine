@@ -251,10 +251,12 @@ namespace platf {
    * A non-empty PnP ID is authoritative and must match exactly one adapter.
    * An empty PnP ID preserves legacy behavior by selecting the first adapter
    * whose DXGI description exactly matches adapter_name.
+   * An optional checkpoint may throw to stop capture-side lookup between native calls.
    */
   adapter_resolution_t resolve_adapter(
     std::string_view adapter_name,
-    std::string_view adapter_pnp_id
+    std::string_view adapter_pnp_id,
+    void (*checkpoint)() = nullptr
   );
 
   /**
