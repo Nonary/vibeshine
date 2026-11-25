@@ -2978,6 +2978,9 @@ namespace video {
       disp.reset();
       disp = platf::display(type, display_name, config, required_adapter);
       if (disp) {
+#ifdef _WIN32
+        display_device::check_display_query_stop();
+#endif
         disp->recovery_capture_instance = capture_recovery::observations().begin_capture();
         break;
       }
@@ -3187,7 +3190,6 @@ namespace video {
     std::vector<std::string> display_names;
     int display_p = -1;
     std::shared_ptr<platf::display_t> disp;
-    std::size_t display_retry_failures = 0;
     config_t producer_config {};
 
     auto capture_pacing_for_display = [&]() {
@@ -3205,80 +3207,93 @@ namespace video {
       return pacing;
     };
 
-    while (capture_ctx_queue->running()) {
-      const auto demand = await_capture_config(capture_ctxs, *capture_ctx_queue, capture_pacing_for_display());
-      if (!demand) {
-        return;
-      }
-      producer_config = *demand;
-      const auto &capture_config = producer_config;
-      if (capture_config.capture_source == capture_source_e::synthetic_black) {
-        disp = make_black_display(capture_config);
-        if (disp) break;
-        BOOST_LOG(error) << "Synthetic black capture is unavailable for the selected encoder backend.";
-        return;
-      }
-
-#ifdef _WIN32
-      display_device::DisplayRecoveryBehaviorGuard recovery {
-        display_device::DisplayRecoveryBehavior::Skip, display_cancellation
-      };
-      display_device::check_display_query_stop();
-#endif
-      const bool target_valid = !capture_config.capture_target_valid || capture_config.capture_target_valid();
-#ifdef _WIN32
-      display_device::check_display_query_stop();
-#endif
-      if (!target_valid) return;
-      const auto required_output = capture_config.capture_source == capture_source_e::exact_output ? capture_config.capture_output : std::nullopt;
-      const bool log_display_retry = policy::should_log_display_retry(display_retry_failures);
-      if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, required_output, log_display_retry, true)) {
-        wait_before_display_retry(display_retry_failures);
-        continue;
-      }
-
-      const bool allow_process_display_preference = video::policy::may_apply_process_display_preference(
-        capture_config.capture_source == capture_source_e::active_output ?
-          video::policy::capture_selection_e::process_preferred :
-          video::policy::capture_selection_e::exact_output
-      );
-      const bool display_ready = ensure_virtual_display_ready(display_names, display_p, allow_process_display_preference, true);
-#ifdef _WIN32
-      display_device::check_display_query_stop();
-#endif
-      if (!display_ready) {
-        wait_before_display_retry(display_retry_failures);
-        continue;
-      }
-
-      if (auto requested = switch_display_event->view_if_newer(switch_display_generation)) {
-        pending_switch_output = video::policy::select_manual_display_output(
-          manual_switch_selection,
-          *requested,
-          display_names
-        );
-      }
-      if (pending_switch_output) {
-        if (auto requested_index = video::policy::resolve_display_output(*pending_switch_output, display_names)) {
-          display_p = *requested_index;
+    auto open_display = [&](bool reopening) {
+      std::size_t display_retry_failures = 0;
+      while (capture_ctx_queue->running()) {
+        const auto demand = await_capture_config(capture_ctxs, *capture_ctx_queue, capture_pacing_for_display());
+        if (!demand) {
+          return false;
         }
-        pending_switch_output.reset();
-      }
+        producer_config = *demand;
 
-      if (log_display_retry) {
-        BOOST_LOG(info) << "Capture worker selecting source=" << static_cast<int>(capture_config.capture_source)
-                        << " output='" << display_names[display_p] << "'.";
-      }
-      disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_config);
-      if (disp) {
-        disp->recovery_capture_instance = capture_recovery::observations().begin_capture();
-        break;
-      }
+        if (reopening) {
+          // Some backends only support one open session per device/application.
+          disp.reset();
+        } else if (producer_config.capture_source == capture_source_e::synthetic_black) {
+          disp = make_black_display(producer_config);
+          if (!disp) {
+            BOOST_LOG(error) << "Synthetic black capture is unavailable for the selected encoder backend.";
+          }
+          return static_cast<bool>(disp);
+        }
 
-      wait_before_display_retry(display_retry_failures);
-    }
+#ifdef _WIN32
+        display_device::DisplayRecoveryBehaviorGuard recovery {
+          display_device::DisplayRecoveryBehavior::Skip, display_cancellation
+        };
+        display_device::check_display_query_stop();
+#endif
+        // Reinit keeps the existing capture target while demand can change its pacing.
+        const auto &capture_config = reopening ? capture_ctxs.front().config : producer_config;
+        if (capture_config.capture_target_valid && !capture_config.capture_target_valid()) {
+#ifdef _WIN32
+          display_device::check_display_query_stop();
+#endif
+          return false;
+        }
+        const auto required_output = capture_config.capture_source == capture_source_e::exact_output ? capture_config.capture_output : std::nullopt;
+        const bool log_display_retry = policy::should_log_display_retry(display_retry_failures);
+        const bool allow_process_display_preference = policy::may_apply_process_display_preference(
+          capture_config.capture_source == capture_source_e::active_output ?
+            policy::capture_selection_e::process_preferred :
+            policy::capture_selection_e::exact_output
+        );
+        if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, required_output, log_display_retry, true) ||
+            !ensure_virtual_display_ready(display_names, display_p, allow_process_display_preference, true)) {
+          wait_before_display_retry(display_retry_failures);
+          continue;
+        }
 
-    if (!disp) {
+        // Negative switch requests reinitialize without changing the output.
+        if (auto requested = switch_display_event->view_if_newer(switch_display_generation)) {
+          pending_switch_output = video::policy::select_manual_display_output(
+            manual_switch_selection,
+            *requested,
+            display_names
+          );
+        }
+        if (pending_switch_output) {
+          if (auto requested_index = video::policy::resolve_display_output(*pending_switch_output, display_names)) {
+            display_p = *requested_index;
+          }
+          pending_switch_output.reset();
+        }
+
+        if (reopening) {
+          // Keep the selected output across the bounded reopen attempts.
+          reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], producer_config);
+        } else {
+          if (log_display_retry) {
+            BOOST_LOG(info) << "Capture worker selecting source=" << static_cast<int>(capture_config.capture_source)
+                            << " output='" << display_names[display_p] << "'.";
+          }
+          disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_config);
+          if (disp) {
+#ifdef _WIN32
+            display_device::check_display_query_stop();
+#endif
+            disp->recovery_capture_instance = capture_recovery::observations().begin_capture();
+          }
+        }
+        if (disp) {
+          return true;
+        }
+        wait_before_display_retry(display_retry_failures);
+      }
+      return static_cast<bool>(disp);
+    };
+
+    if (!open_display(false)) {
       return;
     }
 
@@ -3625,81 +3640,7 @@ namespace video {
                 capture_ctxs.emplace_back(std::move(*pending_context));
               }
             }
-            std::size_t display_retry_failures = 0;
-            while (capture_ctx_queue->running()) {
-              const auto demand = await_capture_config(capture_ctxs, *capture_ctx_queue, capture_pacing_for_display());
-              if (!demand) {
-                return;
-              }
-              producer_config = *demand;
-
-              // Release the display before reenumerating displays, since some capture backends
-              // only support a single display session per device/application.
-              disp.reset();
-
-              // Refresh display names since a display removal might have caused the reinitialization
-#ifdef _WIN32
-              display_device::DisplayRecoveryBehaviorGuard recovery {
-                display_device::DisplayRecoveryBehavior::Skip, display_cancellation
-              };
-              display_device::check_display_query_stop();
-#endif
-              const bool target_valid = !capture_ctxs.front().config.capture_target_valid || capture_ctxs.front().config.capture_target_valid();
-#ifdef _WIN32
-              display_device::check_display_query_stop();
-#endif
-              if (!target_valid) return;
-              const auto required_output = capture_ctxs.front().config.capture_source == capture_source_e::exact_output ? capture_ctxs.front().config.capture_output : std::nullopt;
-              if (!refresh_displays(
-                    encoder.platform_formats->dev_type,
-                    display_names,
-                    display_p,
-                    required_output,
-                    policy::should_log_display_retry(display_retry_failures),
-                    true
-                  )) {
-                wait_before_display_retry(display_retry_failures);
-                continue;
-              }
-
-              const bool allow_process_display_preference = video::policy::may_apply_process_display_preference(
-                capture_ctxs.front().config.capture_source == capture_source_e::active_output ?
-                  video::policy::capture_selection_e::process_preferred :
-                  video::policy::capture_selection_e::exact_output
-              );
-              const bool display_ready = ensure_virtual_display_ready(display_names, display_p, allow_process_display_preference, true);
-#ifdef _WIN32
-              display_device::check_display_query_stop();
-#endif
-              if (!display_ready) {
-                wait_before_display_retry(display_retry_failures);
-                continue;
-              }
-
-              // Process any pending display switch with the new list of displays.
-              // Negative values mean "reinit only; keep display selection logic intact".
-              if (auto requested = switch_display_event->view_if_newer(switch_display_generation)) {
-                pending_switch_output = video::policy::select_manual_display_output(
-                  manual_switch_selection,
-                  *requested,
-                  display_names
-                );
-              }
-              if (pending_switch_output) {
-                if (auto requested_index = video::policy::resolve_display_output(*pending_switch_output, display_names)) {
-                  display_p = *requested_index;
-                }
-                pending_switch_output.reset();
-              }
-
-              // Keep the selected output across the bounded reopen attempts.
-              reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], producer_config);
-              if (disp) {
-                break;
-              }
-              wait_before_display_retry(display_retry_failures);
-            }
-            if (!disp) {
+            if (!open_display(true)) {
               return;
             }
 

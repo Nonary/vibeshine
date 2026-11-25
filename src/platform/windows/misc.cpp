@@ -2344,7 +2344,6 @@ namespace platf {
 
       SP_DEVICE_INTERFACE_DATA interface_data {};
       interface_data.cbSize = sizeof(interface_data);
-      display_device::check_display_query_stop();
       if (!SetupDiOpenDeviceInterfaceW(
             device_info_set,
             adapter_name.adapterDevicePath,
@@ -2388,7 +2387,6 @@ namespace platf {
         return std::nullopt;
       }
 
-      display_device::check_display_query_stop();
       auto *detail = static_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W *>(detail_pointer);
       detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
       SP_DEVINFO_DATA device_info {};
@@ -2432,7 +2430,6 @@ namespace platf {
       }
 
       std::vector<wchar_t> instance_id(instance_id_size, L'\0');
-      display_device::check_display_query_stop();
       if (!SetupDiGetDeviceInstanceIdW(
             device_info_set,
             &device_info,
@@ -2443,7 +2440,6 @@ namespace platf {
         return std::nullopt;
       }
 
-      display_device::check_display_query_stop();
       const auto terminator = std::find(instance_id.begin(), instance_id.end(), L'\0');
       if (terminator == instance_id.begin() || terminator == instance_id.end()) {
         return std::nullopt;
@@ -2481,7 +2477,6 @@ namespace platf {
         }
 
         DXGI_ADAPTER_DESC1 desc {};
-        display_device::check_display_query_stop();
         if (FAILED(adapter->GetDesc1(&desc))) {
           result.enumeration_complete = false;
           result.identity_complete = false;

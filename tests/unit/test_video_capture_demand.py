@@ -27,13 +27,22 @@ def fixture(root):
     callback = block(capture, 'auto push_captured_image_callback = ')
     create = next(line.strip() for line in capture.splitlines() if 'disp = platf::display(' in line)
     reset = next(line.strip() for line in capture.splitlines() if 'reset_display(disp,' in line)
-    initial_loop = capture.index('while (capture_ctx_queue->running()) {')
-    initial = capture[capture.index('{', initial_loop) + 1:capture.index('if (capture_config.capture_source', initial_loop)]
-    reinit = capture.index('case platf::capture_e::reinit:')
-    retry_loop = capture.index('while (capture_ctx_queue->running()) {', capture.index('std::size_t display_retry_failures = 0;', reinit))
-    retry = capture[capture.index('{', retry_loop) + 1:capture.index('// Release the display before', retry_loop)]
-    # The existing production reinit must release the old producer first.
-    assert capture.index('disp.reset();', retry_loop) < capture.index(reset, retry_loop)
+    if 'auto open_display = ' in capture:
+        opening = block(capture, 'auto open_display = ')
+        loop = opening.index('while (capture_ctx_queue->running()) {')
+        demand = opening[opening.index('{', loop) + 1:opening.index('if (reopening)', loop)]
+        retry = demand.replace('return false;', 'return;')
+        initial = retry + 'const auto &capture_config = producer_config;\n'
+        assert opening.index('disp.reset();') < opening.index(reset)
+        assert 'open_display(false)' in capture and 'open_display(true)' in capture
+    else:
+        initial_loop = capture.index('while (capture_ctx_queue->running()) {')
+        initial = capture[capture.index('{', initial_loop) + 1:capture.index('if (capture_config.capture_source', initial_loop)]
+        reinit = capture.index('case platf::capture_e::reinit:')
+        retry_loop = capture.index('while (capture_ctx_queue->running()) {', capture.index('std::size_t display_retry_failures = 0;', reinit))
+        retry = capture[capture.index('{', retry_loop) + 1:capture.index('// Release the display before', retry_loop)]
+        # The existing production reinit must release the old producer first.
+        assert capture.index('disp.reset();', retry_loop) < capture.index(reset, retry_loop)
     windows = (root / 'src/platform/windows/display_base.cpp').read_text()
     rate_init = windows[windows.index('client_frame_rate = config.framerate;'):windows.index('\n    HRESULT status;', windows.index('client_frame_rate = config.framerate;'))]
     rate_adjust = block(windows, 'auto adjust_client_frame_rate = ')

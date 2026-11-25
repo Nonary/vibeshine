@@ -699,7 +699,6 @@ namespace VDISPLAY_SUNSHINE {
       }
 
       buffer.resize((required / sizeof(wchar_t)) + 1);
-      display_device::check_display_query_stop();
       if (!SetupDiGetDeviceRegistryPropertyW(
             info,
             &data,
@@ -742,7 +741,6 @@ namespace VDISPLAY_SUNSHINE {
       }
 
       std::vector<wchar_t> buffer((required / sizeof(wchar_t)) + 1);
-      display_device::check_display_query_stop();
       if (!SetupDiGetDeviceRegistryPropertyW(
             info,
             &data,
@@ -777,7 +775,6 @@ namespace VDISPLAY_SUNSHINE {
       }
 
       std::wstring buffer(required, L'\0');
-      display_device::check_display_query_stop();
       if (!SetupDiGetDeviceInstanceIdW(info, &data, buffer.data(), required, nullptr)) {
         return std::nullopt;
       }
@@ -787,7 +784,6 @@ namespace VDISPLAY_SUNSHINE {
         return std::nullopt;
       }
 
-      display_device::check_display_query_stop();
       return buffer;
     }
 
@@ -8430,9 +8426,7 @@ namespace VDISPLAY_SUNSHINE {
     // Status/enumeration paths must not repair or restart a missing device node.
     // Recovery remains limited to explicit driver initialization/use.
     const auto transport = control_transport_snapshot();
-    display_device::check_display_query_stop();
     if (driver_transport_responsive(transport.get())) {
-      display_device::check_display_query_stop();
       return true;
     }
 

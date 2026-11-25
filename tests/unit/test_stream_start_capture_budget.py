@@ -47,6 +47,7 @@ void sleep_for(std::chrono::milliseconds delay) { sleeps.push_back(delay); Clock
 // Observe the requested delay at the retry wait boundary.
 void sleep_before_display_retry(std::chrono::milliseconds delay) { sleep_for(delay); }
 namespace display_device {
+  void check_display_query_stop() {}
   void wait_for_display_query_retry(std::chrono::milliseconds delay) { sleep_for(delay); }
 }
 namespace display_helper_integration {

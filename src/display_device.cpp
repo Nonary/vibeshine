@@ -623,7 +623,6 @@ namespace display_device {
   std::optional<std::string> try_map_output_name(const std::string &output_name) {
 #ifdef _WIN32
     try {
-      check_display_query_stop();
       if (output_name.empty()) {
         return output_name;
       }
@@ -682,7 +681,6 @@ namespace display_device {
       }
 
       // Fallback to original if not found
-      check_display_query_stop();
       return output_name;
     } catch (const DisplayQueryStopped &) {
       throw;
