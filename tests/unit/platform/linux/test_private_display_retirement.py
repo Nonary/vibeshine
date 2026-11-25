@@ -36,6 +36,7 @@ program = r'''
 #include <vector>
 #include <nlohmann/json.hpp>
 #include "src/platform/linux/private_display_restore_policy.h"
+#include "src/platform/linux/private_display_snapshot_policy.h"
 #include "src/virtual_display_scale.h"
 
 #define BOOST_LOG(level) std::cerr
@@ -119,7 +120,7 @@ json topology;
 std::vector<std::string> captured_names, config_arguments, detached;
 std::set<std::string> managed_names, drm_disconnected;
 std::vector<std::string> configured_names, broker_connected;
-bool detach_publishes = true, lose_survivor_before_detach = false;
+bool detach_publishes = true, lose_survivor_before_detach = false, kscreen_available = true;
 bool restore_allowed() { return true; }
 bool process_shutdown_preserve_requested() { return false; }
 bool revert() { return true; }
@@ -133,7 +134,7 @@ const json *find_output(const json &current, const std::string &name) {
   }
   return nullptr;
 }
-std::optional<json> query_configuration() { return topology; }
+std::optional<json> query_configuration() { return kscreen_available ? std::optional {topology} : std::nullopt; }
 std::vector<std::string> capture_output_names() { return captured_names; }
 template<class Predicate>
 bool wait_for_configuration(Predicate predicate, bool = false) {
@@ -287,9 +288,10 @@ int main(int argc, char **argv) {
   if (scenario == "returning-output") {
     captured_names = {"HDMI-A-1", "DP-3", "Virtual-1"};
     assert(remote_apply_composed_topology({{.id = "HDMI-A-1", .physical = true, .primary = true}}));
+    assert(std::ranges::find(config_arguments, "output.DP-3.disable") == config_arguments.end());
     assert(std::ranges::none_of(config_arguments, [](const auto &argument) {
-      return argument == "output.DP-3.disable" || argument == "output.Virtual-1.disable" ||
-             argument == "output.Virtual-2.disable" || argument == "output.Virtual-9.disable";
+      return argument == "output.Virtual-1.disable" || argument == "output.Virtual-2.disable" ||
+             argument == "output.Virtual-9.disable";
     }));
     assert(detached.empty());
     assert(remote_remove_owned_display("departing"));
@@ -314,6 +316,8 @@ int main(int argc, char **argv) {
     assert(!remote_remove_owned_display("departing"));
     assert(detached == std::vector<std::string>{"Virtual-1"});
     assert(manager.reservations.contains("departing"));
+    assert(!remote_create_or_reclaim("replacement", {}));
+    assert(broker_connected.empty());
   } else if (scenario == "already-detached") {
     drm_disconnected.insert("Virtual-1");
     for (auto &output : topology["outputs"]) if (output["name"] == "Virtual-1") {
@@ -335,8 +339,35 @@ int main(int argc, char **argv) {
     managed_names.erase("Virtual-1");
     assert(!remote_remove_owned_display("departing"));
     assert(detached.empty() && manager.reservations.contains("departing"));
-  } else if (scenario == "failed-launch-active-peer" || scenario == "late-publication") {
+  } else if (scenario.starts_with("absence-")) {
+    const auto class_path = fixture_drm_root / "card0-Virtual-1";
+    const auto original = fs::canonical(class_path);
+    fs::remove(class_path);
+    if (scenario != "absence-original-still-present") fs::remove(original);
+    if (scenario != "absence-kscreen-stale" && scenario != "absence-same-name-active") {
+      std::erase_if(topology["outputs"].get_ref<json::array_t &>(), [](const auto &output) {
+        return output["name"] == "Virtual-1";
+      });
+    }
+    if (scenario == "absence-kscreen-unavailable") kscreen_available = false;
+    if (scenario == "absence-malformed-kscreen") topology["outputs"].front().erase("name");
+    if (scenario == "absence-drm-unavailable") fixture_drm_root /= "missing";
+    if (scenario == "absence-same-name-unpublished" || scenario == "absence-same-name-active") {
+      add_connector("Virtual-1", true, "card1");
+    }
+    if (scenario == "absence-broken-drm-entry") fs::create_directory_symlink(original, class_path);
+    const bool should_release = scenario == "absence-confirmed";
+    assert(remote_remove_owned_display("departing") == should_release);
+    assert(manager.reservations.contains("departing") != should_release);
+    assert(manager.reservations.contains("remaining"));
+    assert(detached.empty() && config_arguments.empty() && broker_connected.empty());
+  } else if (scenario == "failed-launch-active-peer" || scenario == "late-publication" ||
+             scenario == "failed-launch-ready-peer") {
     if (scenario == "late-publication") set_connected("Virtual-1", false);
+    if (scenario == "failed-launch-ready-peer") {
+      captured_names = {"Virtual-2"};
+      detach_publishes = false;
+    }
     auto launch = std::make_shared<rtsp_stream::launch_session_t>();
     launch->client_uuid = "departing";
     rollback_linux_normal_display_identity(launch);
@@ -368,7 +399,11 @@ with tempfile.TemporaryDirectory() as directory:
         "returning-output", "shared-owner", "stale-private-survivor",
         "disappearing-survivor", "unverified-detach", "already-detached",
         "last-scanout", "configured-external", "ambiguous-configured-output",
-        "unexpected-external-in-pool", "managed-identity-loss", "failed-launch-active-peer", "late-publication",
+        "unexpected-external-in-pool", "managed-identity-loss",
+        "absence-confirmed", "absence-original-still-present", "absence-kscreen-stale",
+        "absence-kscreen-unavailable", "absence-malformed-kscreen", "absence-drm-unavailable",
+        "absence-same-name-unpublished", "absence-same-name-active", "absence-broken-drm-entry",
+        "failed-launch-active-peer", "late-publication", "failed-launch-ready-peer",
     ):
         subprocess.run([str(binary), scenario, directory], check=True)
         print(f"PASS {scenario}", flush=True)

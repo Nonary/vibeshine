@@ -449,28 +449,36 @@ namespace platf::linux_private_display {
       return {};
     }
 
-    std::optional<reservation_t> probe_reservation_connector(const std::string &name) {
+    std::optional<reservation_t> probe_reservation_connector(const std::string &name, bool *verified_absent = nullptr) {
+      if (verified_absent) *verified_absent = false;
       std::error_code error;
       const std::filesystem::path drm_class {"/sys/class/drm"};
-      const auto suffix = "-" + name;
       std::filesystem::path identity;
+      bool drm_card_seen = false;
       for (std::filesystem::directory_iterator it {drm_class, error}, end; !error && it != end; it.increment(error)) {
         const auto filename = it->path().filename().string();
-        if (!filename.ends_with(suffix)) continue;
-        const auto card = std::string_view {filename}.substr(0, filename.size() - suffix.size());
+        const auto separator = filename.find('-');
+        const auto card = std::string_view {filename}.substr(0, separator);
         if (!card.starts_with("card") || card.size() == 4 ||
             !std::ranges::all_of(card.substr(4), [](const char ch) { return ch >= '0' && ch <= '9'; })) continue;
+        drm_card_seen = true;
+        if (separator == std::string::npos || std::string_view {filename}.substr(separator + 1) != name) continue;
         if (!identity.empty()) return std::nullopt;
         identity = std::filesystem::canonical(it->path(), error);
+        if (error) return std::nullopt;
       }
-      if (error || identity.empty()) return std::nullopt;
+      if (error) return std::nullopt;
+      if (identity.empty()) {
+        if (verified_absent) *verified_absent = drm_card_seen;
+        return std::nullopt;
+      }
       const auto canonical = identity.string();
       const bool managed = canonical.find("/devices/faux/vibeshine/") != std::string::npos;
       return reservation_t {name, canonical, managed};
     }
 
-    bool reservation_connector_matches(const reservation_t &reservation) {
-      const auto current = probe_reservation_connector(reservation.output_name);
+    bool reservation_connector_matches(const reservation_t &reservation, bool *verified_absent = nullptr) {
+      const auto current = probe_reservation_connector(reservation.output_name, verified_absent);
       return current && current->sysfs_identity == reservation.sysfs_identity && current->managed == reservation.managed;
     }
 
@@ -2425,17 +2433,32 @@ namespace platf::linux_private_display {
     const bool still_reserved = std::ranges::any_of(manager.reservations, [&](const auto &entry) {
       return entry.first != reservation->first && entry.second.output_name == output_name;
     });
-    const bool detach_managed_output = !still_reserved && lease.managed;
-    const bool identity_matches = reservation_connector_matches(lease);
-    if (detach_managed_output && !identity_matches) {
-      BOOST_LOG(warning) << "Linux private display: cannot verify the reserved identity of " << output_name << "; keeping release pending.";
-      return false;
-    }
+    const bool last_managed_lease = !still_reserved && lease.managed;
     const auto configuration = query_configuration();
-    const auto *departing = configuration ? find_output(*configuration, output_name) : nullptr;
-    if (identity_matches) remember_scale(manager, reservation->first, departing);
-    // External outputs were leased logically. Only an exact managed lease can detach.
-    if (detach_managed_output) {
+    bool name_absent = false;
+    const bool identity_matches = reservation_connector_matches(lease, &name_absent);
+    if (last_managed_lease && !identity_matches) {
+      // A complete removal needs no detach. A failed probe or an unpublished
+      // replacement with the same name must keep the release pending.
+      std::error_code error;
+      const bool original_absent = name_absent &&
+        std::filesystem::symlink_status(lease.sysfs_identity, error).type() == std::filesystem::file_type::not_found &&
+        error == std::errc::no_such_file_or_directory;
+      if (!original_absent || !configuration || !snapshot_policy::valid(*configuration) ||
+          (*configuration)["outputs"].empty() || find_output(*configuration, output_name) ||
+          !restore_allowed() || process_shutdown_preserve_requested()) {
+        BOOST_LOG(warning) << "Linux private display: cannot verify the reserved identity of " << output_name << "; keeping release pending.";
+        return false;
+      }
+    }
+    if (identity_matches && configuration) {
+      remember_scale(manager, reservation->first, find_output(*configuration, output_name));
+    }
+    // A rejected launch has no coordinator owner to retry uncertain detach.
+    // The saved topology owns its still-connected connector until idle recovery.
+    if (last_managed_lease && identity_matches && unadmitted && !manager.snapshot) return false;
+    if (last_managed_lease && identity_matches && !unadmitted) {
+      const auto *departing = configuration ? find_output(*configuration, output_name) : nullptr;
       const bool already_disconnected = configuration && (!departing || !connected(*departing)) &&
                                         managed_connector_verified_disconnected(output_name, lease.sysfs_identity);
       if (!already_disconnected) {
@@ -2464,10 +2487,9 @@ namespace platf::linux_private_display {
         if (!survivor || !connected(*survivor) || !enabled(*survivor)) {
           BOOST_LOG(warning) << "Linux private display: preserving released output " << output_name
                              << " because no distinct capture-ready scanout can guard its disconnect.";
-          // An admitted peer can retry under its coordinator lease. A failed
-          // launch no longer has that lease: the saved topology owns its
-          // still-connected connector until guarded idle recovery.
-          if (manager.reservations.size() > 1 && (!unadmitted || !manager.snapshot)) return false;
+          // Another owner can prevent idle restore. Let the coordinator retry
+          // this release until a distinct scanout makes the disconnect safe.
+          if (manager.reservations.size() > 1) return false;
         } else if (!reservation_connector_matches(lease) ||
                    !restore_allowed() || !disconnect_managed_output(output_name) ||
                    !wait_for_configuration([&](const json &current) {
