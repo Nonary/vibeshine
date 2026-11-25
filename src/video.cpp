@@ -81,8 +81,7 @@ extern "C" {
   #include <AMF/core/Debug.h>
   #include <AMF/core/Factory.h>
   #include <AMF/core/Trace.h>
-  #include <display_device/windows/win_display_query_stop.h>
-  #include <stop_token>
+  #include <display_device/windows/win_api_recovery.h>
 
   // These using-declarations must sit between the AMF headers above and
   // hwcontext_amf.h below, and must stay outside the extern "C" block. hwcontext_amf.h
@@ -128,18 +127,12 @@ namespace video {
     }
 #endif
 
-    void sleep_before_display_retry(std::chrono::milliseconds delay) {
-#ifdef _WIN32
-      display_device::wait_for_display_query_retry(delay, [](auto timeout) {
-        std::this_thread::sleep_for(timeout);
-      });
-#else
-      std::this_thread::sleep_for(delay);
-#endif
-    }
-
     void wait_before_display_retry(std::size_t &consecutive_failures) {
-      sleep_before_display_retry(policy::display_retry_delay(consecutive_failures));
+#ifdef _WIN32
+      display_device::wait_for_display_query_retry(policy::display_retry_delay(consecutive_failures));
+#else
+      std::this_thread::sleep_for(policy::display_retry_delay(consecutive_failures));
+#endif
       if (consecutive_failures < std::numeric_limits<std::size_t>::max()) {
         ++consecutive_failures;
       }
@@ -250,7 +243,7 @@ namespace video {
     }
 #endif
 
-    std::optional<std::string> active_virtual_display_dxgi_name() {
+    std::optional<std::string> active_virtual_display_dxgi_name(bool retry_unknown_mapping) {
       auto virtual_displays = VDISPLAY::enumerateVirtualDisplays();
       auto is_dxgi_display_name = [](const std::string &name) {
         static const std::string prefix = "\\\\.\\DISPLAY";
@@ -293,9 +286,14 @@ namespace video {
       std::string configured_virtual_output;
       const auto configured_output = config::get_active_output_name();
       if (!configured_output.empty() && VDISPLAY::is_virtual_display_output(configured_output)) {
-        const auto mapped = display_device::map_output_name(configured_output);
-        if (is_dxgi_display_name(mapped)) {
-          configured_virtual_output = mapped;
+        const auto mapped = display_device::try_map_output_name(configured_output);
+        if (!mapped && retry_unknown_mapping) {
+          // Keep waiting for the configured virtual display instead of
+          // selecting the first available virtual output.
+          return std::nullopt;
+        }
+        if (mapped && is_dxgi_display_name(*mapped)) {
+          configured_virtual_output = *mapped;
         }
       }
 
@@ -310,7 +308,8 @@ namespace video {
     bool ensure_virtual_display_ready(
       std::vector<std::string> &display_names,
       int &display_index,
-      const bool allow_process_display_preference = true
+      const bool allow_process_display_preference = true,
+      [[maybe_unused]] const bool retry_unknown_mapping = false
     ) {
 #ifdef _WIN32
       static thread_local std::chrono::steady_clock::time_point wait_start {};
@@ -337,7 +336,9 @@ namespace video {
         return true;
       }
 
-      if (auto desired_name = active_virtual_display_dxgi_name()) {
+      const auto desired_name = active_virtual_display_dxgi_name(retry_unknown_mapping);
+      display_device::check_display_query_stop();
+      if (desired_name) {
         for (int i = 0; i < static_cast<int>(display_names.size()); ++i) {
           if (boost::iequals(display_names[i], *desired_name)) {
             display_index = i;
@@ -1918,9 +1919,6 @@ namespace video {
   struct capture_thread_async_ctx_t {
     std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue;
     std::thread capture_thread;
-#ifdef _WIN32
-    std::stop_source display_query_stop {std::nostopstate};
-#endif
 
     safe::signal_t reinit_event;
     const encoder_t *encoder_p;
@@ -2992,8 +2990,10 @@ namespace video {
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(*settle_deadline - std::chrono::steady_clock::now());
         delay = std::max(0ms, std::min(delay, remaining));
       }
+      display_device::wait_for_display_query_retry(delay);
+#else
+      std::this_thread::sleep_for(delay);
 #endif
-      sleep_before_display_retry(delay);
     }
   }
 
@@ -3003,13 +3003,18 @@ namespace video {
    * @param dev_type The encoder device type used for display lookup.
    * @param display_names The list of display names to repopulate.
    * @param current_display_index The current display index or -1 if not yet known.
+   * @param required_output The identity for a private exact-output capture lease.
+   * @param log_failure Log a failed refresh in this attempt.
+   * @param retry_unknown_mapping Defer selection when the configured output could not be queried.
+   * @return False when an unavailable mapping should defer capture selection.
    */
-  void refresh_displays(
+  bool refresh_displays(
     platf::mem_type_e dev_type,
     std::vector<std::string> &display_names,
     int &current_display_index,
     const std::optional<std::string> &required_output = std::nullopt,
-    const bool log_failure = true
+    const bool log_failure = true,
+    const bool retry_unknown_mapping = false
   ) {
     if (required_output && !required_output->empty()) {
       display_names = platf::display_names(dev_type);
@@ -3021,22 +3026,28 @@ namespace video {
         // index zero because that can silently capture a physical display.
         display_names.clear();
         current_display_index = -1;
-        return;
+        return true;
       }
       current_display_index = static_cast<int>(std::distance(display_names.begin(), exact));
-      return;
+      return true;
     }
     // It is possible that the output name may be empty even if it wasn't before (device disconnected) or vice-versa
     const auto runtime_output_override = config::runtime_output_name_override();
     const bool has_runtime_output_override = runtime_output_override.has_value();
-    const auto output_name = display_device::map_output_name(config::get_active_output_name());
+    const auto configured_output = config::get_active_output_name();
+    auto mapped_output = display_device::try_map_output_name(configured_output);
+    if (!mapped_output && retry_unknown_mapping) {
+      // Keep the last selection until we know whether the configured output is absent.
+      return false;
+    }
+    const auto output_name = std::move(mapped_output).value_or(configured_output);
     std::string current_display_name;
     auto names_match = [](const std::string &lhs, const std::string &rhs) {
       return boost::iequals(lhs, rhs);
     };
 
     // If we have a current display index, let's start with that
-    if (current_display_index >= 0 && current_display_index < display_names.size()) {
+    if (current_display_index >= 0 && current_display_index < static_cast<int>(display_names.size())) {
       current_display_name = display_names.at(current_display_index);
     }
 
@@ -3065,27 +3076,29 @@ namespace video {
           BOOST_LOG(error) << "No displays were found after reenumeration; retrying with backoff."sv;
         }
         display_names = std::move(old_display_names);
-        return;
+        return true;
       }
 #else
       if (log_failure) {
         BOOST_LOG(error) << "No displays were found after reenumeration; retrying with backoff."sv;
       }
       display_names = std::move(old_display_names);
-      return;
+      return true;
 #endif
     } else if (display_names.empty()) {
       display_names.emplace_back(output_name);
     }
 
+    const auto display_count = static_cast<int>(display_names.size());
+
     // We now have a new display name list, so reset the index back to 0
     current_display_index = 0;
 
     if (has_runtime_output_override && !output_name.empty()) {
-      for (int x = 0; x < display_names.size(); ++x) {
+      for (int x = 0; x < display_count; ++x) {
         if (names_match(display_names[x], output_name)) {
           current_display_index = x;
-          return;
+          return true;
         }
       }
 
@@ -3096,10 +3109,10 @@ namespace video {
 
     // If we had a name previously, let's try to find it in the new list
     if (!current_display_name.empty()) {
-      for (int x = 0; x < display_names.size(); ++x) {
+      for (int x = 0; x < display_count; ++x) {
         if (names_match(display_names[x], current_display_name)) {
           current_display_index = x;
-          return;
+          return true;
         }
       }
 
@@ -3109,31 +3122,30 @@ namespace video {
       // If the previous display disappeared, prefer moving back to configured output before
       // defaulting to index 0 (often primary physical display during transient display churn).
       if (!output_name.empty()) {
-        for (int x = 0; x < display_names.size(); ++x) {
+        for (int x = 0; x < display_count; ++x) {
           if (names_match(display_names[x], output_name)) {
             current_display_index = x;
-            return;
+            return true;
           }
         }
       }
     } else {
-      for (int x = 0; x < display_names.size(); ++x) {
+      for (int x = 0; x < display_count; ++x) {
         if (names_match(display_names[x], output_name)) {
           current_display_index = x;
-          return;
+          return true;
         }
       }
     }
+    return true;
   }
 
-  void captureThread(capture_thread_async_ctx_t &ctx) {
-    const auto capture_ctx_queue = ctx.capture_ctx_queue;
-    auto &display_wp = ctx.display_wp;
-    auto &reinit_event = ctx.reinit_event;
-    const auto &encoder = *ctx.encoder_p;
-#ifdef _WIN32
-    const auto display_stop = ctx.display_query_stop.get_token();
-#endif
+  void captureThread(
+    std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue,
+    sync_util::sync_t<std::weak_ptr<platf::display_t>> &display_wp,
+    safe::signal_t &reinit_event,
+    const encoder_t &encoder
+  ) {
     std::vector<capture_ctx_t> capture_ctxs;
 
     auto fg = util::fail_guard([&]() {
@@ -3147,6 +3159,13 @@ namespace video {
         capture_ctx.images->stop();
       }
     });
+
+#ifdef _WIN32
+    const display_device::DisplayQueryCancellation display_cancellation {
+      [&] { return !capture_ctx_queue->running(); },
+      [&](auto delay) { return capture_ctx_queue->wait_for_stop(delay); },
+    };
+#endif
 
     auto switch_display_event = mail::man->event<int>(mail::switch_display);
     std::uint64_t switch_display_generation {switch_display_event->generation()};
@@ -3201,20 +3220,33 @@ namespace video {
       }
 
 #ifdef _WIN32
-      display_device::DisplayQueryStopGuard stop_guard {display_stop};
+      display_device::DisplayRecoveryBehaviorGuard recovery {
+        display_device::DisplayRecoveryBehavior::Skip, display_cancellation
+      };
       display_device::check_display_query_stop();
 #endif
-      if (capture_config.capture_target_valid && !capture_config.capture_target_valid()) return;
+      const bool target_valid = !capture_config.capture_target_valid || capture_config.capture_target_valid();
+#ifdef _WIN32
+      display_device::check_display_query_stop();
+#endif
+      if (!target_valid) return;
       const auto required_output = capture_config.capture_source == capture_source_e::exact_output ? capture_config.capture_output : std::nullopt;
       const bool log_display_retry = policy::should_log_display_retry(display_retry_failures);
-      refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, required_output, log_display_retry);
+      if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, required_output, log_display_retry, true)) {
+        wait_before_display_retry(display_retry_failures);
+        continue;
+      }
 
       const bool allow_process_display_preference = video::policy::may_apply_process_display_preference(
         capture_config.capture_source == capture_source_e::active_output ?
           video::policy::capture_selection_e::process_preferred :
           video::policy::capture_selection_e::exact_output
       );
-      if (!ensure_virtual_display_ready(display_names, display_p, allow_process_display_preference)) {
+      const bool display_ready = ensure_virtual_display_ready(display_names, display_p, allow_process_display_preference, true);
+#ifdef _WIN32
+      display_device::check_display_query_stop();
+#endif
+      if (!display_ready) {
         wait_before_display_retry(display_retry_failures);
         continue;
       }
@@ -3607,25 +3639,39 @@ namespace video {
 
               // Refresh display names since a display removal might have caused the reinitialization
 #ifdef _WIN32
-              display_device::DisplayQueryStopGuard stop_guard {display_stop};
+              display_device::DisplayRecoveryBehaviorGuard recovery {
+                display_device::DisplayRecoveryBehavior::Skip, display_cancellation
+              };
               display_device::check_display_query_stop();
 #endif
-              if (capture_ctxs.front().config.capture_target_valid && !capture_ctxs.front().config.capture_target_valid()) return;
+              const bool target_valid = !capture_ctxs.front().config.capture_target_valid || capture_ctxs.front().config.capture_target_valid();
+#ifdef _WIN32
+              display_device::check_display_query_stop();
+#endif
+              if (!target_valid) return;
               const auto required_output = capture_ctxs.front().config.capture_source == capture_source_e::exact_output ? capture_ctxs.front().config.capture_output : std::nullopt;
-              refresh_displays(
-                encoder.platform_formats->dev_type,
-                display_names,
-                display_p,
-                required_output,
-                policy::should_log_display_retry(display_retry_failures)
-              );
+              if (!refresh_displays(
+                    encoder.platform_formats->dev_type,
+                    display_names,
+                    display_p,
+                    required_output,
+                    policy::should_log_display_retry(display_retry_failures),
+                    true
+                  )) {
+                wait_before_display_retry(display_retry_failures);
+                continue;
+              }
 
               const bool allow_process_display_preference = video::policy::may_apply_process_display_preference(
                 capture_ctxs.front().config.capture_source == capture_source_e::active_output ?
                   video::policy::capture_selection_e::process_preferred :
                   video::policy::capture_selection_e::exact_output
               );
-              if (!ensure_virtual_display_ready(display_names, display_p, allow_process_display_preference)) {
+              const bool display_ready = ensure_virtual_display_ready(display_names, display_p, allow_process_display_preference, true);
+#ifdef _WIN32
+              display_device::check_display_query_stop();
+#endif
+              if (!display_ready) {
                 wait_before_display_retry(display_retry_failures);
                 continue;
               }
@@ -3646,7 +3692,7 @@ namespace video {
                 pending_switch_output.reset();
               }
 
-              // reset_display() will sleep between retries
+              // Keep the selected output across the bounded reopen attempts.
               reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], producer_config);
               if (disp) {
                 break;
@@ -8017,16 +8063,26 @@ namespace video {
     capture_thread_ctx.capture_ctx_queue = std::make_shared<safe::queue_t<capture_ctx_t>>(30);
 
 #ifdef _WIN32
-    capture_thread_ctx.display_query_stop = std::stop_source {};
     capture_thread_ctx.capture_thread = std::thread {[&capture_thread_ctx] {
       try {
-        captureThread(capture_thread_ctx);
+        captureThread(
+          capture_thread_ctx.capture_ctx_queue,
+          capture_thread_ctx.display_wp,
+          capture_thread_ctx.reinit_event,
+          *capture_thread_ctx.encoder_p
+        );
       } catch (const display_device::DisplayQueryStopped &) {
-        // The worker has already stopped its capture consumers on unwind.
+        // captureThread stopped its consumers while unwinding.
       }
     }};
 #else
-    capture_thread_ctx.capture_thread = std::thread {captureThread, std::ref(capture_thread_ctx)};
+    capture_thread_ctx.capture_thread = std::thread {
+      captureThread,
+      capture_thread_ctx.capture_ctx_queue,
+      std::ref(capture_thread_ctx.display_wp),
+      std::ref(capture_thread_ctx.reinit_event),
+      std::ref(*capture_thread_ctx.encoder_p)
+    };
 #endif
 
     return 0;
@@ -8036,8 +8092,6 @@ namespace video {
     capture_thread_ctx.capture_ctx_queue->stop();
 
 #ifdef _WIN32
-    // Only the final lease ends a worker, even if a peer is still joining.
-    capture_thread_ctx.display_query_stop.request_stop();
     {
       // The queue cannot interrupt a WGC helper handshake already in progress.
       // Notify this generation without entering the driver. Release the borrowed

@@ -270,8 +270,8 @@ namespace video {
   auto capture_config_for_consumers(auto&,auto) { return std::optional<config_t>(test_config); }
   bool same_capture_pacing(auto&,auto&,auto) { return true; }
   bool same_capture_demand(auto&,auto&,auto) { return true; }
-  void refresh_displays(int, std::vector<std::string> &names, int &index, const std::optional<std::string>&, bool) { names={"Virtual-1"}; index=0; }
-  bool ensure_virtual_display_ready(auto&,int,bool) { return true; }
+  bool refresh_displays(int, std::vector<std::string> &names, int &index, const std::optional<std::string>&, bool, bool = false) { names={"Virtual-1"}; index=0; return true; }
+  bool ensure_virtual_display_ready(auto&,int,bool, bool = false) { return true; }
   void wait_before_display_retry(size_t&) { test_queue->stop(); }
   auto make_black_display(const config_t&) { return std::shared_ptr<platf::display_t>{}; }
 }
@@ -398,6 +398,8 @@ int main(int argc,char **argv) {
     }
     if (probe::frames >= probe::wanted_frames) video::test_queue->stop();
   };
+  sync_util::sync_t<std::weak_ptr<platf::display_t>> display;
+  safe::signal_t reinit;
   if (probe::sync_mode) {
     while (video::test_queue->running()) {
       auto disp=platf::display(0,"Virtual-1",video::test_config);
@@ -407,7 +409,7 @@ int main(int argc,char **argv) {
       ++probe::restarts;
     }
   } else {
-@@RUN_CAPTURE_THREAD@@
+    video::captureThread(video::test_queue,display,reinit,video::encoder_t{});
   }
   video::old_encoder_display.reset();
   std::cout << (probe::sync_mode ? "sync " : "async ") << probe::scenario << ": generations=" << probe::generations << " frames=" << probe::frames
@@ -471,26 +473,6 @@ def main():
     sync_start = sync_function.index('      auto status = disp->capture(')
     sync_recovery = sync_function[sync_start:sync_function.rindex('    return encode_e::ok;')]
     sync_recovery = sync_recovery[:sync_recovery.rfind('    }')]
-    retry = function(video, '  void reset_display(')
-    if 'sleep_before_display_retry(' in retry:
-        retry = function(video, '    void sleep_before_display_retry(') + '\n' + retry
-
-    capture = function(video, '  void captureThread(')
-    signature = capture[:capture.index('{')]
-    if 'capture_thread_async_ctx_t &' in signature:
-        context = function(video, '  struct capture_thread_async_ctx_t {')
-        capture = context + ';\n' + capture
-        run_capture = '''    const video::encoder_t encoder;
-    video::capture_thread_async_ctx_t ctx;
-    ctx.capture_ctx_queue = video::test_queue;
-    ctx.encoder_p = &encoder;
-    video::captureThread(ctx);'''
-    else:
-        stop_token = ', {}' if 'std::stop_token' in signature else ''
-        run_capture = f'''    sync_util::sync_t<std::weak_ptr<platf::display_t>> display;
-    safe::signal_t reinit;
-    video::captureThread(video::test_queue, display, reinit, video::encoder_t{{}}{stop_token});'''
-
     replacements = {
         '@@COLOR_TYPES@@': function(types, '  enum class colorspace_e {') + ';\n' + function(types, '  struct sunshine_colorspace_t {') + ';',
         '@@COLOR_FUNCTIONS@@': function(color, '  bool colorspace_is_hdr(') + '\n' + function(color, '  sunshine_colorspace_t colorspace_from_client_config('),
@@ -502,9 +484,8 @@ def main():
         '@@KMS_COMMIT@@': function(kms, '      bool commit_pending_capture_metadata() override {') if '      bool commit_pending_capture_metadata() override {' in kms else '',
         '@@KMS_FIXED_CAPTURE@@': function(kms, '      capture_e capture_fixed_rate('),
         '@@MAKE_ENCODE_DEVICE@@': function(video, '  std::unique_ptr<platf::encode_device_t> make_encode_device(', last=True),
-        '@@RESET_DISPLAY@@': retry,
-        '@@CAPTURE_THREAD@@': capture,
-        '@@RUN_CAPTURE_THREAD@@': run_capture,
+        '@@RESET_DISPLAY@@': function(video, '  void reset_display('),
+        '@@CAPTURE_THREAD@@': function(video, '  void captureThread('),
         '@@SYNC_RECOVERY@@': sync_recovery,
     }
     program = PRELUDE

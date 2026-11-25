@@ -1,5 +1,4 @@
 #include "src/platform/windows/display_helper_borrow_native.h"
-#include "display_lookup_query.h"
 #include "virtual_display.h"
 #include "virtual_display_catalog_policy.h"
 #include "frame_push_capture_policy.h"
@@ -11,7 +10,7 @@
 #include <virtual_display/driver/display_identity.h>
 #include <virtual_display/driver/windows_control_client.h>
 #include <display_device/windows/win_api_layer.h>
-#include <display_device/windows/win_display_query_stop.h>
+#include <display_device/windows/win_api_recovery.h>
 #if defined(SUNSHINE_ENABLE_FRAME_PUSH_CAPTURE) && SUNSHINE_ENABLE_FRAME_PUSH_CAPTURE
   #include <virtual_display/driver/frame_transport_protocol.h>
 #endif
@@ -603,6 +602,7 @@ namespace VDISPLAY_SUNSHINE {
         return false;
       }
 
+      display_device::check_display_query_stop();
       return driver_transport_responsive(opened.transport.get());
     }
 
@@ -681,20 +681,17 @@ namespace VDISPLAY_SUNSHINE {
       HDEVINFO handle;
     };
 
-    bool load_device_property_multi_sz(
-      HDEVINFO info, SP_DEVINFO_DATA &data, DWORD property, std::vector<wchar_t> &buffer,
-      const platf::display_lookup_query_t &query
-    ) {
+    bool load_device_property_multi_sz(HDEVINFO info, SP_DEVINFO_DATA &data, DWORD property, std::vector<wchar_t> &buffer) {
       buffer.clear();
 
       DWORD reg_type = 0;
       DWORD required = 0;
-      const auto [sized, size_error] = query([&] {
-        const auto success = SetupDiGetDeviceRegistryPropertyW(info, &data, property, &reg_type, nullptr, 0, &required);
-        return std::pair {success, success ? ERROR_SUCCESS : GetLastError()};
-      });
-      if (!sized && size_error != ERROR_INSUFFICIENT_BUFFER) {
-        return false;
+      display_device::check_display_query_stop();
+      if (!SetupDiGetDeviceRegistryPropertyW(info, &data, property, &reg_type, nullptr, 0, &required)) {
+        const DWORD err = GetLastError();
+        if (err != ERROR_INSUFFICIENT_BUFFER) {
+          return false;
+        }
       }
 
       if (required == 0) {
@@ -702,13 +699,16 @@ namespace VDISPLAY_SUNSHINE {
       }
 
       buffer.resize((required / sizeof(wchar_t)) + 1);
-      const auto read = query([&] {
-        return SetupDiGetDeviceRegistryPropertyW(
-          info, &data, property, &reg_type, reinterpret_cast<PBYTE>(buffer.data()),
-          static_cast<DWORD>(buffer.size() * sizeof(wchar_t)), &required
-        );
-      });
-      if (!read) {
+      display_device::check_display_query_stop();
+      if (!SetupDiGetDeviceRegistryPropertyW(
+            info,
+            &data,
+            property,
+            &reg_type,
+            reinterpret_cast<PBYTE>(buffer.data()),
+            static_cast<DWORD>(buffer.size() * sizeof(wchar_t)),
+            &required
+          )) {
         return false;
       }
 
@@ -726,17 +726,15 @@ namespace VDISPLAY_SUNSHINE {
       return true;
     }
 
-    std::optional<std::wstring> load_device_property_string(
-      HDEVINFO info, SP_DEVINFO_DATA &data, DWORD property, const platf::display_lookup_query_t &query
-    ) {
+    std::optional<std::wstring> load_device_property_string(HDEVINFO info, SP_DEVINFO_DATA &data, DWORD property) {
       DWORD reg_type = 0;
       DWORD required = 0;
-      const auto [sized, size_error] = query([&] {
-        const auto success = SetupDiGetDeviceRegistryPropertyW(info, &data, property, &reg_type, nullptr, 0, &required);
-        return std::pair {success, success ? ERROR_SUCCESS : GetLastError()};
-      });
-      if (!sized && size_error != ERROR_INSUFFICIENT_BUFFER) {
-        return std::nullopt;
+      display_device::check_display_query_stop();
+      if (!SetupDiGetDeviceRegistryPropertyW(info, &data, property, &reg_type, nullptr, 0, &required)) {
+        const DWORD err = GetLastError();
+        if (err != ERROR_INSUFFICIENT_BUFFER) {
+          return std::nullopt;
+        }
       }
 
       if (required == 0) {
@@ -744,13 +742,16 @@ namespace VDISPLAY_SUNSHINE {
       }
 
       std::vector<wchar_t> buffer((required / sizeof(wchar_t)) + 1);
-      const auto read = query([&] {
-        return SetupDiGetDeviceRegistryPropertyW(
-          info, &data, property, &reg_type, reinterpret_cast<PBYTE>(buffer.data()),
-          static_cast<DWORD>(buffer.size() * sizeof(wchar_t)), &required
-        );
-      });
-      if (!read) {
+      display_device::check_display_query_stop();
+      if (!SetupDiGetDeviceRegistryPropertyW(
+            info,
+            &data,
+            property,
+            &reg_type,
+            reinterpret_cast<PBYTE>(buffer.data()),
+            static_cast<DWORD>(buffer.size() * sizeof(wchar_t)),
+            &required
+          )) {
         return std::nullopt;
       }
 
@@ -761,16 +762,14 @@ namespace VDISPLAY_SUNSHINE {
       return std::wstring(buffer.data());
     }
 
-    std::optional<std::wstring> extract_device_instance_id(
-      HDEVINFO info, SP_DEVINFO_DATA &data, const platf::display_lookup_query_t &query
-    ) {
+    std::optional<std::wstring> extract_device_instance_id(HDEVINFO info, SP_DEVINFO_DATA &data) {
       DWORD required = 0;
-      const auto [sized, size_error] = query([&] {
-        const auto success = SetupDiGetDeviceInstanceIdW(info, &data, nullptr, 0, &required);
-        return std::pair {success, success ? ERROR_SUCCESS : GetLastError()};
-      });
-      if (!sized && size_error != ERROR_INSUFFICIENT_BUFFER) {
-        return std::nullopt;
+      display_device::check_display_query_stop();
+      if (!SetupDiGetDeviceInstanceIdW(info, &data, nullptr, 0, &required)) {
+        const DWORD err = GetLastError();
+        if (err != ERROR_INSUFFICIENT_BUFFER) {
+          return std::nullopt;
+        }
       }
 
       if (required == 0) {
@@ -778,10 +777,8 @@ namespace VDISPLAY_SUNSHINE {
       }
 
       std::wstring buffer(required, L'\0');
-      const auto read = query([&] {
-        return SetupDiGetDeviceInstanceIdW(info, &data, buffer.data(), required, nullptr);
-      });
-      if (!read) {
+      display_device::check_display_query_stop();
+      if (!SetupDiGetDeviceInstanceIdW(info, &data, buffer.data(), required, nullptr)) {
         return std::nullopt;
       }
 
@@ -790,16 +787,16 @@ namespace VDISPLAY_SUNSHINE {
         return std::nullopt;
       }
 
+      display_device::check_display_query_stop();
       return buffer;
     }
 
-    std::optional<std::wstring> find_virtual_display_device_instance_id(const platf::display_lookup_query_t &query = {}) {
-      query.check_stop();
+    std::optional<std::wstring> find_virtual_display_device_instance_id() {
+      display_device::check_display_query_stop();
       DevInfoHandle info(SetupDiGetClassDevsW(&GUID_DEVCLASS_DISPLAY, nullptr, nullptr, DIGCF_PRESENT));
-      const DWORD open_error = info.valid() ? ERROR_SUCCESS : GetLastError();
-      query.check_stop();
       if (!info.valid()) {
-        BOOST_LOG(warning) << "Failed to acquire display device info set for Sunshine virtual display lookup (error=" << open_error << ")";
+        const DWORD err = GetLastError();
+        BOOST_LOG(warning) << "Failed to acquire display device info set for Sunshine virtual display lookup (error=" << err << ")";
         return std::nullopt;
       }
 
@@ -808,24 +805,22 @@ namespace VDISPLAY_SUNSHINE {
       for (DWORD index = 0;; ++index) {
         SP_DEVINFO_DATA device_info {};
         device_info.cbSize = sizeof(device_info);
-        const auto [enumerated, enum_error] = query([&] {
-          const auto success = SetupDiEnumDeviceInfo(info.get(), index, &device_info);
-          return std::pair {success, success ? ERROR_SUCCESS : GetLastError()};
-        });
-        if (!enumerated) {
-          if (enum_error != ERROR_NO_MORE_ITEMS) {
-            BOOST_LOG(warning) << "SetupDiEnumDeviceInfo failed while scanning for Sunshine virtual display device (error=" << enum_error << ")";
+        display_device::check_display_query_stop();
+        if (!SetupDiEnumDeviceInfo(info.get(), index, &device_info)) {
+          const DWORD err = GetLastError();
+          if (err != ERROR_NO_MORE_ITEMS) {
+            BOOST_LOG(warning) << "SetupDiEnumDeviceInfo failed while scanning for Sunshine virtual display device (error=" << err << ")";
           }
           break;
         }
 
         bool matches = false;
-        if (load_device_property_multi_sz(info.get(), device_info, SPDRP_HARDWAREID, hardware_ids, query)) {
+        if (load_device_property_multi_sz(info.get(), device_info, SPDRP_HARDWAREID, hardware_ids)) {
           matches = multi_sz_contains_ci(hardware_ids, SUNSHINE_DRIVER_HARDWARE_ID);
         }
 
         if (!matches) {
-          if (auto friendly = load_device_property_string(info.get(), device_info, SPDRP_FRIENDLYNAME, query)) {
+          if (auto friendly = load_device_property_string(info.get(), device_info, SPDRP_FRIENDLYNAME)) {
             matches = equals_ci(*friendly, SUNSHINE_DRIVER_FRIENDLY_NAME_W);
           }
         }
@@ -834,7 +829,7 @@ namespace VDISPLAY_SUNSHINE {
           continue;
         }
 
-        if (auto instance_id = extract_device_instance_id(info.get(), device_info, query)) {
+        if (auto instance_id = extract_device_instance_id(info.get(), device_info)) {
           return instance_id;
         }
       }
@@ -8429,22 +8424,22 @@ namespace VDISPLAY_SUNSHINE {
   }
 
   static bool is_sunshine_driver_installed_passive() {
-    const platf::display_lookup_query_t query {display_device::check_display_query_stop};
-    query.check_stop();
+    display_device::check_display_query_stop();
     auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(display_helper::borrow::helper_process().load(std::memory_order_acquire));
     if (!borrowed_output_mutation) return false;
     // Status/enumeration paths must not repair or restart a missing device node.
     // Recovery remains limited to explicit driver initialization/use.
     const auto transport = control_transport_snapshot();
-    if (query([&] { return driver_transport_responsive(transport.get()); })) {
+    display_device::check_display_query_stop();
+    if (driver_transport_responsive(transport.get())) {
+      display_device::check_display_query_stop();
       return true;
     }
 
-    if (query([] { return probe_driver_responsive_once(); })) {
-      return true;
-    }
-
-    return find_virtual_display_device_instance_id(query).has_value();
+    display_device::check_display_query_stop();
+    const bool found = probe_driver_responsive_once() || find_virtual_display_device_instance_id().has_value();
+    display_device::check_display_query_stop();
+    return found;
   }
 
   bool isVirtualDisplayDriverInstalled() {

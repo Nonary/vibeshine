@@ -21,12 +21,25 @@
 
   #include <display_device/windows/win_api_layer.h>
   #include <display_device/windows/win_api_recovery.h>
-  #include <display_device/windows/win_display_query_stop.h>
   #include <display_device/windows/win_display_device.h>
 #endif
 
 namespace display_device {
   namespace {
+#ifdef _WIN32
+    // libdisplaydevice returns an empty list when QueryDisplayConfig fails.
+    // Observe that query in the same enumeration so a transient failure is
+    // not mistaken for a missing selection.
+    struct EnumerationApi: WinApiLayer {
+      mutable bool query_available = false;
+
+      std::optional<PathAndModeData> queryDisplayConfig(QueryType type) const override {
+        auto result = WinApiLayer::queryDisplayConfig(type);
+        query_available = result.has_value();
+        return result;
+      }
+    };
+#endif
 
     /**
      * @brief Convert string to unsigned int.
@@ -607,7 +620,7 @@ namespace display_device {
     return std::nullopt;
   }
 
-  std::string map_output_name(const std::string &output_name) {
+  std::optional<std::string> try_map_output_name(const std::string &output_name) {
 #ifdef _WIN32
     try {
       check_display_query_stop();
@@ -636,11 +649,13 @@ namespace display_device {
 
       // Otherwise try to map any provided identifier (device_id, friendly name, or display name)
       // to the Windows logical display name using libdisplaydevice enumeration.
-      auto api = std::make_shared<display_device::WinApiLayer>();
+      auto api = std::make_shared<EnumerationApi>();
       display_device::WinDisplayDevice dd(api);
-      const auto devices = run_display_query([&] {
-        return dd.enumAvailableDevices(DeviceEnumerationDetail::Minimal);
-      });
+      const auto devices = dd.enumAvailableDevices(DeviceEnumerationDetail::Minimal);
+      check_display_query_stop();
+      if (!api->query_available) {
+        return std::nullopt;
+      }
 
       auto equals_ci = [](const std::string &a, const std::string &b) {
         if (a.size() != b.size()) {
@@ -667,12 +682,13 @@ namespace display_device {
       }
 
       // Fallback to original if not found
+      check_display_query_stop();
       return output_name;
     } catch (const DisplayQueryStopped &) {
       throw;
     } catch (...) {
-      // If enumeration fails for any reason, fall back to the provided value.
-      return output_name;
+      check_display_query_stop();
+      return std::nullopt;
     }
 #else
     // Non-Windows: no mapping needed
@@ -680,21 +696,13 @@ namespace display_device {
 #endif
   }
 
+  std::string map_output_name(const std::string &output_name) {
+    return try_map_output_name(output_name).value_or(output_name);
+  }
+
   output_state_e get_output_state(const std::string &output_name) {
 #ifdef _WIN32
     try {
-      // libdisplaydevice returns an empty list when QueryDisplayConfig fails.
-      // Observe that query in the same enumeration so a transient failure is
-      // not mistaken for a missing selection and replaced with a new VDD.
-      struct EnumerationApi: WinApiLayer {
-        mutable bool query_available = false;
-
-        std::optional<PathAndModeData> queryDisplayConfig(QueryType type) const override {
-          auto result = WinApiLayer::queryDisplayConfig(type);
-          query_available = result.has_value();
-          return result;
-        }
-      };
       DisplayRecoveryBehaviorGuard guard(DisplayRecoveryBehavior::Skip);
       auto api = std::make_shared<EnumerationApi>();
       WinDisplayDevice dd(api);

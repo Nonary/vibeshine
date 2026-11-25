@@ -19,13 +19,13 @@
 #include <set>
 #include <sstream>
 #include <string>
-#include <utility>
 #include <vector>
 
 // lib includes
 #include <boost/algorithm/string.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/program_options/parsers.hpp>
+#include <display_device/windows/win_api_recovery.h>
 
 // prevent clang format from "optimizing" the header include order
 // clang-format off
@@ -52,12 +52,10 @@
 #include <Shlwapi.h>
 
 // lib includes
-#include <display_device/windows/win_display_query_stop.h>
 #include <libvirtualgamepad/client.h>
 
 // local includes
 #include "misc.h"
-#include "display_lookup_query.h"
 #include "src/platform/common_services.h"
 #include "nvprefs/nvprefs_interface.h"
 #include "src/boost_process_shim.h"
@@ -2318,16 +2316,14 @@ namespace platf {
       bool identity_complete = true;
     };
 
-    std::optional<std::string> query_adapter_pnp_id(const LUID &adapter_luid, const display_lookup_query_t &query = {}) {
+    std::optional<std::string> query_adapter_pnp_id(const LUID &adapter_luid) {
       DISPLAYCONFIG_ADAPTER_NAME adapter_name {};
       adapter_name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADAPTER_NAME;
       adapter_name.header.size = sizeof(adapter_name);
       adapter_name.header.adapterId = adapter_luid;
       adapter_name.header.id = 0;
-      const auto name_result = query([&] {
-        return DisplayConfigGetDeviceInfo(&adapter_name.header);
-      });
-      if (name_result != ERROR_SUCCESS ||
+      display_device::check_display_query_stop();
+      if (DisplayConfigGetDeviceInfo(&adapter_name.header) != ERROR_SUCCESS ||
           adapter_name.adapterDevicePath[0] == L'\0' ||
           std::find(
             std::begin(adapter_name.adapterDevicePath),
@@ -2337,34 +2333,39 @@ namespace platf {
         return std::nullopt;
       }
 
-      query.check_stop();
+      display_device::check_display_query_stop();
       HDEVINFO device_info_set = SetupDiCreateDeviceInfoList(nullptr, nullptr);
-      const auto destroy_device_info_set = util::fail_guard([&]() {
-        if (device_info_set != INVALID_HANDLE_VALUE) {
-          SetupDiDestroyDeviceInfoList(device_info_set);
-        }
-      });
-      query.check_stop();
       if (device_info_set == INVALID_HANDLE_VALUE) {
         return std::nullopt;
       }
+      const auto destroy_device_info_set = util::fail_guard([&]() {
+        SetupDiDestroyDeviceInfoList(device_info_set);
+      });
 
       SP_DEVICE_INTERFACE_DATA interface_data {};
       interface_data.cbSize = sizeof(interface_data);
-      const auto opened = query([&] {
-        return SetupDiOpenDeviceInterfaceW(device_info_set, adapter_name.adapterDevicePath, 0, &interface_data);
-      });
-      if (!opened) {
+      display_device::check_display_query_stop();
+      if (!SetupDiOpenDeviceInterfaceW(
+            device_info_set,
+            adapter_name.adapterDevicePath,
+            0,
+            &interface_data
+          )) {
         return std::nullopt;
       }
 
+      display_device::check_display_query_stop();
       DWORD detail_size = 0;
-      const auto [detail_fits, detail_error] = query([&] {
-        SetLastError(ERROR_SUCCESS);
-        const auto success = SetupDiGetDeviceInterfaceDetailW(device_info_set, &interface_data, nullptr, 0, &detail_size, nullptr);
-        return std::pair {success, success ? ERROR_SUCCESS : GetLastError()};
-      });
-      if (detail_fits || detail_error != ERROR_INSUFFICIENT_BUFFER ||
+      SetLastError(ERROR_SUCCESS);
+      if (SetupDiGetDeviceInterfaceDetailW(
+            device_info_set,
+            &interface_data,
+            nullptr,
+            0,
+            &detail_size,
+            nullptr
+          ) ||
+          GetLastError() != ERROR_INSUFFICIENT_BUFFER ||
           detail_size < offsetof(SP_DEVICE_INTERFACE_DETAIL_DATA_W, DevicePath) + sizeof(wchar_t)) {
         return std::nullopt;
       }
@@ -2387,14 +2388,19 @@ namespace platf {
         return std::nullopt;
       }
 
+      display_device::check_display_query_stop();
       auto *detail = static_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W *>(detail_pointer);
       detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
       SP_DEVINFO_DATA device_info {};
       device_info.cbSize = sizeof(device_info);
-      const auto detail_read = query([&] {
-        return SetupDiGetDeviceInterfaceDetailW(device_info_set, &interface_data, detail, detail_size, nullptr, &device_info);
-      });
-      if (!detail_read) {
+      if (!SetupDiGetDeviceInterfaceDetailW(
+            device_info_set,
+            &interface_data,
+            detail,
+            detail_size,
+            nullptr,
+            &device_info
+          )) {
         return std::nullopt;
       }
 
@@ -2410,25 +2416,34 @@ namespace platf {
         return std::nullopt;
       }
 
+      display_device::check_display_query_stop();
       DWORD instance_id_size = 0;
-      const auto [instance_id_fits, instance_id_error] = query([&] {
-        SetLastError(ERROR_SUCCESS);
-        const auto success = SetupDiGetDeviceInstanceIdW(device_info_set, &device_info, nullptr, 0, &instance_id_size);
-        return std::pair {success, success ? ERROR_SUCCESS : GetLastError()};
-      });
-      if (instance_id_fits || instance_id_error != ERROR_INSUFFICIENT_BUFFER ||
+      SetLastError(ERROR_SUCCESS);
+      if (SetupDiGetDeviceInstanceIdW(
+            device_info_set,
+            &device_info,
+            nullptr,
+            0,
+            &instance_id_size
+          ) ||
+          GetLastError() != ERROR_INSUFFICIENT_BUFFER ||
           instance_id_size < 2) {
         return std::nullopt;
       }
 
       std::vector<wchar_t> instance_id(instance_id_size, L'\0');
-      const auto instance_id_read = query([&] {
-        return SetupDiGetDeviceInstanceIdW(device_info_set, &device_info, instance_id.data(), instance_id_size, nullptr);
-      });
-      if (!instance_id_read) {
+      display_device::check_display_query_stop();
+      if (!SetupDiGetDeviceInstanceIdW(
+            device_info_set,
+            &device_info,
+            instance_id.data(),
+            instance_id_size,
+            nullptr
+          )) {
         return std::nullopt;
       }
 
+      display_device::check_display_query_stop();
       const auto terminator = std::find(instance_id.begin(), instance_id.end(), L'\0');
       if (terminator == instance_id.begin() || terminator == instance_id.end()) {
         return std::nullopt;
@@ -2441,14 +2456,12 @@ namespace platf {
       return result;
     }
 
-    adapter_enumeration_t enumerate_dxgi_adapters(const display_lookup_query_t &query = {}) {
+    adapter_enumeration_t enumerate_dxgi_adapters() {
       adapter_enumeration_t result;
 
       Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
-      const auto factory_result = query([&] {
-        return CreateDXGIFactory1(IID_PPV_ARGS(factory.GetAddressOf()));
-      });
-      if (FAILED(factory_result)) {
+      display_device::check_display_query_stop();
+      if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(factory.GetAddressOf())))) {
         result.enumeration_complete = false;
         result.identity_complete = false;
         return result;
@@ -2456,9 +2469,8 @@ namespace platf {
 
       for (UINT index = 0;; ++index) {
         Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
-        const auto enum_result = query([&] {
-          return factory->EnumAdapters1(index, adapter.GetAddressOf());
-        });
+        display_device::check_display_query_stop();
+        const HRESULT enum_result = factory->EnumAdapters1(index, adapter.GetAddressOf());
         if (enum_result == DXGI_ERROR_NOT_FOUND) {
           break;
         }
@@ -2469,10 +2481,8 @@ namespace platf {
         }
 
         DXGI_ADAPTER_DESC1 desc {};
-        const auto desc_result = query([&] {
-          return adapter->GetDesc1(&desc);
-        });
-        if (FAILED(desc_result)) {
+        display_device::check_display_query_stop();
+        if (FAILED(adapter->GetDesc1(&desc))) {
           result.enumeration_complete = false;
           result.identity_complete = false;
           continue;
@@ -2481,7 +2491,7 @@ namespace platf {
           continue;
         }
 
-        auto pnp_id = query_adapter_pnp_id(desc.AdapterLuid, query);
+        auto pnp_id = query_adapter_pnp_id(desc.AdapterLuid);
         if (!pnp_id) {
           result.identity_complete = false;
         }
@@ -2535,15 +2545,15 @@ namespace platf {
 
   adapter_resolution_t resolve_adapter(
     const std::string_view adapter_name,
-    const std::string_view adapter_pnp_id,
-    void (*checkpoint)()
+    const std::string_view adapter_pnp_id
   ) {
     if (adapter_name.empty() && adapter_pnp_id.empty()) {
       return adapter_resolution_t {
         .status = adapter_resolution_status_e::automatic,
       };
     }
-    const auto enumeration = enumerate_dxgi_adapters(display_lookup_query_t {checkpoint});
+    const auto enumeration = enumerate_dxgi_adapters();
+    display_device::check_display_query_stop();
     if (adapter_pnp_id.empty()) {
       const auto wanted_name = from_utf8(std::string(adapter_name));
       for (const auto &adapter : enumeration.adapters) {
@@ -2735,10 +2745,8 @@ namespace platf {
     for (int attempt = 0; attempt < max_query_attempts && query_result == ERROR_INSUFFICIENT_BUFFER; ++attempt) {
       UINT32 path_count = 0;
       UINT32 mode_count = 0;
-      const auto size_result = display_device::run_display_query([&] {
-        return GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count);
-      });
-      if (size_result != ERROR_SUCCESS) {
+      display_device::check_display_query_stop();
+      if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count) != ERROR_SUCCESS) {
         return adapter_output_match_e::unknown;
       }
 
@@ -2746,13 +2754,20 @@ namespace platf {
       mode_count = std::max<UINT32>(mode_count, 1);
       paths.resize(path_count);
       modes.resize(mode_count);
-      query_result = display_device::run_display_query([&] {
-        return QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths.data(), &mode_count, modes.data(), nullptr);
-      });
+      display_device::check_display_query_stop();
+      query_result = QueryDisplayConfig(
+        QDC_ONLY_ACTIVE_PATHS,
+        &path_count,
+        paths.data(),
+        &mode_count,
+        modes.data(),
+        nullptr
+      );
       if (query_result == ERROR_SUCCESS) {
         paths.resize(path_count);
       }
     }
+    display_device::check_display_query_stop();
     if (query_result != ERROR_SUCCESS) {
       return adapter_output_match_e::unknown;
     }
@@ -2773,10 +2788,8 @@ namespace platf {
       source_name.header.size = sizeof(source_name);
       source_name.header.adapterId = path.sourceInfo.adapterId;
       source_name.header.id = path.sourceInfo.id;
-      const auto name_result = display_device::run_display_query([&] {
-        return DisplayConfigGetDeviceInfo(&source_name.header);
-      });
-      if (name_result != ERROR_SUCCESS ||
+      display_device::check_display_query_stop();
+      if (DisplayConfigGetDeviceInfo(&source_name.header) != ERROR_SUCCESS ||
           source_name.viewGdiDeviceName[0] == L'\0' ||
           std::find(
             std::begin(source_name.viewGdiDeviceName),
@@ -2787,6 +2800,7 @@ namespace platf {
         continue;
       }
 
+      display_device::check_display_query_stop();
       const auto device_name_end = std::find(
         std::begin(source_name.viewGdiDeviceName),
         std::end(source_name.viewGdiDeviceName),
@@ -2807,6 +2821,7 @@ namespace platf {
       }
     }
 
+    display_device::check_display_query_stop();
     return relevant_name_query_failed ?
              adapter_output_match_e::unknown :
              adapter_output_match_e::no_match;
@@ -2831,8 +2846,7 @@ namespace platf {
 
     const auto adapter = resolve_adapter(
       config::video.adapter_name,
-      config::video.adapter_pnp_id,
-      display_device::check_display_query_stop
+      config::video.adapter_pnp_id
     );
     if (!adapter) {
       log_once(2, [&]() {

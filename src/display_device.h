@@ -37,6 +37,10 @@ namespace display_device {
    */
   [[nodiscard]] std::string map_output_name(const std::string &output_name);
 
+  /// Map an output when topology is known. A failed query has no result,
+  /// while a successful query with no match returns the original name.
+  [[nodiscard]] std::optional<std::string> try_map_output_name(const std::string &output_name);
+
   /**
    * @brief Resolve an exact device ID to its current active Windows capture name.
    * No display-name or friendly-name fallback is allowed.

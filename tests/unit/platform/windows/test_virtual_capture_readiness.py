@@ -57,7 +57,8 @@ std::ostringstream logs;
 bool prefer_virtual = true;
 std::optional<std::string> virtual_output = "virtual";
 bool should_prefer_virtual_display() { return prefer_virtual; }
-auto active_virtual_display_dxgi_name() { return virtual_output; }
+auto active_virtual_display_dxgi_name(bool = false) { return virtual_output; }
+namespace display_device { void check_display_query_stop() {} }
 namespace config { std::string get_active_output_name() { return "virtual"; } }
 namespace boost {
   bool iequals(const std::string &a, const std::string &b) {

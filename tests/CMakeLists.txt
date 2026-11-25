@@ -1358,42 +1358,10 @@ endif()
 sunshine_register_component(NAME test_component_video_policy TEST_SOURCE unit/test_video.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_policy.cpp")
 sunshine_register_component(NAME test_component_video_capture_source TEST_SOURCE unit/test_video_capture_source.cpp
-    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_policy.cpp")
-if(TARGET test_component_video_capture_source)
-    include(CheckCXXSourceCompiles)
-    include(CMakePushCheckState)
-    cmake_push_check_state(RESET)
-    set(CMAKE_REQUIRED_INCLUDES "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/windows/include")
-    set(CMAKE_REQUIRED_LIBRARIES Threads::Threads)
-    # Some libc++ versions ship the header before providing the stop-aware wait.
-    check_cxx_source_compiles([=[
-        #include <display_device/windows/win_display_query_stop.h>
-        int main() {
-            std::stop_source stop;
-            display_device::DisplayQueryStopGuard guard{stop.get_token()};
-            display_device::wait_for_display_query_retry(std::chrono::milliseconds{0}, [](auto) {});
-            return stop.stop_requested();
-        }
-    ]=] SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP)
-    cmake_pop_check_state()
-    if(SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP)
-        target_compile_definitions(test_component_video_capture_source PRIVATE SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP)
-        target_link_libraries(test_component_video_capture_source PRIVATE sunshine_test_displaydevice_headers Threads::Threads)
-    endif()
-endif()
-if(SUNSHINE_TEST_ENABLE_COMPONENT AND SUNSHINE_TEST_HAS_DISPLAY_QUERY_STOP
-   AND SUNSHINE_TEST_PYTHON_EXECUTABLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
-    add_test(NAME test_component_display_query_stop
-        COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
-            "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_display_query_stop.py"
-            "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
-    set_tests_properties(test_component_display_query_stop PROPERTIES LABELS "component" TIMEOUT 30)
-    add_test(NAME test_component_display_lookup_query_stop
-        COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
-            "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_display_lookup_query_stop.py"
-            "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
-    set_tests_properties(test_component_display_lookup_query_stop PROPERTIES LABELS "component" TIMEOUT 30)
-endif()
+    EXTRA_TEST_SOURCES "${CMAKE_CURRENT_LIST_DIR}/unit/test_video_capture_source_peer.cpp"
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_policy.cpp"
+                    "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/windows/win_api_recovery.cpp"
+    LINK_LIBRARIES sunshine_test_displaydevice_headers Threads::Threads)
 sunshine_register_component(NAME test_component_video_colorspace TEST_SOURCE unit/test_video_colorspace.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_colorspace.cpp"
                     "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/logging.cpp"

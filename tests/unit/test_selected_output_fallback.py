@@ -62,6 +62,11 @@ fallback = function(launch[fallback_start:], "if (")
 display_helpers = "\n".join(function(display, signature) for signature in (
     "bool output_exists(", "bool output_is_active(",
 ))
+has_capture_mapping = "try_map_output_name(" in display
+if has_capture_mapping:
+    display_helpers = function(display, "struct EnumerationApi") + ";\n" + display_helpers
+    display_helpers += "\n" + function(display, "std::optional<std::string> try_map_output_name(")
+    display_helpers += "\n" + function(display, "std::string map_output_name(")
 output_state_declaration = ""
 if "output_state_e get_output_state(" in display:
     display_helpers += "\n" + function(display, "output_state_e get_output_state(")
@@ -69,6 +74,70 @@ if "output_state_e get_output_state(" in display:
     start = header.index("enum class output_state_e")
     output_state_declaration = header[start:header.index("};", start) + 2]
 
+capture_refresh = ""
+capture_cases = ""
+if has_capture_mapping:
+    video = (args.source_dir / "video.cpp").read_text()
+    capture_refresh = r'''
+namespace platf {
+  enum class mem_type_e { dxgi };
+  std::vector<std::string> dxgi_names;
+  std::vector<std::string> display_names(mem_type_e) { return dxgi_names; }
+  std::string to_utf8(const std::wstring &name) { return {name.begin(), name.end()}; }
+}
+namespace VDISPLAY {
+  bool is_virtual_display_output(const std::string &name);
+  struct VirtualDisplayInfo { std::wstring device_name; bool is_active; };
+  std::vector<VirtualDisplayInfo> enumerateVirtualDisplays() {
+    std::vector<VirtualDisplayInfo> result;
+    for (const auto &device : display_device::devices) {
+      if (device.virtual_display) {
+        result.push_back({{device.m_display_name.begin(), device.m_display_name.end()}, !device.m_display_name.empty()});
+      }
+    }
+    return result;
+  }
+}
+namespace display_helper_integration { int ms_since_last_apply() { return 10000; } }
+using namespace std::string_view_literals;
+namespace policy = video::policy;
+''' + function(video, "bool refresh_displays(") + "\n" + function(video, "std::optional<std::string> active_virtual_display_dxgi_name(")
+    capture_cases = r'''
+  auto refresh = [&](auto &names, int &index, std::optional<std::string> exact = {}) {
+    return refresh_displays(platf::mem_type_e::dxgi, names, index, exact, false, true);
+  };
+  for (const auto &name : {vdd.m_device_id, vdd.m_friendly_name}) {
+    reset({physical, vdd}, name);
+    platf::dxgi_names = {physical.m_display_name, vdd.m_display_name};
+    std::vector<std::string> names;
+    int index = -1;
+    fail_query = 1;
+    check("capture defers selection when CCD fails with a physical fallback available", refresh(names, index), false);
+    check("failed mapping keeps the previous selection", index == -1 && names.empty(), true);
+    check("capture retries and selects the configured DXGI output", refresh(names, index) && index == 1, true);
+    fail_query = query_count + 1;
+    check("legacy callers keep the original mapping fallback", map_output_name(name) == name, true);
+    const auto before_exact = query_count;
+    check("exact lease skips mapping and keeps its own output", refresh(names, index, physical.m_display_name) && index == 0, true);
+    check("exact lease did not query CCD", query_count == before_exact, true);
+  }
+  reset({physical}, "{missing}");
+  platf::dxgi_names = {physical.m_display_name};
+  std::vector<std::string> missing_names;
+  int missing_index = -1;
+  check("confirmed missing selection retains existing fallback", refresh(missing_names, missing_index) && missing_index == 0, true);
+  auto other_vdd = vdd;
+  other_vdd.m_device_id = "{other-vdd}";
+  other_vdd.m_display_name = R"(\\.\DISPLAY5)";
+  reset({other_vdd, vdd}, vdd.m_device_id);
+  platf::dxgi_names = {other_vdd.m_display_name, vdd.m_display_name};
+  check("first query maps the preferred virtual target", refresh(missing_names, missing_index) && missing_index == 1, true);
+  fail_query = query_count + 1;
+  check("virtual readiness defers if the configured mapping is unavailable", !active_virtual_display_dxgi_name(true), true);
+  check("virtual readiness retries and selects the configured target", active_virtual_display_dxgi_name(true) == vdd.m_display_name, true);
+  fail_query = query_count + 1;
+  check("synchronous readiness keeps existing fallback", active_virtual_display_dxgi_name(false) == other_vdd.m_display_name, true);
+'''
 driver_helpers = ""
 for backend in ("SUNSHINE", "SUDOVDA"):
     source = (args.source_dir / f"platform/windows/virtual_display_{backend.lower()}.cpp").read_text()
@@ -91,8 +160,9 @@ program = r'''
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
-''' + '#include "' + str(args.source_dir.resolve() / "platform/windows/display_helper_request_policy.h") + '"\n' + r'''
+''' + ('#include "' + str(args.source_dir.resolve() / 'video_policy.h') + '"\n' if has_capture_mapping else '') + '#include "' + str(args.source_dir.resolve() / "platform/windows/display_helper_request_policy.h") + '"\n' + r'''
 #define BOOST_LOG(level) std::ostringstream()
 namespace boost {
   bool iequals(const std::string &a, const std::string &b) {
@@ -100,6 +170,8 @@ namespace boost {
   }
 }
 namespace display_device {
+  struct DisplayQueryStopped {};
+  void check_display_query_stop() {}
   enum class DeviceEnumerationDetail { Minimal };
   enum class QueryType { All };
   enum class DisplayRecoveryBehavior { Skip };
@@ -204,7 +276,7 @@ namespace rtsp_stream {
   };
 }
 namespace display_device {
-''' + display_helpers + "\n" + preparation_mapping + "\n}\n" + driver_helpers + preparation_policy + r'''
+''' + display_helpers + "\n" + preparation_mapping + "\n}\n" + capture_refresh + "\n" + driver_helpers + preparation_policy + r'''
 namespace display_helper_integration::helpers {
 ''' + function(request_helpers, "bool output_name_targets_virtual(") + "\n" + function(request_helpers, "bool session_has_physical_output_override(") + r'''
   struct SessionDisplayConfigurationHelper {
@@ -259,6 +331,7 @@ int main() {
     ++cases;
     if (result != expected) { ++failures; std::cerr << (use_sunshine ? "Sunshine" : "SudoVDA") << ": " << name << " expected virtual=" << expected << " got " << result << '\n'; }
   };
+''' + capture_cases + r'''
   for (bool sunshine : {true, false}) {
     use_sunshine = sunshine;
     for (bool owned_override : {false, true}) {
@@ -346,9 +419,10 @@ with tempfile.TemporaryDirectory(prefix="selected-output-fallback-") as temporar
     source = directory / "test.cpp"
     source.write_text(program)
     binary = directory / "test"
+    policy_sources = [str(args.source_dir / "video_policy.cpp")] if has_capture_mapping else []
     subprocess.run([args.compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror",
                     "-Wno-missing-field-initializers", "-D_WIN32",
                     "-I", str(args.source_dir.resolve().parent), str(source),
-                    str(args.source_dir / "platform/windows/display_helper_request_policy.cpp"),
+                    str(args.source_dir / "platform/windows/display_helper_request_policy.cpp"), *policy_sources,
                     "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

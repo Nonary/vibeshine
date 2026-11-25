@@ -512,6 +512,12 @@ namespace safe {
              !_queue.empty();
     }
 
+    // Wait for shutdown without consuming queued work or waking for new items.
+    bool wait_for_stop(std::chrono::milliseconds delay) {
+      std::unique_lock lock {_lock};
+      return _cv.wait_for(lock, delay, [this] { return !_poll_state.running(); });
+    }
+
     template<class Rep, class Period>
     status_t pop(std::chrono::duration<Rep, Period> delay) {
       std::unique_lock ul {_lock, std::defer_lock};
