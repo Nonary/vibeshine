@@ -6,7 +6,10 @@
 
 #include "audio_codec.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <string_view>
 
 namespace stream {
   constexpr std::size_t MAX_AUDIO_PACKET_SIZE = audio::MAX_DOLBY_PACKET_SIZE;
@@ -33,5 +36,43 @@ namespace stream {
 
     const auto required_size = encrypted ? audio_cbc_ciphertext_size(plaintext_size) : plaintext_size;
     return required_size <= destination_capacity;
+  }
+
+  /**
+   * @brief Encode an audio packet and invoke the writer only after successful encoding.
+   *
+   * The capacity check and the write share the same production path, allowing
+   * callers to guarantee that an undersized destination is never submitted.
+   */
+  template<typename Plaintext, typename Encrypt, typename Write>
+  int encode_and_write_audio(
+    bool encrypted,
+    const Plaintext &plaintext,
+    std::uint8_t *destination,
+    std::size_t destination_capacity,
+    Encrypt &&encrypt,
+    Write &&write
+  ) {
+    if (!audio_packet_fits(plaintext.size(), encrypted, destination_capacity)) {
+      return -1;
+    }
+
+    int bytes {};
+    if (encrypted) {
+      bytes = encrypt(
+        std::string_view {reinterpret_cast<const char *>(plaintext.data()), plaintext.size()},
+        destination
+      );
+    } else {
+      std::copy(plaintext.begin(), plaintext.end(), destination);
+      bytes = static_cast<int>(plaintext.size());
+    }
+
+    if (bytes < 0) {
+      return -1;
+    }
+
+    write(destination, static_cast<std::size_t>(bytes));
+    return bytes;
   }
 }  // namespace stream
