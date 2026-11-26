@@ -521,22 +521,6 @@ namespace stream {
   using message_queue_t = std::shared_ptr<safe::queue_t<std::pair<udp::endpoint, std::string>>>;
   using message_queue_queue_t = std::shared_ptr<safe::queue_t<std::tuple<socket_e, av_session_id_t, message_queue_t>>>;
 
-  // return bytes written on success
-  // return -1 on error
-  static inline int encode_audio(bool encrypted, const audio::buffer_t &plaintext, uint8_t *destination, std::size_t destination_capacity, crypto::aes_t &iv, crypto::cipher::cbc_t &cbc) {
-    if (!audio_packet_fits(plaintext.size(), encrypted, destination_capacity)) {
-      return -1;
-    }
-
-    // If encryption isn't enabled
-    if (!encrypted) {
-      std::ranges::copy(plaintext, destination);
-      return (int) plaintext.size();
-    }
-
-    return cbc.encrypt(std::string_view {(char *) std::begin(plaintext), plaintext.size()}, destination, &iv);
-  }
-
   static inline void while_starting_do_nothing(std::atomic<session::state_e> &state) {
     while (state.load(std::memory_order_acquire) == session::state_e::STARTING) {
       std::this_thread::sleep_for(1ms);
@@ -3230,40 +3214,42 @@ namespace stream {
 
       auto &shards_p = session->audio.shards_p;
 
-      auto bytes = encode_audio(
-        session->config.encryptionFlagsEnabled & SS_ENC_AUDIO,
-        packet_data,
-        shards_p[sequenceNumber % RTPA_DATA_SHARDS],
-        MAX_AUDIO_PACKET_BUFFER_SIZE,
-        iv,
-        session->audio.cipher
-      );
-      if (bytes < 0) {
-        BOOST_LOG(error) << "Couldn't encode audio packet"sv;
-        break;
-      }
-
-      BOOST_LOG(verbose) << "Audio [seq "sv << sequenceNumber << ", pts "sv << timestamp << "] ::  send..."sv;
-
       audio_packet.rtp.sequenceNumber = util::endian::big(sequenceNumber);
       audio_packet.rtp.timestamp = util::endian::big(timestamp);
 
-      session->audio.sequenceNumber++;
-      session->audio.timestamp += session->config.audio.packetDuration;
-
       auto peer_address = session->audio.peer.address();
       try {
-        auto send_info = platf::send_info_t {
-          (const char *) &audio_packet,
-          sizeof(audio_packet),
-          (const char *) shards_p[sequenceNumber % RTPA_DATA_SHARDS],
-          (size_t) bytes,
-          (uintptr_t) sock.native_handle(),
-          peer_address,
-          session->audio.peer.port(),
-          session->localAddress,
-        };
-        platf::send(send_info);
+        auto bytes = encode_and_write_audio(
+          session->config.encryptionFlagsEnabled & SS_ENC_AUDIO,
+          packet_data,
+          shards_p[sequenceNumber % RTPA_DATA_SHARDS],
+          MAX_AUDIO_PACKET_BUFFER_SIZE,
+          [&session, &iv](std::string_view plaintext, std::uint8_t *destination) {
+            return session->audio.cipher.encrypt(plaintext, destination, &iv);
+          },
+          [&](const std::uint8_t *data, std::size_t size) {
+            auto send_info = platf::send_info_t {
+              (const char *) &audio_packet,
+              sizeof(audio_packet),
+              (const char *) data,
+              size,
+              (uintptr_t) sock.native_handle(),
+              peer_address,
+              session->audio.peer.port(),
+              session->localAddress,
+            };
+            platf::send(send_info);
+          }
+        );
+        if (bytes < 0) {
+          BOOST_LOG(error) << "Couldn't encode audio packet"sv;
+          break;
+        }
+
+        BOOST_LOG(verbose) << "Audio [seq "sv << sequenceNumber << ", pts "sv << timestamp << "] ::  send..."sv;
+
+        session->audio.sequenceNumber++;
+        session->audio.timestamp += session->config.audio.packetDuration;
 
         auto &fec_packet = session->audio.fec_packet;
         // initialize the FEC header at the beginning of the FEC block
