@@ -1,7 +1,7 @@
 /**
  * @file tests/unit/platform/linux/test_kmsgrab_framebuffer.cpp
- * @brief GEM framebuffer ownership, framebuffer gap, and recovered output
- * checks without a DRM device.
+ * @brief GEM framebuffer ownership and framebuffer gap checks without a DRM
+ * device.
  */
 #include "../../../tests_common.h"
 
@@ -52,77 +52,87 @@ namespace {
   }
 
   using gap_t = platf::kms::framebuffer_gap_t;
+  using frame_e = gap_t::frame_e;
   using step_e = gap_t::step_e;
   using namespace std::chrono_literals;
 
-  TEST(KmsFramebufferGap, ShortGapHoldsTheLastFrame) {
-    // A modeset clears the plane framebuffer for a few frames. Capture must
-    // hold the last frame instead of tearing the capture generation down.
-    gap_t gap;
-    const auto start = gap_t::clock::time_point {} + 1h;
+  constexpr auto start = gap_t::clock::time_point {} + 1h;
 
-    EXPECT_EQ(gap.missing(start), step_e::started);
-    EXPECT_EQ(gap.missing(start + 16ms), step_e::holding);
-    EXPECT_EQ(gap.missing(start + gap_t::limit - 1ms), step_e::holding);
-    EXPECT_TRUE(gap.present());
-    EXPECT_FALSE(gap.present());
+  TEST(KmsFramebufferGap, CapturesWhileTheOutputHasAFramebuffer) {
+    gap_t gap;
+
+    EXPECT_EQ(gap.observe(frame_e::acquired, start), step_e::capture);
+    EXPECT_EQ(gap.observe(frame_e::acquired, start + 16ms), step_e::capture);
+    EXPECT_FALSE(gap.active());
+  }
+
+  TEST(KmsFramebufferGap, ShortGapHoldsTheLastFrame) {
+    // A modeset clears the framebuffer for a few frames. Capture must hold
+    // the last frame instead of tearing the capture generation down.
+    gap_t gap;
+
+    EXPECT_EQ(gap.observe(frame_e::missing, start), step_e::started);
+    EXPECT_TRUE(gap.active());
+    EXPECT_EQ(gap.observe(frame_e::missing, start + 16ms), step_e::holding);
+    EXPECT_EQ(gap.observe(frame_e::missing, start + gap_t::limit - 1ms), step_e::holding);
+    EXPECT_TRUE(gap.active());
+  }
+
+  TEST(KmsFramebufferGap, ReturnedFramebufferReinitializesOnce) {
+    // The modeset can change the plane's CRTC, the connector on it, or the
+    // output geometry. A returned framebuffer of the same size does not show
+    // that they are unchanged, so it ends the capture generation.
+    gap_t gap;
+
+    EXPECT_EQ(gap.observe(frame_e::missing, start), step_e::started);
+    EXPECT_EQ(gap.observe(frame_e::acquired, start + 16ms), step_e::recovered);
+    EXPECT_FALSE(gap.active());
+    EXPECT_EQ(gap.observe(frame_e::acquired, start + 32ms), step_e::capture);
+  }
+
+  TEST(KmsFramebufferGap, FailedLookupDoesNotEndTheGap) {
+    // The framebuffer ID returns, but its lookup fails while the output is
+    // reconfigured. Only a framebuffer that capture read ends the gap, so the
+    // next successful lookup still reinitializes instead of being captured.
+    gap_t gap;
+
+    EXPECT_EQ(gap.observe(frame_e::missing, start), step_e::started);
+    EXPECT_EQ(gap.observe(frame_e::unreadable, start + 16ms), step_e::holding);
+    EXPECT_TRUE(gap.active());
+    EXPECT_EQ(gap.observe(frame_e::unreadable, start + 32ms), step_e::holding);
+    EXPECT_EQ(gap.observe(frame_e::acquired, start + 48ms), step_e::recovered);
+  }
+
+  TEST(KmsFramebufferGap, FailedLookupsCountTowardTheLimit) {
+    gap_t gap;
+
+    EXPECT_EQ(gap.observe(frame_e::missing, start), step_e::started);
+    EXPECT_EQ(gap.observe(frame_e::unreadable, start + gap_t::limit), step_e::expired);
+    EXPECT_FALSE(gap.active());
+  }
+
+  TEST(KmsFramebufferGap, FailedLookupOutsideAGapSkipsTheFrame) {
+    // A framebuffer can be removed between reading the plane and looking up
+    // its framebuffer. Outside a gap, that race skips one frame as before and
+    // does not start a gap.
+    gap_t gap;
+
+    EXPECT_EQ(gap.observe(frame_e::unreadable, start), step_e::skip);
+    EXPECT_FALSE(gap.active());
+    EXPECT_EQ(gap.observe(frame_e::acquired, start + 16ms), step_e::capture);
   }
 
   TEST(KmsFramebufferGap, LastingGapReinitializesOnce) {
     // An output that stays without a framebuffer (for example, a display that
     // is off) must reinitialize instead of freezing.
     gap_t gap;
-    const auto start = gap_t::clock::time_point {} + 1h;
 
-    EXPECT_EQ(gap.missing(start), step_e::started);
-    EXPECT_EQ(gap.missing(start + gap_t::limit), step_e::expired);
-    EXPECT_FALSE(gap.present());
+    EXPECT_EQ(gap.observe(frame_e::missing, start), step_e::started);
+    EXPECT_EQ(gap.observe(frame_e::missing, start + gap_t::limit), step_e::expired);
+    EXPECT_FALSE(gap.active());
 
     // A gap that continues after reinitialization is a new gap.
-    EXPECT_EQ(gap.missing(start + gap_t::limit + 16ms), step_e::started);
-    EXPECT_EQ(gap.missing(start + gap_t::limit + 32ms), step_e::holding);
-  }
-
-  TEST(KmsFramebufferGap, ReturnedFramebufferRestartsTheLimit) {
-    // Separate short gaps must not add up to the limit.
-    gap_t gap;
-    const auto start = gap_t::clock::time_point {} + 1h;
-
-    EXPECT_EQ(gap.missing(start), step_e::started);
-    EXPECT_EQ(gap.missing(start + gap_t::limit - 1s), step_e::holding);
-    EXPECT_TRUE(gap.present());
-    EXPECT_EQ(gap.missing(start + gap_t::limit), step_e::started);
-    EXPECT_EQ(gap.missing(start + gap_t::limit + gap_t::limit - 1s), step_e::holding);
-  }
-
-  constexpr std::uint32_t captured_crtc = 41;
-  constexpr std::uint32_t other_crtc = 42;
-
-  TEST(KmsRecoveredFramebuffer, AcceptsTheUnchangedOutput) {
-    EXPECT_TRUE(platf::kms::recovered_framebuffer_matches(captured_crtc, captured_crtc, captured_crtc));
-    // CRTC export reads no plane, so only the connector binding applies.
-    EXPECT_TRUE(platf::kms::recovered_framebuffer_matches(captured_crtc, captured_crtc, std::nullopt));
-  }
-
-  TEST(KmsRecoveredFramebuffer, RejectsAPlaneThatMovedToAnotherCrtc) {
-    // The saved plane now scans out another output. A frame of the same size
-    // would pass the dimensions check.
-    EXPECT_FALSE(platf::kms::recovered_framebuffer_matches(captured_crtc, captured_crtc, other_crtc));
-  }
-
-  TEST(KmsRecoveredFramebuffer, RejectsAConnectorThatNoLongerDrivesTheCrtc) {
-    // The selected connector moved to another CRTC, and another connector
-    // took over the captured one.
-    EXPECT_FALSE(platf::kms::recovered_framebuffer_matches(captured_crtc, other_crtc, captured_crtc));
-    EXPECT_FALSE(platf::kms::recovered_framebuffer_matches(captured_crtc, other_crtc, std::nullopt));
-    // An encoder without a CRTC reports CRTC 0.
-    EXPECT_FALSE(platf::kms::recovered_framebuffer_matches(captured_crtc, 0, captured_crtc));
-  }
-
-  TEST(KmsRecoveredFramebuffer, RejectsAConnectorItCannotConfirm) {
-    // A connector that cannot be read, is disconnected, or has no encoder
-    // cannot confirm that the framebuffer belongs to the captured output.
-    EXPECT_FALSE(platf::kms::recovered_framebuffer_matches(captured_crtc, std::nullopt, captured_crtc));
-    EXPECT_FALSE(platf::kms::recovered_framebuffer_matches(captured_crtc, std::nullopt, std::nullopt));
+    EXPECT_EQ(gap.observe(frame_e::missing, start + gap_t::limit + 16ms), step_e::started);
+    EXPECT_EQ(gap.observe(frame_e::missing, start + gap_t::limit + 32ms), step_e::holding);
   }
 }  // namespace

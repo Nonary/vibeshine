@@ -1,8 +1,7 @@
 /**
  * @file src/platform/linux/kmsgrab_framebuffer.h
- * @brief Release GEM handles owned by a captured KMS framebuffer, track gaps
- * in which the captured output has no framebuffer, and check the output that a
- * framebuffer belongs to when it returns.
+ * @brief Release GEM handles owned by a captured KMS framebuffer, and track
+ * gaps in which the captured output has no framebuffer.
  */
 #pragma once
 
@@ -34,37 +33,66 @@ namespace platf::kms {
   }
 
   /**
-   * @brief Tracks how long the captured output has had no framebuffer.
+   * @brief Tracks gaps in which the captured output has no framebuffer.
    *
    * A modeset, or a compositor reconfiguring its outputs, can clear the
    * framebuffer of the captured plane or CRTC for a moment. Capture holds the
-   * last frame through such a gap in the running capture generation. A gap
-   * that lasts `limit` is not transient (for example, the output is off), so
-   * capture reinitializes instead of freezing.
+   * last frame through such a gap in the running capture generation, so it
+   * does not reinitialize while the output is still reconfiguring.
+   *
+   * The gap ends the capture generation in either of two ways. When the gap
+   * lasts `limit`, the output is not coming back soon (for example, it is
+   * off). When a framebuffer returns, the modeset can have changed what
+   * `init()` cached: the plane's CRTC, the connector on that CRTC, the CRTC
+   * origin, or the compositor's output placement and scale. A framebuffer of
+   * the same size does not show that those are unchanged, so capture
+   * reinitializes and rebuilds them from the live state.
    */
   class framebuffer_gap_t {
   public:
     using clock = std::chrono::steady_clock;
 
     /**
-     * @brief What capture does for a frame without a framebuffer.
+     * @brief What capture found for the captured output.
+     */
+    enum class frame_e {
+      acquired,  ///< A framebuffer was read.
+      missing,  ///< The output has no framebuffer.
+      unreadable,  ///< The output has a framebuffer ID that could not be read.
+    };
+
+    /**
+     * @brief What capture does for a frame.
      */
     enum class step_e {
-      started,  ///< The gap began. Hold the last frame.
+      capture,  ///< No gap. Capture the framebuffer.
+      skip,  ///< No gap, but the framebuffer could not be read. Skip this frame.
+      started,  ///< A gap began. Hold the last frame.
       holding,  ///< The gap continues. Hold the last frame.
       expired,  ///< The gap lasted `limit`. Reinitialize capture.
+      recovered,  ///< A framebuffer returned after a gap. Reinitialize capture.
     };
 
     static constexpr auto limit = std::chrono::seconds(5);
 
     /**
-     * @brief Records a frame for which the output has no framebuffer.
+     * @brief Records what capture found for a frame.
+     * @param frame What capture found.
      * @param now The time of the frame.
-     * @return What capture does for this frame. After `expired` the next
-     * missing frame starts a new gap.
+     * @return What capture does for this frame.
+     *
+     * Outside a gap, a framebuffer that cannot be read is a transient lookup
+     * race and does not start a gap. Inside a gap, it continues the gap, so
+     * only a framebuffer that capture read ends the gap as `recovered`.
      */
-    step_e missing(clock::time_point now) {
+    step_e observe(frame_e frame, clock::time_point now) {
+      if (frame == frame_e::acquired) {
+        return std::exchange(start, std::nullopt) ? step_e::recovered : step_e::capture;
+      }
       if (!start) {
+        if (frame == frame_e::unreadable) {
+          return step_e::skip;
+        }
         start = now;
         return step_e::started;
       }
@@ -76,42 +104,13 @@ namespace platf::kms {
     }
 
     /**
-     * @brief Records a frame for which the output has a framebuffer again.
-     * @return `true` if this frame ends a gap. Capture then checks the
-     * framebuffer with `recovered_framebuffer_matches()` before it accepts it.
+     * @brief Whether the captured output is in a gap.
      */
-    bool present() {
-      return std::exchange(start, std::nullopt).has_value();
+    [[nodiscard]] bool active() const {
+      return start.has_value();
     }
 
   private:
     std::optional<clock::time_point> start;
   };
-
-  /**
-   * @brief Checks that a framebuffer that returns after a gap belongs to the
-   * captured output.
-   *
-   * During a gap, the compositor can move the captured plane to another CRTC,
-   * or bind another connector to the captured CRTC. A framebuffer of the same
-   * size would pass the dimensions check, so capture compares the live bindings
-   * with the CRTC it selected, and reinitializes when either one changed.
-   *
-   * @param captured_crtc_id The CRTC that capture selected.
-   * @param connector_crtc_id The CRTC that drives the selected connector now,
-   * or `std::nullopt` when the connector cannot be read, is disconnected, or
-   * has no encoder.
-   * @param plane_crtc_id The CRTC that the captured plane scans out to now, or
-   * `std::nullopt` when capture exports the CRTC's framebuffer and reads no
-   * plane.
-   * @return `true` if capture can accept the framebuffer.
-   */
-  constexpr bool recovered_framebuffer_matches(
-    std::uint32_t captured_crtc_id,
-    std::optional<std::uint32_t> connector_crtc_id,
-    std::optional<std::uint32_t> plane_crtc_id
-  ) {
-    return connector_crtc_id == captured_crtc_id &&
-           (!plane_crtc_id || *plane_crtc_id == captured_crtc_id);
-  }
 }  // namespace platf::kms
