@@ -154,6 +154,8 @@ struct Request {int sequenceNumber=1;char *payload=nullptr;int payloadLength=0;O
 struct Address {operator int() const{return 0;} std::string to_string() const{return "local";}};
 struct Endpoint {Address address() const{return {};}};
 struct Socket {Endpoint local_endpoint(boost::system::error_code &) {return {};} Endpoint remote_endpoint(boost::system::error_code &) {return {};} Endpoint remote_endpoint(){return {};}};
+// Production ANNOUNCE helpers use tcp::socket; the harness substitutes its controlled socket.
+namespace tcp { using socket = Socket; }
 struct socket_t {Socket sock;};
 int response_status=0;std::string response_audio_codec;
 void respond(Socket &,launch_session_t &,OPTION_ITEM *option,int status,const char *,int,std::initializer_list<int>) {
