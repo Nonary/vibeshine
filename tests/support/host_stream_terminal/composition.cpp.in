@@ -1,5 +1,4 @@
 #include "src/host_stream_control.h"
-#include "src/rtsp_audio_policy.h"
 #include "src/display_target_lease.h"
 #include "src/remote_display_topology.h"
 #include <algorithm>
@@ -63,6 +62,9 @@ bool eac3_available(){return eac3_encoder;}
 @DOLBY_BITRATE@
 @DOLBY_NAME@
 }
+namespace rtsp_stream {
+@RTSP_AUDIO_POLICY@
+}
 namespace stream {
 struct monitor_t {
  int height=0,width=0,framerate=0,encodingFramerate=0,framerateX100=0,bitrate=0,client_requested_bitrate=0,slicesPerFrame=0,numRefFrames=0,encoderCscMode=0,videoFormat=0,dynamicRange=0,chromaSamplingType=0,enableIntraRefresh=0,packetsize=0,pyrowave_min_parity_shards=0;
@@ -104,7 +106,7 @@ void maybe_apply_deferred() {}
 std::shared_mutex apply_gate;
 std::shared_lock<std::shared_mutex> acquire_apply_read_gate(){return std::shared_lock(apply_gate);}
 }
-namespace config {struct {std::string format="opus";bool high_quality_audio=false;} audio;}
+namespace config {struct {std::string format="opus";} audio;}
 namespace video {int active_hevc_mode=3,active_av1_mode=3,active_pyrowave_mode=2;}
 namespace net {int encryption_mode_for_address(int) {return 0;}}
 namespace platf {std::uint64_t routed_link_bps(int,int){return 0;}}
