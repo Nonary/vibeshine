@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string_view>
 
 namespace stream {
@@ -60,7 +61,7 @@ namespace stream {
     int bytes {};
     if (encrypted) {
       bytes = encrypt(
-        std::string_view {reinterpret_cast<const char *>(plaintext.data()), plaintext.size()},
+        std::string_view {reinterpret_cast<const char *>(std::to_address(plaintext.begin())), plaintext.size()},
         destination
       );
     } else {
