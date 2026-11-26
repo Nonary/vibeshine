@@ -55,7 +55,7 @@ fragments={
 'RECONCILE_MONITOR_LOCKED':body(rtsp,'    void reconcile_abandoned_monitor_locked(','    '),
 'RETIRE_FAILED_MONITOR_START':body(rtsp,'    void retire_failed_monitor_start_locked(','    '),
 'RECONCILE_MONITOR':body(rtsp,'    void reconcile_abandoned_monitor(','    '),
-'CSEQ_HEADER':re.search(r'  char cseq_header\\[\\] = "[^"]+";',rtsp).group(0),
+'CSEQ_HEADER':re.search(r'  char cseq_header\[\] = "[^"]+";',rtsp).group(0),
 'ANNOUNCE_ATTRIBUTES':body(rtsp,'  std::unordered_map<std::string_view, std::string_view> parse_announce_attributes(','  '),
 'ANNOUNCE_PYROWAVE':body(rtsp,'  bool configure_pyrowave_announce(','  '),
 'ANNOUNCE_AUDIO':body(rtsp,'  bool configure_announce_audio(','  '),
