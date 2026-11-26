@@ -1,4 +1,5 @@
 #include "src/host_stream_control.h"
+#include "src/rtsp_audio_policy.h"
 #include "src/display_target_lease.h"
 #include "src/remote_display_topology.h"
 #include <algorithm>
@@ -346,17 +347,17 @@ int main() {
    {"AC3","AC3","",8,true,false,400},
    {"","EAC3","Opus",2,true,false,200},
  }}) {
-   reset();audio::ac3_encoder=test.encoder;audio::eac3_encoder=test.encoder;config::audio.high_quality_audio=test.quality;
+   reset();audio::ac3_encoder=test.encoder;audio::eac3_encoder=test.encoder;
    pending=std::make_shared<launch_session_t>();pending->audio_codec_offered=test.offered;
    pending->audio_context_guard=std::make_shared<int>(1);resource=pending->audio_context_guard;
    server.pending_launches.emplace(1,rtsp_server_t::Pending{pending,std::chrono::steady_clock::now()+1s});
-   auto audio_payload=payload;const auto channels=audio_payload.find("numChannels:2");audio_payload.replace(channels,13,"numChannels:"+std::to_string(test.channels));
+   auto audio_payload=payload;const auto quality=audio_payload.find("AudioQuality:2");audio_payload.replace(quality,std::string("AudioQuality:2").size(),"AudioQuality:"+std::to_string(test.quality?1:0));const auto channels=audio_payload.find("numChannels:2");audio_payload.replace(channels,13,"numChannels:"+std::to_string(test.channels));
    if(*test.accepted)audio_payload+="a=x-ss-audio-codec-accept:"+std::string(test.accepted)+"\n";
    auto audio_request=std::make_shared<Request>();audio_request->payload=audio_payload.data();audio_request->payloadLength=audio_payload.size();
    const bool admitted=cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(audio_request));
    check(admitted==(test.status==200),"actual ANNOUNCE rejects accepted Dolby with unavailable encoder or unsupported channels");
    server.startup_pool.run();server.io_context.run();
-   check(response_status==test.status && response_audio_codec==test.expected,"actual ANNOUNCE response reports the negotiated codec or rejection");
+   check(response_status==test.status && response_audio_codec==(std::string_view(test.expected)=="Opus"?"":test.expected),"actual ANNOUNCE omits X-SS-Audio-Codec for Opus and reports negotiated Dolby");
    if(admitted) {
      const auto &selected=stream::session::allocated_audio;const bool dolby=std::string_view(test.expected)!="Opus";
      check(selected.use_ac3==(std::string_view(test.expected)=="AC3") && selected.use_eac3==(std::string_view(test.expected)=="EAC3") &&
