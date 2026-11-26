@@ -16,6 +16,7 @@
 #include <src/crypto.h>
 #include <src/rtsp_audio_policy.h>
 #include <thread>
+#include <vector>
 
 using namespace audio::policy;
 
@@ -292,7 +293,7 @@ TEST(AudioPacketTransport, EncryptsAndWritesLargestSupportedFrame) {
   const crypto::aes_t key(16, 0x5a);
   crypto::aes_t iv(16, 0x3c);
   crypto::cipher::cbc_t cipher {key, true};
-  const audio::buffer_t plaintext(stream::MAX_AUDIO_PACKET_SIZE, 0x42);
+  const std::vector<std::uint8_t> plaintext(stream::MAX_AUDIO_PACKET_SIZE, 0x42);
   std::array<std::uint8_t, stream::MAX_AUDIO_PACKET_BUFFER_SIZE> destination {};
   int writes = 0;
   std::size_t written = 0;
@@ -317,7 +318,7 @@ TEST(AudioPacketTransport, EncryptsAndWritesLargestSupportedFrame) {
 }
 
 TEST(AudioPacketTransport, WritesLargestSupportedFrameWithoutEncryption) {
-  const audio::buffer_t plaintext(stream::MAX_AUDIO_PACKET_SIZE, 0x42);
+  const std::vector<std::uint8_t> plaintext(stream::MAX_AUDIO_PACKET_SIZE, 0x42);
   std::array<std::uint8_t, stream::MAX_AUDIO_PACKET_SIZE> destination {};
   int writes = 0;
   std::size_t written = 0;
@@ -343,7 +344,7 @@ TEST(AudioPacketTransport, RejectsInsufficientCapacityBeforeWriting) {
   const crypto::aes_t key(16, 0x5a);
   crypto::aes_t iv(16, 0x3c);
   crypto::cipher::cbc_t cipher {key, true};
-  const audio::buffer_t plaintext(stream::MAX_AUDIO_PACKET_SIZE, 0x42);
+  const std::vector<std::uint8_t> plaintext(stream::MAX_AUDIO_PACKET_SIZE, 0x42);
   std::array<std::uint8_t, stream::MAX_AUDIO_PACKET_BUFFER_SIZE> destination {};
   int encryptions = 0;
   int writes = 0;
