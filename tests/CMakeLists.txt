@@ -207,35 +207,13 @@ include("${SUNSHINE_TEST_REPOSITORY_ROOT}/cmake/dependencies/nlohmann_json.cmake
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
-set(_sunshine_test_boost_components
-    algorithm
-    asio
-    crc
-    format
-    function
-    log
-    log_setup
-    property_tree
-    regex
-    system
-    uuid)
-if(SUNSHINE_TEST_ENABLE_COMPONENT)
-    list(APPEND _sunshine_test_boost_components process)
-    if(UNIX)
-        list(APPEND _sunshine_test_boost_components filesystem program_options)
-    endif()
-endif()
-set(_sunshine_test_missing_boost_target FALSE)
-foreach(_sunshine_test_boost_component IN LISTS _sunshine_test_boost_components)
-    if(NOT TARGET "Boost::${_sunshine_test_boost_component}")
-        set(_sunshine_test_missing_boost_target TRUE)
-        break()
-    endif()
-endforeach()
-if(_sunshine_test_missing_boost_target)
-    find_package(Boost CONFIG REQUIRED COMPONENTS
-        ${_sunshine_test_boost_components})
-endif()
+# Reuse the repository's pinned system-first Boost discovery and FetchContent
+# fallback. The standalone entry point has no top-level BUILD_TESTS option,
+# so enable the same test component set while loading the shared dependency.
+set(_sunshine_test_previous_build_tests "${BUILD_TESTS}")
+set(BUILD_TESTS ON)
+include("${SUNSHINE_TEST_REPOSITORY_ROOT}/cmake/dependencies/Boost_Sunshine.cmake")
+set(BUILD_TESTS "${_sunshine_test_previous_build_tests}")
 find_package(OpenSSL REQUIRED)
 
 set(SUNSHINE_TEST_SOCKET_LIBRARIES "")
