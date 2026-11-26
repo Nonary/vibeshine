@@ -20,7 +20,7 @@ p.add_argument('--boost-include', default='')
 a = p.parse_args()
 root=a.source.resolve(); out=a.build_dir.resolve(); out.mkdir(parents=True, exist_ok=True)
 rtsp=(root/'src/rtsp.cpp').read_text(); nv=(root/'src/nvhttp.cpp').read_text(); web=(root/'src/webrtc_stream.cpp').read_text()
-audio_header=(root/'src/audio.h').read_text(); audio_codec_header=(root/'src/audio_codec.h').read_text(); audio_source=(root/'src/audio.cpp').read_text()
+audio_header=(root/'src/audio.h').read_text(); audio_codec_header=(root/'src/audio_codec.h').read_text(); audio_policy=(root/'src/rtsp_audio_policy.h').read_text(); audio_source=(root/'src/audio.cpp').read_text()
 def body(s, signature, indent):
     start=s.index(signature); end=s.index('\n'+indent+'}',start)+len('\n'+indent+'}')
     return s[start:end]
@@ -41,6 +41,7 @@ fragments={
 'DOLBY_CONFIGURE':body(audio_source,'  dolby_codec_e configure_dolby_audio(','  '),
 'DOLBY_BITRATE':body(audio_source,'  int dolby_bitrate_kbps(','  '),
 'DOLBY_NAME':body(audio_source,'  std::string_view dolby_codec_name(','  '),
+'RTSP_AUDIO_POLICY':body(audio_policy,'  constexpr bool should_send_audio_codec_header(','  '),
 'CLEAR':body(rtsp,'    void clear(bool all = true','    '),
 'CANCEL_PENDING':body(rtsp,'    void cancel_pending_launch(','    '),
 'EXPIRE':body(rtsp,'    void expire_pending()','    '),
