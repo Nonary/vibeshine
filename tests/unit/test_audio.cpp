@@ -4,6 +4,7 @@
  */
 #include "../tests_common.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -276,6 +277,7 @@ TEST(AudioPacketTransportPolicy, EnforcesPayloadAndPaddedCiphertextCapacity) {
   EXPECT_EQ(stream::audio_cbc_ciphertext_size(1400), 1408U);
   EXPECT_EQ(stream::audio_cbc_ciphertext_size(1401), 1408U);
   EXPECT_EQ(stream::audio_cbc_ciphertext_size(2560), 2576U);
+  EXPECT_TRUE(stream::audio_packet_fits(1400, true, 1408));
   EXPECT_TRUE(stream::audio_packet_fits(1401, true, 1408));
   EXPECT_FALSE(stream::audio_packet_fits(1408, true, 1408));
 }
