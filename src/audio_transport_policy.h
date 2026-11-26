@@ -60,7 +60,7 @@ namespace stream {
     int bytes {};
     if (encrypted) {
       bytes = encrypt(
-        std::string_view {reinterpret_cast<const char *>(plaintext.begin()), plaintext.size()},
+        std::string_view {reinterpret_cast<const char *>(plaintext.data()), plaintext.size()},
         destination
       );
     } else {
