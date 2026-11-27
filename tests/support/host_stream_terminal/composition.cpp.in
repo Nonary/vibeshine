@@ -64,6 +64,7 @@ bool eac3_available(){return eac3_encoder;}
 }
 namespace rtsp_stream {
 @RTSP_AUDIO_POLICY@
+@RTSP_AUDIO_QUALITY_POLICY@
 }
 namespace stream {
 struct monitor_t {
@@ -157,10 +158,15 @@ struct Socket {Endpoint local_endpoint(boost::system::error_code &) {return {};}
 // Production ANNOUNCE helpers use tcp::socket; the harness substitutes its controlled socket.
 namespace tcp { using socket = Socket; }
 struct socket_t {Socket sock;};
-int response_status=0;std::string response_audio_codec;
+int response_status=0;std::string response_audio_codec,response_audio_quality;
 void respond(Socket &,launch_session_t &,OPTION_ITEM *option,int status,const char *,int,std::initializer_list<int>) {
- response_status=status;
- for(;option;option=option->next)if(option->option && std::string_view(option->option)=="X-SS-Audio-Codec")response_audio_codec=option->content;
+ response_status=status;response_audio_codec.clear();response_audio_quality.clear();
+ for(;option;option=option->next) {
+   if(!option->option)continue;
+   const std::string_view name(option->option);
+   if(name=="X-SS-Audio-Codec")response_audio_codec=option->content;
+   if(name=="x-nv-audio.surround.AudioQuality")response_audio_quality=option->content;
+ }
 }
 struct Pool {std::vector<std::function<void()>> queue;template<class F> void push(F f){queue.emplace_back(std::move(f));} void run(){auto q=std::move(queue);queue.clear();for(auto &f:q)f();}};
 namespace boost::asio {template<class F> void post(Pool &pool,F f){pool.push(std::move(f));}}
@@ -238,7 +244,7 @@ void reset() {
  remote_session::monitor_transport_losses=0;
  server.monitor_retry_requests=0;
  config::stream={};stream::session::start_result=0;stream::session::allocated_packetsize=0;
- audio::ac3_encoder=true;audio::eac3_encoder=true;config::audio={};stream::session::allocated_audio={};response_status=0;response_audio_codec.clear();
+ audio::ac3_encoder=true;audio::eac3_encoder=true;config::audio={};stream::session::allocated_audio={};response_status=0;response_audio_codec.clear();response_audio_quality.clear();
  join_pause.reset(false);expiry_pause.reset(false);parser_pause.reset(false);peer_pause.reset(false);
  server._session_state->sessions.clear();server.pending_launches.clear();server.startup_pool.queue.clear();server.io_context.queue.clear();
  topology.shutdown(true);topology.set_runtime_callbacks({});
@@ -371,9 +377,12 @@ int main() {
    const bool admitted=rtsp_stream::cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(audio_request));
    check(admitted==(test.status==200),"actual ANNOUNCE rejects accepted Dolby with unavailable encoder or unsupported channels");
    server.startup_pool.run();server.io_context.run();
-   check(response_status==test.status && response_audio_codec==(std::string_view(test.expected)=="Opus"?"":test.expected),"actual ANNOUNCE omits X-SS-Audio-Codec for Opus and reports negotiated Dolby");
+   const bool dolby=std::string_view(test.expected)!="Opus";
+   check(response_status==test.status && response_audio_codec==(dolby?test.expected:"") &&
+         response_audio_quality==(dolby?(test.quality?"1":"0"):""),
+         "actual ANNOUNCE reports negotiated Dolby codec and host-confirmed quality, omitting both headers for Opus");
    if(admitted) {
-     const auto &selected=stream::session::allocated_audio;const bool dolby=std::string_view(test.expected)!="Opus";
+     const auto &selected=stream::session::allocated_audio;
      check(selected.use_ac3==(std::string_view(test.expected)=="AC3") && selected.use_eac3==(std::string_view(test.expected)=="EAC3") &&
            selected.high_quality_dolby==(dolby && test.quality) && selected.packetDuration==(dolby?32:5) &&
            (!dolby || (selected.flags[audio::config_t::HIGH_QUALITY] && !selected.flags[audio::config_t::CUSTOM_SURROUND_PARAMS])),
