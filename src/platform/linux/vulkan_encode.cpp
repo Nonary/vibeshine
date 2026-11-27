@@ -64,11 +64,12 @@ namespace vk {
     VkApplicationInfo app = {VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.apiVersion = VK_API_VERSION_1_1;
 
-    static const std::array<const char *, 1> instance_exts = {VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME};
+    // VK_EXT_physical_device_drm is a device extension, not an instance extension. Requesting it
+    // here makes vkCreateInstance fail with VK_ERROR_EXTENSION_NOT_PRESENT on Mesa (RADV), so the
+    // DRM node lookup never worked. The properties are queried through vkGetPhysicalDeviceProperties2
+    // below and do not require enabling the extension on the instance.
     VkInstanceCreateInfo ci = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ci.pApplicationInfo = &app;
-    ci.enabledExtensionCount = instance_exts.size();
-    ci.ppEnabledExtensionNames = instance_exts.data();
     VkInstance inst = VK_NULL_HANDLE;
     if (vkCreateInstance(&ci, nullptr, &inst) != VK_SUCCESS) {
       return std::nullopt;
