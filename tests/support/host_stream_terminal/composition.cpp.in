@@ -377,7 +377,9 @@ int main() {
    const bool admitted=rtsp_stream::cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(audio_request));
    check(admitted==(test.status==200),"actual ANNOUNCE rejects accepted Dolby with unavailable encoder or unsupported channels");
    server.startup_pool.run();server.io_context.run();
-   const bool dolby=std::string_view(test.expected)!="Opus";
+   const bool dolby = test.status == 200 &&
+                     (std::string_view(test.expected) == "AC3" ||
+                      std::string_view(test.expected) == "EAC3");
    check(response_status==test.status && response_audio_codec==(dolby?test.expected:"") &&
          response_audio_quality==(dolby?(test.quality?"1":"0"):""),
          "actual ANNOUNCE reports negotiated Dolby codec and host-confirmed quality, omitting both headers for Opus");
