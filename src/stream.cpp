@@ -690,6 +690,7 @@ namespace stream {
       safe::mail_raw_t::event_t<bool> idr_events;
       safe::mail_raw_t::event_t<std::pair<int64_t, int64_t>> invalidate_ref_frames_events;
       safe::mail_raw_t::event_t<int> bitrate_events;
+      int bitrate_limit_kbps = broadcast_runtime::DEFAULT_BITRATE_LIMIT_KBPS;
       // The HTTP bitrate control path runs concurrently with the UDP sender.
       // Keep its per-frame pacing input atomic instead of racing on monitor config.
       std::atomic<int> pacing_bitrate_kbps {0};
@@ -867,7 +868,8 @@ namespace stream {
       for (auto *session : *ctx.control_server._sessions) {
         if (session) {
           sessions.push_back({session->device_uuid, session->config.monitor.bitrate, session->config.monitor.client_requested_bitrate,
-                              session->video.pacing_bitrate_kbps, session->video.idr_events, session->video.bitrate_events});
+                              session->video.pacing_bitrate_kbps, session->video.idr_events, session->video.bitrate_events,
+                              session->video.bitrate_limit_kbps});
         }
       }
       return action(sessions);
@@ -935,7 +937,7 @@ namespace stream {
     return !starting || reserve(*starting, 0);
   }
 
-  int set_bitrate_for_sessions(const std::string &client_uuid, int bitrate_kbps) {
+  bitrate_update_t set_bitrate_for_sessions(const std::string &client_uuid, int bitrate_kbps) {
     return broadcast_controls.set_bitrate_for_sessions(client_uuid, bitrate_kbps);
   }
 
@@ -3570,7 +3572,7 @@ namespace stream {
     return -1;
   }
 
-  void videoThread(session_t *session) {
+  void videoThread(session_t *session, video::config_t capture_config) {
     platf::set_thread_name("session::video");
     auto fg = util::fail_guard([&]() {
       session::stop(*session);
@@ -3589,7 +3591,7 @@ namespace stream {
     session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
 
     BOOST_LOG(debug) << "Start capturing Video"sv;
-    video::capture(session->mail, session->config.monitor, session);
+    video::capture(session->mail, std::move(capture_config), session);
   }
 
   void audioThread(session_t *session) {
@@ -4183,14 +4185,17 @@ namespace stream {
 #endif
       session.input = input::alloc(session.mail, session.config.guide_button, session.config.gcpersist);
 
-      // Preserve each protocol's original startup bitrate choice. Runtime
-      // bitrate changes update this atomic alongside the monitor metadata.
-      const auto &monitor = session.config.monitor;
+      // The capture thread starts from the negotiated settings. Runtime changes
+      // can arrive as soon as the session is published and use bitrate_events.
+      auto monitor = session.config.monitor;
       const bool pyrowave_session = monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT;
       const auto pacing_bitrate_kbps = pyrowave_session ?
                                          (monitor.client_requested_bitrate > 0 ? monitor.client_requested_bitrate : monitor.bitrate) :
                                          (monitor.bitrate > 0 ? monitor.bitrate : monitor.client_requested_bitrate);
       session.video.pacing_bitrate_kbps.store(pacing_bitrate_kbps, std::memory_order_relaxed);
+      if (pyrowave_session) {
+        session.video.bitrate_limit_kbps = pacing_bitrate_kbps;
+      }
       // PyroWave keeps its own pacing; the controller only serves ordinary video.
       session.video.adaptive_pacing_enabled = config::stream.host_adaptive_pacing && !pyrowave_session;
       session.video.adaptive_pacing = pacing::adaptive_pacing_t {session.video.adaptive_pacing_enabled};
@@ -4235,7 +4240,7 @@ namespace stream {
       if (!session.audio_disabled) {
         session.audioThread = std::thread {audioThread, &session};
       }
-      session.videoThread = std::thread {videoThread, &session};
+      session.videoThread = std::thread {videoThread, &session, std::move(monitor)};
 
       session.state.store(state_e::RUNNING, std::memory_order_relaxed);
 
