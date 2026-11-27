@@ -75,8 +75,12 @@ http_at = http.index(http_start)
 http_handler = http[http_at:http.index('\n  }', http_at)]
 http_handler = http_handler.replace('config::video.max_bitrate', 'host_max_kbps')
 video = read('src/video.cpp')
-pyro_limits_at = video.index('    const int maximum_wire_kbps =')
-pyro_limits_end = video.index('\n', video.index('    const int audio_control_reserve_kbps =', pyro_limits_at))
+if '    const int initial_wire_kbps =' in video:
+    pyro_limits_at = video.index('    const int initial_wire_kbps =')
+    pyro_limits_end = video.index(';', video.index('    const int maximum_wire_kbps =', pyro_limits_at)) + 1
+else:
+    pyro_limits_at = video.index('    const int maximum_wire_kbps =')
+    pyro_limits_end = video.index(';', video.index('    const int audio_control_reserve_kbps =', pyro_limits_at)) + 1
 pyro_update_at = video.index('      if (latest_bitrate) {', video.index('  bool encode_run_pyrowave('))
 pyro_update_end = video.index('      if (idr_events->peek())', pyro_update_at)
 rtsp = read('src/rtsp.cpp')
@@ -98,9 +102,11 @@ controls = section('  static broadcast_runtime::controls_t<broadcast_ctx_t> broa
 controls = 'namespace stream::broadcast_runtime {\n' + runtime_types + '\nnamespace stream::broadcast_runtime {\n' + runtime_impl + '\n' + controls
 if session_limits:
     runtime_result = runtime_header[runtime_header.index('namespace stream {'):runtime_header.index('namespace stream::broadcast_runtime {')]
-    default_limit = re.search(r'constexpr int DEFAULT_BITRATE_LIMIT_KBPS = \d+;', runtime_header).group()
-    controls = runtime_result + 'using stream::bitrate_update_t;\n' + controls.replace(
-        'namespace stream::broadcast_runtime {', 'namespace stream::broadcast_runtime {\n  ' + default_limit, 1)
+    default_limit = re.search(r'constexpr int DEFAULT_BITRATE_LIMIT_KBPS = \d+;', runtime_header)
+    if default_limit:
+        controls = controls.replace('namespace stream::broadcast_runtime {',
+                                    'namespace stream::broadcast_runtime {\n  ' + default_limit.group(), 1)
+    controls = runtime_result + 'using stream::bitrate_update_t;\n' + controls
 ratecontrol = section('        const auto ratecontrol_pace =', '\n\n        // Send less')
 template = (Path(__file__).with_suffix('.cpp.in')).read_text()
 program = template
