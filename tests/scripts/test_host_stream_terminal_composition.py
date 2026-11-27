@@ -42,6 +42,7 @@ fragments={
 'DOLBY_BITRATE':body(audio_source,'  int dolby_bitrate_kbps(','  '),
 'DOLBY_NAME':body(audio_source,'  std::string_view dolby_codec_name(','  '),
 'RTSP_AUDIO_POLICY':body(audio_policy,'  constexpr bool should_send_audio_codec_header(','  '),
+'RTSP_AUDIO_QUALITY_POLICY':body(audio_policy,'  constexpr bool should_send_audio_quality_header(','  '),
 'CLEAR':body(rtsp,'    void clear(bool all = true','    '),
 'CANCEL_PENDING':body(rtsp,'    void cancel_pending_launch(','    '),
 'EXPIRE':body(rtsp,'    void expire_pending()','    '),
