@@ -148,6 +148,14 @@ using namespace std::literals;
 
 namespace stream {
   namespace {
+    constexpr uint16_t capture_clock_request = 0x5510;
+    constexpr uint16_t capture_clock_reply = 0x5511;
+
+    uint64_t capture_clock_microseconds(std::chrono::steady_clock::time_point time = std::chrono::steady_clock::now()) {
+      const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(time.time_since_epoch()).count();
+      return micros > 0 ? static_cast<uint64_t>(micros) : 0;
+    }
+
     std::string current_server_version() {
       std::string version = PROJECT_VERSION;
 #ifdef PROJECT_VERSION_PRERELEASE
@@ -579,8 +587,9 @@ namespace stream {
       _map_type_cb.emplace(type, std::move(cb));
     }
 
-    int send(const std::string_view &payload, net::peer_t peer, bool haptics = false) {
-      auto packet = enet_packet_create(payload.data(), payload.size(), haptics ? 0 : ENET_PACKET_FLAG_RELIABLE);
+    int send(const std::string_view &payload, net::peer_t peer, bool haptics = false, bool unreliable = false) {
+      const auto flags = haptics ? 0 : (unreliable ? ENET_PACKET_FLAG_UNSEQUENCED : ENET_PACKET_FLAG_RELIABLE);
+      auto packet = enet_packet_create(payload.data(), payload.size(), flags);
       if (!packet) return -1;
       if (enet_peer_send(peer, haptics ? ML_HAPTICS_CHANNEL : 0, packet)) {
         enet_packet_destroy(packet);
@@ -1719,6 +1728,31 @@ namespace stream {
   }
 
   void controlBroadcastThread(control_server_t *server) {
+    server->map(capture_clock_request, [server](session_t *session, const std::string_view &request) {
+      const auto received = capture_clock_microseconds();
+      if (!session->config.capture_timing || !session->control.peer || request.size() != sizeof(uint64_t)) {
+        return;
+      }
+
+      constexpr size_t timing_bytes = 3 * sizeof(uint64_t);
+      const bool encrypted = session->config.controlProtocolType == 13;
+      const control_header_v2 header {util::endian::little(capture_clock_reply), util::endian::little(static_cast<uint16_t>(timing_bytes))};
+      const auto header_bytes = encrypted ? sizeof(header) : sizeof(header.type);
+      std::array<char, sizeof(header) + timing_bytes> reply;
+      std::memcpy(reply.data(), &header, header_bytes);
+      std::memcpy(reply.data() + header_bytes, request.data(), request.size());
+      const auto host_received = util::endian::little(received);
+      const auto host_sent = util::endian::little(capture_clock_microseconds());
+      std::memcpy(reply.data() + header_bytes + sizeof(uint64_t), &host_received, sizeof(host_received));
+      std::memcpy(reply.data() + header_bytes + 2 * sizeof(uint64_t), &host_sent, sizeof(host_sent));
+      std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(reply.size()) + crypto::cipher::tag_size>
+        encrypted_reply;
+      const auto payload = encode_control(session, {reply.data(), header_bytes + timing_bytes}, encrypted_reply);
+      if (!payload.empty()) {
+        server->send(payload, session->control.peer, false, true);
+      }
+    });
+
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
       if (session->video.adaptive_pacing_enabled) {
@@ -2442,13 +2476,21 @@ namespace stream {
       }
 
       video_short_frame_header_t frame_header = {};
+      boost::endian::little_uint64_at capture_timestamp {};
+      const auto frame_header_size = sizeof(frame_header) + (session->config.capture_timing ? sizeof(capture_timestamp) : 0);
       frame_header.headerType = 0x01;  // Short header type
       frame_header.frameType = packet->is_idr()                     ? 2 :
                                packet->after_ref_frame_invalidation ? 5 :
                                                                       1;
-      frame_header.lastPayloadLen = (payload.size() + sizeof(frame_header)) % (session->config.packetsize - sizeof(NV_VIDEO_PACKET));
+      frame_header.lastPayloadLen = (payload.size() + frame_header_size) % (session->config.packetsize - sizeof(NV_VIDEO_PACKET));
       if (frame_header.lastPayloadLen == 0) {
         frame_header.lastPayloadLen = session->config.packetsize - sizeof(NV_VIDEO_PACKET);
+      }
+
+      const auto capture_now = std::chrono::steady_clock::now();
+      if (session->config.capture_timing && packet->host_processing_timestamp &&
+          *packet->host_processing_timestamp <= capture_now) {
+        capture_timestamp = capture_clock_microseconds(*packet->host_processing_timestamp);
       }
 
       auto host_processing_timestamp = packet->host_processing_timestamp ? packet->host_processing_timestamp : packet->frame_timestamp;
@@ -2482,13 +2524,19 @@ namespace stream {
       auto payload_blocksize = blocksize - sizeof(video_packet_raw_t);
 
       // The frame header precedes the frame in the first packet
-      const std::size_t total_shards = (sizeof(frame_header) + payload.size() + payload_blocksize - 1) / payload_blocksize;
+      const std::size_t total_shards = (frame_header_size + payload.size() + payload_blocksize - 1) / payload_blocksize;
       const std::size_t critical_shards = pyrowave_session && packet->pyrowave_critical_bytes ?
-                                            std::min(total_shards, (sizeof(frame_header) + packet->pyrowave_critical_bytes + payload_blocksize - 1) / payload_blocksize) :
+                                            std::min(total_shards, (frame_header_size + packet->pyrowave_critical_bytes + payload_blocksize - 1) / payload_blocksize) :
                                             0;
       frame_header.pyrowave_critical_packets = std::uint16_t(std::min<std::size_t>(critical_shards, std::numeric_limits<std::uint16_t>::max()));
 
-      auto payload_new = concat_and_insert(sizeof(video_packet_raw_t), payload_blocksize, std::string_view {(char *) &frame_header, sizeof(frame_header)}, payload);
+      std::array<char, sizeof(frame_header) + sizeof(capture_timestamp)> frame_header_bytes;
+      std::memcpy(frame_header_bytes.data(), &frame_header, sizeof(frame_header));
+      if (session->config.capture_timing) {
+        std::memcpy(frame_header_bytes.data() + sizeof(frame_header), &capture_timestamp, sizeof(capture_timestamp));
+      }
+      auto payload_new = concat_and_insert(sizeof(video_packet_raw_t), payload_blocksize,
+        std::string_view {frame_header_bytes.data(), frame_header_size}, payload);
 
       payload = std::string_view {(char *) payload_new.data(), payload_new.size()};
 
@@ -2689,7 +2737,7 @@ namespace stream {
                                   (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
           ratecontrol_packets_in_1ms = pyrowave::policy::pacing_packets_per_ms(
             link_bps, stream_kbps, payload_blocksize, wire_bytes,
-            packet->data_size() + sizeof(frame_header), monitor.framerate, monitor.pyrowave_peer_pace_bps
+            packet->data_size() + frame_header_size, monitor.framerate, monitor.pyrowave_peer_pace_bps
           );
           // Keep the adaptive rate intact. The cumulative deadline below takes
           // the slower of this rate and the exact operator bit-time ceiling.
@@ -2727,7 +2775,7 @@ namespace stream {
           const auto needed_bps = pacing::nominal_wire_demand_bps(
             stream_kbps,
             monitor.framerate,
-            sizeof(frame_header),
+            frame_header_size,
             payload_blocksize,
             wire_bytes,
             // The configured value: oversized frames zero fecPercentage for
@@ -2844,7 +2892,7 @@ namespace stream {
         // PyroWave record framing: flag the shards that start with a record, where a
         // client that lost a record header resumes parsing.
         const auto record_starts = critical_shards ?
-                                     pyrowave::policy::record_start_shards({packet->data(), packet->data_size()}, payload_blocksize) :
+                                     pyrowave::policy::record_start_shards({packet->data(), packet->data_size()}, payload_blocksize, frame_header_size) :
                                      std::vector<bool> {};
         std::size_t block_first_shard = 0;
 

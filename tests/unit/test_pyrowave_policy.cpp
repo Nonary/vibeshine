@@ -272,6 +272,19 @@ TEST(PyroWavePolicy, RecordStartShardsMarkWhereAReceiverCanResume) {
   EXPECT_TRUE(record_start_shards(frame, 0).empty());
 }
 
+TEST(PyroWavePolicy, CaptureTimestampMovesRecordBoundariesWithTheWireHeader) {
+  constexpr std::size_t shard = 64;
+  constexpr auto header = protocol::FRAME_HEADER_BYTES + protocol::CAPTURE_TIMING_BYTES;
+  const auto bitstream = make_bitstream({12, 12, 12, 12, 12, 12});
+  std::vector<std::uint8_t> frame;
+  ASSERT_TRUE(write_record_frame(bitstream, shard, frame, 0, header));
+  const auto aligned = record_start_shards(frame, shard, header);
+  ASSERT_GT(aligned.size(), 1u);
+  EXPECT_TRUE(std::all_of(aligned.begin(), aligned.end(), [](bool valid) { return valid; }));
+  EXPECT_NE(record_start_shards(frame, shard), aligned);
+  EXPECT_EQ(max_frame_bytes(256, true) - max_frame_bytes(256, true, header), protocol::CAPTURE_TIMING_BYTES);
+}
+
 TEST(PyroWavePolicy, ParityShardsMatchTheFecEncoder) {
   EXPECT_EQ(parity_shards(21, 20, 2), 5u);
   EXPECT_EQ(parity_shards(7, 20, 2), 2u);

@@ -55,6 +55,7 @@ struct peer_t {
 };
 struct host_t { std::vector<peer_t *> peers; };
 constexpr int ENET_PACKET_FLAG_RELIABLE = 1;
+[[maybe_unused]] constexpr int ENET_PACKET_FLAG_UNSEQUENCED = 2;
 constexpr int ML_HAPTICS_CHANNEL = 1;
 ENetPacket *enet_packet_create(const void *data, std::size_t size, int flags) {
   require(flags == ENET_PACKET_FLAG_RELIABLE, "termination must remain reliable");

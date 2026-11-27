@@ -134,6 +134,7 @@ namespace pyrowave::d3d11 {
     pyrowave::policy::framing_e framing = pyrowave::policy::framing_e::records;
     std::size_t shard_payload = 0;  ///< policy::shard_payload_bytes(packetsize); 0 disables alignment.
     std::size_t max_frame_bytes = 0;  ///< Transport capacity; zero for standalone callers.
+    std::size_t frame_header_bytes = pyrowave::protocol::FRAME_HEADER_BYTES;
   };
 
   struct frame_stats_t {

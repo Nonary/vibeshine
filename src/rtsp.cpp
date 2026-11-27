@@ -1816,6 +1816,7 @@ namespace rtsp_stream {
 
     // Tell the client about our supported features
     ss << "a=x-ss-general.featureFlags:" << (uint32_t) platf::get_capabilities() << std::endl;
+    ss << "a=x-ss-video.captureTiming:1" << std::endl;
 
     // Always request new control stream encryption if the client supports it
     uint32_t encryption_flags_supported = SS_ENC_CONTROL_V2 | SS_ENC_AUDIO;
@@ -2025,6 +2026,9 @@ namespace rtsp_stream {
     args.try_emplace("x-nv-video[0].clientRefreshRateX100"sv, "0"sv);
 
     stream::config_t config {};
+    if (auto timing = args.find("x-ml-video.captureTiming"sv); timing != args.end()) {
+      config.capture_timing = timing->second == "1"sv;
+    }
     config.gen1_framegen_fix = false;
     config.gen2_framegen_fix = false;
     config.frame_generation_enabled = false;
@@ -2201,6 +2205,8 @@ namespace rtsp_stream {
       }
       const bool pyrowave_adaptive_fec = args.contains(pyrowave::protocol::ANNOUNCE_ADAPTIVE_FEC);
       config.monitor.pyrowave_framing = pyrowave::policy::select_framing(pyrowave_adaptive_fec, pyrowave_features);
+      config.monitor.pyrowave_frame_header_bytes = pyrowave::protocol::FRAME_HEADER_BYTES +
+        (config.capture_timing ? pyrowave::protocol::CAPTURE_TIMING_BYTES : 0);
       config.monitor.packetsize = config.packetsize;
       config.monitor.pyrowave_min_parity_shards = std::max(2, config.minRequiredFecPackets);
       if (const auto it = args.find("x-ss-video[0].pyrowaveLinkMbps"sv); it != args.end()) {

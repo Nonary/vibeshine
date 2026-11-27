@@ -61,6 +61,7 @@ namespace stream {
     int packetsize;
     int minRequiredFecPackets;
     int mlFeatureFlags;
+    bool capture_timing = false;
     int controlProtocolType;
     int audioQosType;
     int videoQosType;

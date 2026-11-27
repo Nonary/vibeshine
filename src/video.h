@@ -86,6 +86,7 @@ namespace video {
     // framing aligns to, and the framing the client asked for in ANNOUNCE.
     int packetsize = 0;
     pyrowave::policy::framing_e pyrowave_framing = pyrowave::policy::framing_e::records;
+    std::size_t pyrowave_frame_header_bytes = pyrowave::protocol::FRAME_HEADER_BYTES;
     std::size_t pyrowave_min_parity_shards = 2;
     std::uint64_t pyrowave_peer_link_bps = 0;
     // Highest loss-free frame pace the client calibrated (0 = not calibrated).

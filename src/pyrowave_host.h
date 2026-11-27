@@ -38,6 +38,7 @@ namespace pyrowave::host {
     int bitrate_kbps = 0;  ///< Video wire budget (audio and control overhead removed).
     policy::framing_e framing = policy::framing_e::records;
     int packetsize = 0;  ///< Negotiated RTP packet size, for record alignment.
+    std::size_t frame_header_bytes = protocol::FRAME_HEADER_BYTES;
     int critical_fec_percentage = 0;
     std::size_t min_parity_shards = 2;
     bool critical_fec = false;  ///< Adds critical FEC; record framing also keeps a stable image budget for adaptive detail FEC.
@@ -47,13 +48,14 @@ namespace pyrowave::host {
     if (params.framing != policy::framing_e::records) {
       return std::nullopt;
     }
-    return policy::wire_budget_t {params.packetsize, params.critical_fec_percentage, params.min_parity_shards, 0u};
+    return policy::wire_budget_t {params.packetsize, params.critical_fec_percentage, params.min_parity_shards,
+                                 params.frame_header_bytes - protocol::FRAME_HEADER_BYTES};
   }
 
   /// Maximum native bitstream size allowed by the negotiated transport.
   inline std::size_t bitstream_capacity(const session_params_t &params) {
     return policy::max_bitstream_bytes(params.packetsize,
-      params.framing == policy::framing_e::length_prefixed, params.critical_fec);
+      params.framing == policy::framing_e::length_prefixed, params.critical_fec, params.frame_header_bytes);
   }
 
   class encoder_t {

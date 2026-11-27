@@ -34,6 +34,7 @@ namespace wl {
 
     egl::surface_descriptor_t sd;
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
+    std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp;
   };
 
   class dmabuf_t {
@@ -98,6 +99,7 @@ namespace wl {
     struct gbm_bo *current_bo {nullptr};
     struct wl_buffer *current_wl_buffer {nullptr};
     bool y_invert {false};
+    std::chrono::steady_clock::time_point copy_started;
   };
 
   class monitor_t {

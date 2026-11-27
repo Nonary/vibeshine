@@ -135,7 +135,8 @@ namespace pyrowave::host {
             return -1;
           }
           auto &p = packets.front();
-          auto stats = policy::write_record_frame(std::span<const std::uint8_t>(scratch.data() + p.offset, p.size), policy::shard_payload_bytes(params.packetsize), out, budget.bytes_per_frame());
+          auto stats = policy::write_record_frame(std::span<const std::uint8_t>(scratch.data() + p.offset, p.size),
+            policy::shard_payload_bytes(params.packetsize, params.frame_header_bytes), out, budget.bytes_per_frame(), params.frame_header_bytes);
           if (!stats) {
             return -1;
           }
@@ -147,7 +148,7 @@ namespace pyrowave::host {
           }
           policy::write_length_prefixed_frame(layout, scratch.data(), out);
         }
-        if (out.size() > policy::max_frame_bytes(params.packetsize, params.critical_fec)) {
+        if (out.size() > policy::max_frame_bytes(params.packetsize, params.critical_fec, params.frame_header_bytes)) {
           out.clear();
           critical_bytes = 0;
           return 1;

@@ -6370,6 +6370,7 @@ namespace video {
     params.bitrate_kbps = config.bitrate;
     params.framing = config.pyrowave_framing;
     params.packetsize = config.packetsize;
+    params.frame_header_bytes = config.pyrowave_frame_header_bytes;
     params.critical_fec_percentage = config::stream.pyrowave_critical_fec_percentage;
     params.min_parity_shards = config.pyrowave_min_parity_shards;
     params.critical_fec = params.critical_fec_percentage > 0;

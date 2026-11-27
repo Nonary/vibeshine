@@ -67,10 +67,12 @@ namespace stream {
 struct monitor_t {
  int height=0,width=0,framerate=0,encodingFramerate=0,framerateX100=0,bitrate=0,client_requested_bitrate=0,slicesPerFrame=0,numRefFrames=0,encoderCscMode=0,videoFormat=0,dynamicRange=0,chromaSamplingType=0,enableIntraRefresh=0,packetsize=0,pyrowave_min_parity_shards=0;
  bool vrr_low_latency=false,force_sdr=false,prefer_sdr_10bit=false; std::uint64_t pyrowave_peer_link_bps=0,pyrowave_peer_pace_bps=0; int pyrowave_framing=0,pyrowave_link_bitrate_limit_kbps=0;
+ std::size_t pyrowave_frame_header_bytes=8;
 };
 struct config_t {
  audio::config_t audio{};
  monitor_t monitor;
+ bool capture_timing=false;
  int controlProtocolType=0,packetsize=0,minRequiredFecPackets=0,mlFeatureFlags=0,audioQosType=0,videoQosType=0,encryptionFlagsEnabled=0;
  int gen1_framegen_fix=0,gen2_framegen_fix=0,frame_generation_enabled=0,lossless_scaling_framegen=0,frame_generation_provider=0,lossless_scaling_target_fps=0,lossless_scaling_rtss_limit=0;
 };
@@ -109,7 +111,7 @@ namespace video {int active_hevc_mode=3,active_av1_mode=3,active_pyrowave_mode=2
 namespace net {int encryption_mode_for_address(int) {return 0;}}
 namespace platf {std::uint64_t routed_link_bps(int,int){return 0;}}
 namespace pyrowave {
-namespace protocol {constexpr int BITSTREAM_FORMAT=99;constexpr std::string_view ANNOUNCE_FEATURES="pw",ANNOUNCE_ADAPTIVE_FEC="fec";}
+namespace protocol {constexpr int BITSTREAM_FORMAT=99;constexpr std::size_t FRAME_HEADER_BYTES=8,CAPTURE_TIMING_BYTES=8;constexpr std::string_view ANNOUNCE_FEATURES="pw",ANNOUNCE_ADAPTIVE_FEC="fec";}
 namespace policy {struct framing_e {static constexpr int records=1;};int select_framing(bool,std::optional<std::uint32_t>){return 0;}}
 namespace bandwidth {std::uint64_t pacing_link_bps(std::uint64_t,std::uint64_t){return 0;}}
 }

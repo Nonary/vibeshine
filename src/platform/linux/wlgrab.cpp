@@ -243,6 +243,7 @@ namespace wl {
       gl::ctx.BindTexture(GL_TEXTURE_2D, 0);
 
       img_out->frame_timestamp = current_frame->frame_timestamp;
+      img_out->host_processing_timestamp = current_frame->host_processing_timestamp;
 
       return platf::capture_e::ok;
     }
@@ -364,6 +365,7 @@ namespace wl {
 
       img->sd = current_frame->sd;
       img->frame_timestamp = current_frame->frame_timestamp;
+      img->host_processing_timestamp = current_frame->host_processing_timestamp;
 
       // Prevent dmabuf from closing the file descriptors.
       std::fill_n(current_frame->sd.fds, 4, -1);

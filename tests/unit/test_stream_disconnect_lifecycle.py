@@ -64,7 +64,7 @@ def program(root, revision=None):
         "WIRE_ENCRYPTED": block(stream, "typedef struct control_encrypted_t") + " *control_encrypted_p;",
         "ENCODE": block(stream, "template<std::size_t max_payload_size>"),
         "PACKET_TYPES": packet_types,
-        "SEND_METHOD": block(stream, "int send(const std::string_view &payload, net::peer_t peer, bool haptics = false)"),
+        "SEND_METHOD": block(stream, "int send(const std::string_view &payload, net::peer_t peer, bool haptics = false"),
         "FLUSH_METHOD": block(stream, "void flush()"),
         "STOP": block(stream, "void stop(session_t &session)"),
         "GRACEFUL_STOP": block(stream, "void graceful_stop(session_t &session)")

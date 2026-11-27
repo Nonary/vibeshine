@@ -515,6 +515,7 @@ namespace platf {
       }
       auto img = (x11_img_t *) img_out.get();
 
+      img->host_processing_timestamp = std::chrono::steady_clock::now();
       XImage *x_img {x11::GetImage(xdisplay.get(), xwindow, offset_x, offset_y, width, height, AllPlanes, ZPixmap)};
       img->frame_timestamp = std::chrono::steady_clock::now();
 
@@ -646,6 +647,7 @@ namespace platf {
         BOOST_LOG(warning) << "X dimensions changed in SHM mode, request reinit"sv;
         return capture_e::reinit;
       } else {
+        const auto host_processing_timestamp = std::chrono::steady_clock::now();
         auto img_cookie = xcb::shm_get_image_unchecked(xcb.get(), display->root, offset_x, offset_y, width, height, ~0, XCB_IMAGE_FORMAT_Z_PIXMAP, seg, 0);
         auto frame_timestamp = std::chrono::steady_clock::now();
 
@@ -661,6 +663,7 @@ namespace platf {
 
         std::copy_n((std::uint8_t *) data.data, frame_size(), img_out->data);
         img_out->frame_timestamp = frame_timestamp;
+        img_out->host_processing_timestamp = host_processing_timestamp;
 
         if (cursor) {
           blend_cursor(shm_xdisplay.get(), *img_out, offset_x, offset_y);
