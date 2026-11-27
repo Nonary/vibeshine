@@ -2410,6 +2410,7 @@ namespace rtsp_stream {
     if (!configure_announce_audio(config.audio, args, req, socket->sock, session, option, req->sequenceNumber, selected_audio_codec)) {
       return false;
     }
+    const bool high_quality_audio_selected = config.audio.high_quality_dolby;
 
     if (config.monitor.vrr_low_latency) {
       BOOST_LOG(info) << "Client requested VRR low-latency stream policy";
@@ -2466,7 +2467,7 @@ namespace rtsp_stream {
     const std::string client_uuid = session->client_uuid;
     auto launch_session = make_startup_launch_session_snapshot(*session);
     try {
-      server->run_startup([server, socket = std::move(socket), session = std::move(session), launch_session, config = std::move(config), remote_address = std::move(remote_address), client_uuid, sequence_number, selected_audio_codec](bool admitted) mutable {
+      server->run_startup([server, socket = std::move(socket), session = std::move(session), launch_session, config = std::move(config), remote_address = std::move(remote_address), client_uuid, sequence_number, selected_audio_codec, high_quality_audio_selected](bool admitted) mutable {
         // Apply deferred updates and take the hot-apply gate on the startup worker so
         // display/config churn cannot stall the RTSP io_context.
         std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
@@ -2561,7 +2562,9 @@ namespace rtsp_stream {
         lifecycle_lock.unlock();
         server->post([server, socket = std::move(socket), session = std::move(session), sequence_number, startup_failed, startup_status, startup_error = std::move(startup_error),
                       send_audio_codec_header = should_send_audio_codec_header(selected_audio_codec),
-                      audio_codec_name = std::string(audio::dolby_codec_name(selected_audio_codec))]() mutable {
+                      send_audio_quality_header = should_send_audio_quality_header(selected_audio_codec),
+                      audio_codec_name = std::string(audio::dolby_codec_name(selected_audio_codec)),
+                      high_quality_audio_selected]() mutable {
           OPTION_ITEM completion_option {};
           completion_option.option = cseq_header;
           auto completion_seqn = std::to_string(sequence_number);
@@ -2577,10 +2580,22 @@ namespace rtsp_stream {
           } else {
             OPTION_ITEM audio_codec_option {};
             std::string audio_codec_header {"X-SS-Audio-Codec"};
+            OPTION_ITEM audio_quality_option {};
+            std::string audio_quality_header {"x-nv-audio.surround.AudioQuality"};
+            std::string audio_quality_value {high_quality_audio_selected ? "1" : "0"};
             if (send_audio_codec_header) {
               audio_codec_option.option = audio_codec_header.data();
               audio_codec_option.content = audio_codec_name.data();
               completion_option.next = &audio_codec_option;
+            }
+            if (send_audio_quality_header) {
+              audio_quality_option.option = audio_quality_header.data();
+              audio_quality_option.content = audio_quality_value.data();
+              if (send_audio_codec_header) {
+                audio_codec_option.next = &audio_quality_option;
+              } else {
+                completion_option.next = &audio_quality_option;
+              }
             }
             respond(socket->sock, *session, &completion_option, 200, "OK", sequence_number, {});
           }
