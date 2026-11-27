@@ -2084,8 +2084,7 @@ dd_remove_virtual_display_after_restore = disabled
         <td>Description</td>
         <td colspan="2">
             Engine used to apply and restore display settings.
-            In automatic mode the new v2 state-machine engine runs on pre-release builds only;
-            stable releases keep the legacy engine unless you opt in with @code{}v2@endcode.
+            Automatic mode uses v2 on all builds. Select @code{}legacy@endcode to opt into the legacy engine.
             @note{Applies to Windows only.}
         </td>
     </tr>
@@ -2100,7 +2099,7 @@ dd_remove_virtual_display_after_restore = disabled
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            dd_display_helper_engine = v2
+            dd_display_helper_engine = legacy
             @endcode</td>
     </tr>
 </table>

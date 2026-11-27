@@ -42,7 +42,6 @@
   #include "src/platform/windows/display_helper_reactivation.h"
   #include "src/globals.h"
   #include "src/logging.h"
-  #include "src/version_compare.h"
   #include "src/platform/windows/display_helper_coordinator.h"
   #include "src/platform/windows/display_helper_request_helpers.h"
   #include "src/platform/windows/frame_limiter_nvcp.h"
@@ -895,21 +894,8 @@ namespace {
   // Used to avoid spamming DISARM frames and to enable a kill-switch if IPC is wedged.
   static std::atomic<bool> g_restore_expected {false};
 
-  // Resolve the effective display helper engine. In automatic mode the v2 engine
-  // only rides pre-release builds; stable releases keep the legacy engine until
-  // v2 has soaked, and users opt in explicitly via dd_display_helper_engine.
   static bool use_legacy_helper_engine() {
-    using engine_e = config::video_t::dd_t::helper_engine_e;
-    switch (config::video.dd.display_helper_engine) {
-      case engine_e::legacy:
-        return true;
-      case engine_e::v2:
-        return false;
-      case engine_e::automatic:
-      default:
-        break;
-    }
-    return !version_compare::is_prerelease_build(PROJECT_BUILD_CHANNEL, PROJECT_VERSION);
+    return config::video.dd.display_helper_engine == config::video_t::dd_t::helper_engine_e::legacy;
   }
   static std::atomic<std::uint64_t> g_restore_generation {0};
   static std::atomic<std::uint64_t> g_final_restore_cleanup_generation {0};
@@ -2195,8 +2181,9 @@ namespace {
       j["wa_hdr_toggle"] = true;
     }
 
-    if (request.virtual_display_arrangement) {
+    if (request.virtual_display_arrangement && request.session_overrides.virtual_display_override.value_or(false)) {
       j["sunshine_virtual_layout"] = virtual_layout_to_string(*request.virtual_display_arrangement);
+      j["sunshine_virtual_screen"] = true;
     }
 
     if (!request.topology.topology.empty()) {

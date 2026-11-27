@@ -231,7 +231,7 @@ namespace config {
       bool config_revert_on_disconnect;  ///< Specify whether to revert display configuration on client disconnect.
       int paused_virtual_display_timeout_secs;  ///< Optional delay before virtual display cleanup while stream is paused (0 keeps alive).
       enum class helper_engine_e : int {
-        automatic,  ///< v2 engine on pre-release builds, legacy engine on stable releases.
+        automatic,  ///< Use the default v2 state-machine engine.
         v2,  ///< Always use the v2 state-machine engine.
         legacy  ///< Always use the legacy engine.
       };

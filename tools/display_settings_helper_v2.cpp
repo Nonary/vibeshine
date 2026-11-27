@@ -395,6 +395,7 @@ namespace {
           out_request.virtual_layout = j["sunshine_virtual_layout"].get<std::string>();
           j.erase("sunshine_virtual_layout");
         }
+        j.erase("sunshine_virtual_screen");  // Legacy helper uses an explicit virtual-screen marker.
         if (j.contains("sunshine_monitor_positions") && j["sunshine_monitor_positions"].is_object()) {
           for (auto it = j["sunshine_monitor_positions"].begin(); it != j["sunshine_monitor_positions"].end(); ++it) {
             const auto &node = it.value();

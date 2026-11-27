@@ -621,7 +621,10 @@ namespace {
       return false;
     }
 
-    bool configuration_matches_current_state(const display_device::SingleDisplayConfiguration &cfg) const {
+    bool configuration_matches_current_state(
+      const display_device::SingleDisplayConfiguration &cfg,
+      bool require_active_target = false
+    ) const {
       auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(true);
       if (!borrowed_output_mutation) return {};
 
@@ -637,6 +640,10 @@ namespace {
         // getCurrentDisplayModes/getCurrentHdrStates use queryDisplayConfig() to get active
         // config and search for specific devices - much faster than full enumeration.
         const std::set<std::string> device_ids {cfg.m_device_id};
+
+        if (require_active_target && !cfg.m_resolution && !cfg.m_refresh_rate && !cfg.m_hdr_state) {
+          return display_device::win_utils::flattenTopology(m_dd->getCurrentTopology()).contains(cfg.m_device_id);
+        }
 
         // Check resolution and refresh rate if specified in config
         if (cfg.m_resolution || cfg.m_refresh_rate) {
@@ -768,7 +775,8 @@ namespace {
 
     bool soft_test_display_settings(
       const display_device::SingleDisplayConfiguration &cfg,
-      const std::optional<display_device::ActiveTopology> &base_topology
+      const std::optional<display_device::ActiveTopology> &base_topology,
+      bool require_exact_target = false
     ) const {
       auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(true);
       if (!borrowed_output_mutation) return {};
@@ -782,6 +790,11 @@ namespace {
           return false;
         }
         const auto devices = enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
+        if (require_exact_target && std::none_of(devices.begin(), devices.end(), [&](const auto &device) {
+              return device.m_device_id == cfg.m_device_id;
+            })) {
+          return false;
+        }
         auto initial = display_device::win_utils::computeInitialState(std::nullopt, topo_before, devices);
         if (!initial) {
           return false;
@@ -4926,10 +4939,14 @@ namespace {
       } catch (...) {}
     }
 
-    bool verify_last_configuration_sticky(std::chrono::milliseconds settle_delay = kVerificationSettleDelay, std::stop_token st = {}) {
+    bool verify_last_configuration_sticky(
+      std::chrono::milliseconds settle_delay = kVerificationSettleDelay,
+      std::stop_token st = {},
+      bool require_active_target = false
+    ) {
       auto matches = [&]() {
         const auto cfg = effective_last_cfg();
-        return !cfg || controller.configuration_matches_current_state(*cfg);
+        return !cfg || controller.configuration_matches_current_state(*cfg, require_active_target);
       };
       if (!matches()) {
         return false;
@@ -5761,6 +5778,25 @@ namespace {
     return false;
   }
 
+  bool prepare_virtual_screen_apply(display_device::SingleDisplayConfiguration &cfg, const std::optional<std::string> &layout) {
+    using Prep = display_device::SingleDisplayConfiguration::DevicePreparation;
+    if (cfg.m_device_id.empty() || !layout) {
+      return false;
+    }
+    // SettingsManager can substitute a physical output for an inactive
+    // VerifyOnly target. Require activation of the requested output instead.
+    if (*layout == "exclusive") {
+      cfg.m_device_prep = Prep::EnsureOnlyDisplay;
+    } else if (*layout == "extended_primary" || *layout == "extended_primary_isolated") {
+      cfg.m_device_prep = Prep::EnsurePrimary;
+    } else if (*layout == "extended" || *layout == "extended_isolated") {
+      cfg.m_device_prep = Prep::EnsureActive;
+    } else {
+      return false;
+    }
+    return true;
+  }
+
   bool handle_apply(ServiceState &state, std::span<const uint8_t> payload, std::string &error_msg, bool &refresh_shell) {
     // Cancel any ongoing restore activity since a new APPLY supersedes it
     state.stop_restore_polling();
@@ -5774,6 +5810,7 @@ namespace {
     auto apply_deadline = std::chrono::steady_clock::time_point::max();
     bool wa_hdr_toggle = false;
     bool refresh_settings_baseline = false;
+    bool virtual_screen = false;
     std::optional<std::string> requested_virtual_layout;
     std::vector<std::pair<std::string, display_device::Point>> monitor_position_overrides;
     std::vector<std::pair<std::string, std::pair<unsigned int, unsigned int>>> refresh_rate_overrides;
@@ -5803,6 +5840,10 @@ namespace {
         if (j.contains("sunshine_virtual_layout") && j["sunshine_virtual_layout"].is_string()) {
           requested_virtual_layout = j["sunshine_virtual_layout"].get<std::string>();
           j.erase("sunshine_virtual_layout");
+        }
+        if (const auto marker = j.find("sunshine_virtual_screen"); marker != j.end()) {
+          virtual_screen = marker->is_boolean() && marker->get<bool>();
+          j.erase(marker);
         }
         if (j.contains("sunshine_monitor_positions") && j["sunshine_monitor_positions"].is_object()) {
           for (auto it = j["sunshine_monitor_positions"].begin(); it != j["sunshine_monitor_positions"].end(); ++it) {
@@ -5894,6 +5935,10 @@ namespace {
       error_msg = "Invalid display configuration payload";
       return false;
     }
+    if (virtual_screen && !prepare_virtual_screen_apply(cfg, requested_virtual_layout)) {
+      error_msg = "Virtual display activation requires an exact device and a supported layout";
+      return false;
+    }
     state.last_apply_ms.store(
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()
@@ -5926,8 +5971,10 @@ namespace {
       error_msg = "Display initialization exceeded its budget";
       return false;
     }
-    bool validated = state.controller.soft_test_display_settings(cfg, sunshine_topology);
-    if (!validated) {
+    bool validated = state.controller.soft_test_display_settings(cfg, sunshine_topology, virtual_screen);
+    // A global topology reset can make the owned virtual output inactive.
+    // Keep retries on the exact target through the host's recovery path.
+    if (!validated && !virtual_screen) {
       BOOST_LOG(warning) << "Display helper: configuration failed SDC_VALIDATE soft-test; attempting display stack recovery and retrying once.";
       if (state.controller.recover_display_stack()) {
         std::this_thread::sleep_for(500ms);
@@ -5964,7 +6011,7 @@ namespace {
       bool verified_sync = false;
       for (int attempt = 1; attempt <= kMaxSyncVerifyAttempts; ++attempt) {
         if (std::chrono::steady_clock::now() >= apply_deadline) break;
-        if (state.verify_last_configuration_sticky(ServiceState::kVerificationSettleDelay)) {
+        if (state.verify_last_configuration_sticky(ServiceState::kVerificationSettleDelay, {}, virtual_screen)) {
           verified_sync = std::chrono::steady_clock::now() < apply_deadline;
           break;
         }
