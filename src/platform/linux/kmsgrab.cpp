@@ -1339,6 +1339,49 @@ namespace platf {
         }
       }
 
+      /**
+       * Records what capture found for the captured output, and returns what
+       * capture does: `ok` to capture the framebuffer, `timeout` to hold the
+       * last frame, or `reinit` to end the capture generation. Logs once when a
+       * gap starts and once when it ends, not at the frame rate.
+       */
+      capture_e framebuffer_status(framebuffer_gap_t::frame_e frame) {
+        switch (framebuffer_gap.observe(frame, std::chrono::steady_clock::now())) {
+          case framebuffer_gap_t::step_e::capture:
+            return capture_e::ok;
+          case framebuffer_gap_t::step_e::skip:
+          case framebuffer_gap_t::step_e::holding:
+            return capture_e::timeout;
+          case framebuffer_gap_t::step_e::started:
+            BOOST_LOG(warning) << "KMS CRTC ["sv << crtc_id << "] has no framebuffer; holding the last frame"sv;
+            return capture_e::timeout;
+          case framebuffer_gap_t::step_e::expired:
+            BOOST_LOG(warning) << "KMS CRTC ["sv << crtc_id << "] had no framebuffer for "sv
+                               << framebuffer_gap_t::limit.count() << " seconds; reinitializing capture"sv;
+            return capture_e::reinit;
+          case framebuffer_gap_t::step_e::recovered:
+            BOOST_LOG(info) << "KMS CRTC ["sv << crtc_id << "] framebuffer returned; reinitializing capture to rebuild the output state"sv;
+            return capture_e::reinit;
+        }
+        return capture_e::error;
+      }
+
+      /**
+       * Returns what capture does when a presentation commit stays pending past
+       * PRESENT_PENDING_HANG_TIMEOUT. The driver can report a completed disable
+       * as an empty frame while a later commit stays pending. A commit that
+       * stays pending through a framebuffer gap belongs to that gap, so it
+       * reinitializes capture, which the capture worker retries. Outside a gap,
+       * `std::nullopt` keeps ending capture with an error.
+       */
+      std::optional<capture_e> pending_hang_status() {
+        if (!framebuffer_gap.active()) {
+          return std::nullopt;
+        }
+        BOOST_LOG(warning) << "KMS CRTC ["sv << crtc_id << "] commit stayed pending through a framebuffer gap; reinitializing capture"sv;
+        return capture_e::reinit;
+      }
+
       inline capture_e refresh(egl::owned_surface_t &surface, std::optional<std::chrono::steady_clock::time_point> &frame_timestamp) {
         auto *sd = &surface.sd;
         // Recheck current connector state before delivering any frame. This
@@ -1398,22 +1441,34 @@ namespace platf {
         plane_t plane = drmModeGetPlane(card.fd.el, plane_id);
         frame_timestamp = std::chrono::steady_clock::now();
 
-        // A disconnected output temporarily has no plane framebuffer. End this
-        // capture generation instead of retrying and logging at the frame rate.
+        // A modeset can clear the plane's framebuffer for a moment. Returning
+        // reinit at once tears the capture generation down while the output is
+        // still reconfiguring, and the new generation cannot find a plane with a
+        // framebuffer yet. Hold the last frame instead. The generation ends
+        // when the gap lasts, or when a framebuffer returns.
         if (!plane || plane->fb_id == 0) {
-          return capture_e::reinit;
+          return framebuffer_status(framebuffer_gap_t::frame_e::missing);
         }
 
         auto fb = card.fb(plane.get());
         if (!fb) {
           // This can happen if the display is being reconfigured while streaming
-          BOOST_LOG(warning) << "Couldn't get drm fb for plane ["sv << plane->fb_id << "]: "sv << strerror(errno);
-          return capture_e::timeout;
+          if (!framebuffer_gap.active()) {
+            BOOST_LOG(warning) << "Couldn't get drm fb for plane ["sv << plane->fb_id << "]: "sv << strerror(errno);
+          }
+          return framebuffer_status(framebuffer_gap_t::frame_e::unreadable);
         }
 
         if (!fb->handles[0]) {
           BOOST_LOG(error) << "Couldn't get handle for DRM Framebuffer ["sv << plane->fb_id << "]: Probably not permitted"sv;
           return capture_e::error;
+        }
+
+        // The first framebuffer after a gap ends this generation, because the
+        // modeset can have changed the plane's CRTC, the connector on it, or the
+        // output geometry that init() cached.
+        if (const auto status = framebuffer_status(framebuffer_gap_t::frame_e::acquired); status != capture_e::ok) {
+          return status;
         }
 
         for (int y = 0; y < 4; ++y) {
@@ -1883,7 +1938,7 @@ namespace platf {
             }
             if (presentation_latch.state_pending()) {
               if (presentation_latch.pending_timed_out(std::chrono::steady_clock::now(), pacing::PRESENT_PENDING_HANG_TIMEOUT)) {
-                return std::nullopt;
+                return pending_hang_status();
               }
             }
 
@@ -1893,9 +1948,27 @@ namespace platf {
             // coherent presentation.
             switch (dequeue_presentation_frame()) {
               case frame_export_e::ready:
+                // The first framebuffer after a gap ends this generation, so
+                // init() rebuilds the output state that the modeset can have
+                // changed.
+                if (const auto status = framebuffer_status(framebuffer_gap_t::frame_e::acquired); status != platf::capture_e::ok) {
+                  return status;
+                }
                 break;
               case frame_export_e::empty:
-                return platf::capture_e::reinit;
+                // A modeset can leave the CRTC without a completed framebuffer
+                // for a moment. Keep this capture generation and hold the last
+                // frame. The idle presentation wait below paces the next export.
+                // The generation ends when the gap lasts, or when a framebuffer
+                // returns.
+                if (framebuffer_status(framebuffer_gap_t::frame_e::missing) == platf::capture_e::reinit) {
+                  return platf::capture_e::reinit;
+                }
+                presentation_pending = false;
+                if (!push_captured_image_cb({}, false)) {
+                  return platf::capture_e::ok;
+                }
+                continue;
               case frame_export_e::unsupported:
                 return std::nullopt;
             }
@@ -1923,7 +1996,7 @@ namespace platf {
 
             if (presentation_latch.state_pending()) {
               if (presentation_latch.pending_timed_out(std::chrono::steady_clock::now(), pacing::PRESENT_PENDING_HANG_TIMEOUT)) {
-                return std::nullopt;
+                return pending_hang_status();
               }
             }
 
@@ -2036,7 +2109,7 @@ namespace platf {
             case presentation_wait_e::timeout:
               if (presentation_latch.state_pending() &&
                   presentation_latch.pending_timed_out(std::chrono::steady_clock::now(), pacing::PRESENT_PENDING_HANG_TIMEOUT)) {
-                return std::nullopt;
+                return pending_hang_status();
               }
               if (presentation_latch.capture_ready()) {
                 presentation_pending = true;
@@ -2116,6 +2189,7 @@ namespace platf {
       int img_offset_y;
 
       int plane_id;
+      framebuffer_gap_t framebuffer_gap;
       int crtc_id;
       int crtc_index;
 
