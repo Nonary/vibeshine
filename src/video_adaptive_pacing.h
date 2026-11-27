@@ -417,6 +417,31 @@ namespace stream::pacing {
     adaptive_pacing_events_t events_;
   };
 
+  /// A frame splits into at most this many FEC blocks; beyond that the sender
+  /// turns FEC off.
+  inline constexpr std::size_t max_fec_blocks = 4;
+
+  /// Data shards of an average frame at the stream's bitrate.
+  inline std::size_t nominal_frame_shards(int bitrate_kbps, int framerate, std::size_t frame_header_bytes, std::size_t payload_blocksize) {
+    const std::uint64_t frame_bytes = (std::uint64_t(bitrate_kbps) * 125 + std::uint64_t(framerate) - 1) / std::uint64_t(framerate);
+    return std::size_t((frame_bytes + frame_header_bytes + payload_blocksize - 1) / payload_blocksize);
+  }
+
+  /// Data shards one Reed-Solomon block holds: at most 255 shards, data plus parity.
+  inline std::size_t max_fec_data_per_block(int fec_percentage) {
+    return std::max<std::size_t>(255 * 100 / (100 + std::size_t(std::max(fec_percentage, 0))), 1);
+  }
+
+  /// Whether the sender turns FEC off for an average frame at the stream's
+  /// bitrate. Wire demand drops at the first such bitrate, so it only rises
+  /// with the bitrate on either side of it.
+  inline bool nominal_fec_off(int bitrate_kbps, int framerate, std::size_t frame_header_bytes, std::size_t payload_blocksize, int fec_percentage) {
+    if (bitrate_kbps <= 0 || framerate <= 0 || payload_blocksize == 0) {
+      return false;
+    }
+    return nominal_frame_shards(bitrate_kbps, framerate, frame_header_bytes, payload_blocksize) > max_fec_blocks * max_fec_data_per_block(fec_percentage);
+  }
+
   /// Wire rate of an average frame at the stream's bitrate, as packetized and
   /// FEC-expanded by the ordinary video send path.
   ///
@@ -437,16 +462,12 @@ namespace stream::pacing {
     if (bitrate_kbps <= 0 || framerate <= 0 || payload_blocksize == 0) {
       return 0;
     }
-    const std::uint64_t frame_bytes = (std::uint64_t(bitrate_kbps) * 125 + std::uint64_t(framerate) - 1) / std::uint64_t(framerate);
-    const std::size_t total_shards = std::size_t((frame_bytes + frame_header_bytes + payload_blocksize - 1) / payload_blocksize);
+    const std::size_t total_shards = nominal_frame_shards(bitrate_kbps, framerate, frame_header_bytes, payload_blocksize);
     const auto percentage = std::size_t(std::max(fec_percentage, 0));
-    // A Reed-Solomon block holds at most 255 shards (data plus parity) and a
-    // frame at most 4 blocks; beyond that the sender turns FEC off.
-    constexpr std::size_t max_blocks = 4;
-    const std::size_t max_data_per_block = std::max<std::size_t>(255 * 100 / (100 + percentage), 1);
+    const std::size_t max_data_per_block = max_fec_data_per_block(fec_percentage);
     std::size_t blocks = std::max<std::size_t>((total_shards + max_data_per_block - 1) / max_data_per_block, 1);
-    const bool fec_off = blocks > max_blocks;
-    blocks = std::min(blocks, max_blocks);
+    const bool fec_off = blocks > max_fec_blocks;
+    blocks = std::min(blocks, max_fec_blocks);
     const std::size_t per_block = (total_shards + blocks - 1) / blocks;
     std::size_t packets = 0;
     for (std::size_t remaining = total_shards, block = 0; block < blocks && remaining > 0; ++block) {
