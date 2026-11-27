@@ -13,4 +13,11 @@ namespace rtsp_stream {
   constexpr bool should_send_audio_codec_header(audio::dolby_codec_e codec) noexcept {
     return codec != audio::dolby_codec_e::opus;
   }
+
+  /**
+   * @brief Report the host-confirmed audio quality only for negotiated Dolby codecs.
+   */
+  constexpr bool should_send_audio_quality_header(audio::dolby_codec_e codec) noexcept {
+    return codec != audio::dolby_codec_e::opus;
+  }
 }  // namespace rtsp_stream
