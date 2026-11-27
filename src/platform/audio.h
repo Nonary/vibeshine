@@ -60,6 +60,10 @@ namespace platf {
 
     virtual std::optional<sink_t> sink_info() = 0;
 
+    // Managed USB teardown observes every Windows render role independently.
+    // Ordinary backends retain their existing behavior.
+    virtual std::vector<std::string> render_roles() { return {}; }
+
     /**
      * @brief Restores the host audio sink after streaming stops.
      * @note Most platforms restore a single sink. Windows overrides this to

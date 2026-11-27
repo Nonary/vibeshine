@@ -96,7 +96,7 @@ namespace rtsp_stream {
     };
 
     std::optional<app_metadata_t> app_metadata;
-    int surround_info;
+    std::uint32_t surround_info;
     std::string surround_params;
     bool continuous_audio;
     // The client's `hdrMode=1` launch flag. Every Moonlight client derives this bit from

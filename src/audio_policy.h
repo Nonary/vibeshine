@@ -14,7 +14,7 @@ namespace audio::policy {
     int channels;
     int streams;
     int coupled_streams;
-    std::array<unsigned char, 8> mapping;
+    std::array<unsigned char, 12> mapping;
   };
 
   int stream_index(int channels, bool high_quality);

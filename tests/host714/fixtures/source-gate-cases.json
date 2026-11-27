@@ -1,0 +1,83 @@
+{
+  "schema": "source-gate-fixtures/1",
+  "status": "proposed expected outcomes; not a test of a production source-gate implementation",
+  "cases": [
+    {
+      "id": "native_exact_12",
+      "mix_channels": 12,
+      "mix_mask": "0x2D63F",
+      "sample_rate": 48000,
+      "shared_result": "S_OK",
+      "closest_channels": null,
+      "expected": "format_capable_12",
+      "content_proven": false
+    },
+    {
+      "id": "eight_channel_mix_converts",
+      "mix_channels": 8,
+      "mix_mask": "0x63F",
+      "sample_rate": 48000,
+      "shared_result": "S_OK",
+      "closest_channels": null,
+      "expected": "not_proven_native_12",
+      "reason": "conversion acceptance is not a 12-channel mix"
+    },
+    {
+      "id": "closest_eight",
+      "mix_channels": 8,
+      "mix_mask": "0x63F",
+      "sample_rate": 48000,
+      "shared_result": "S_FALSE",
+      "closest_channels": 8,
+      "expected": "unavailable_12ch"
+    },
+    {
+      "id": "exclusive_only",
+      "mix_channels": 8,
+      "mix_mask": "0x63F",
+      "shared_result": "AUDCLNT_E_UNSUPPORTED_FORMAT",
+      "exclusive_result": "S_OK",
+      "expected": "unavailable_12ch_for_shared_loopback"
+    },
+    {
+      "id": "query_service_error",
+      "mix_channels": null,
+      "shared_result": "AUDCLNT_E_SERVICE_NOT_RUNNING",
+      "expected": "query_error_not_supported"
+    },
+    {
+      "id": "twelve_wrong_mask",
+      "mix_channels": 12,
+      "mix_mask": "0xF63F",
+      "shared_result": "S_OK",
+      "expected": "reject_wrong_native_layout"
+    },
+    {
+      "id": "twelve_no_known_source_content",
+      "mix_channels": 12,
+      "mix_mask": "0x2D63F",
+      "shared_result": "S_OK",
+      "height_energy": "zero_in_ordinary_content",
+      "expected": "format_capable_content_unproven_not_automatically_error"
+    },
+    {
+      "id": "synthetic_generator",
+      "source": "labelled_test_generator",
+      "channels": 12,
+      "expected": "synthetic_12ch_test_not_game_capture"
+    },
+    {
+      "id": "eight_padded_zero",
+      "source_channels": 8,
+      "output_channels": 12,
+      "height_channels": "padded_zeros",
+      "expected": "reject_as_genuine_714"
+    },
+    {
+      "id": "disconnected_after_negotiation",
+      "was_channels": 12,
+      "current_state": "invalidated",
+      "expected": "stop_or_fail_session_consistently_no_midstream_layout_change"
+    }
+  ]
+}

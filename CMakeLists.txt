@@ -96,6 +96,8 @@ include(${CMAKE_MODULE_PATH}/compile_definitions/common.cmake)
 # target definitions
 include(${CMAKE_MODULE_PATH}/targets/common.cmake)
 
+include(${CMAKE_MODULE_PATH}/vibe_speakers.cmake)
+
 # packaging
 include(${CMAKE_MODULE_PATH}/packaging/common.cmake)
 

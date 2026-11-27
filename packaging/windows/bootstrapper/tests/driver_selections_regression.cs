@@ -23,6 +23,12 @@ internal static class DriverSelectionsRegression {
   var options=InstallerRunner.BuildDriverSelectionArguments(args,true,false).ToArray();
   Check(options.Contains("INSTALL_DISPLAY_DRIVERS=0") && options.Contains("INSTALL_VIRTUAL_DISPLAY_DRIVER=1") && options.Contains("INSTALL_VIRTUAL_GAMEPAD_DRIVER=0"),"optouts map to MSI and preserve backend");
   args=InstallerArguments.Parse(new[]{"--ui"});
+  var originalSid=args.VibeSpeakersUserSid;
+  var elevatedArgs=InstallerArguments.Parse(new[]{"--internal-elevated-install","--internal-vibe-user-sid",originalSid});
+  Check(InstallerRunner.VibeSpeakersUserArgument(elevatedArgs)=="VIBE_SETUP_USER_SID="+originalSid,"initiating user survives elevation handoff");
+  bool systemRejected=false;
+  try{InstallerArguments.Parse(new[]{"--internal-vibe-user-sid","S-1-5-18"});}catch(ArgumentException){systemRejected=true;}
+  Check(systemRejected,"SYSTEM cannot own the installing account's controller");
   Check(InstallerRunner.BuildDriverSelectionArguments(args,true,true).Contains("INSTALL_DISPLAY_DRIVERS=1"),"missing internal option defaults on");
   var payload=new InstallerRunner.PayloadMsiInfo {HasLocalGamepadCertificate=true,LocalGamepadCertificateThumbprint="7F1868BF86698A8674F40E686B02C8C702BD3B88"};
   InstallerRunner.ApplySelectedGamepadTrust(args,payload,true);

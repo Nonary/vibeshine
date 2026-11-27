@@ -14,8 +14,10 @@ namespace audio::policy {
         return 2 + quality_offset;
       case 8:
         return 4 + quality_offset;
+      case 12:
+        return high_quality ? -1 : 6;
       default:
-        return 0;
+        return -1;
     }
   }
 

@@ -26,6 +26,7 @@ export interface SettingsVisibility {
   key: string;
   equals?: string | boolean;
   notEquals?: string | boolean;
+  notIn?: string[];
 }
 
 export interface SettingsField {
@@ -931,10 +932,15 @@ export const settingsCategories: SettingsCategory[] = [
             option('eac3', 'config.audio_format_eac3'),
           ]),
           boolean('high_quality_audio', { visibleWhen: { key: 'audio_format', notEquals: 'opus' } }),
-          text('audio_sink', { monospace: true, stacked: true }),
-          boolean('audio_sink_capture_only', { platform: 'windows' }),
-          text('virtual_sink', { monospace: true, stacked: true }),
-          boolean('install_steam_audio_drivers', { platform: 'windows' }),
+          select('audio_714_source', [
+            option('off', 'config.audio_714_off'),
+            option('vibe_usb', 'config.audio_usb_source'),
+          ], { platform: 'windows' }),
+          select('audio_usb_sample_format', [option('pcm24', 'config.audio_714_pcm24'), option('pcm16', 'config.audio_714_pcm16')], { platform: 'windows', visibleWhen: { key: 'audio_714_source', equals: 'vibe_usb' } }),
+          text('audio_sink', { monospace: true, stacked: true, visibleWhen: { key: 'audio_714_source', notIn: ['vibe_usb'] } }),
+          boolean('audio_sink_capture_only', { platform: 'windows', visibleWhen: { key: 'audio_714_source', notIn: ['vibe_usb'] } }),
+          text('virtual_sink', { monospace: true, stacked: true, visibleWhen: { key: 'audio_714_source', notIn: ['vibe_usb'] } }),
+          boolean('install_steam_audio_drivers', { platform: 'windows', visibleWhen: { key: 'audio_714_source', notIn: ['vibe_usb'] } }),
         ],
       },
     ],
@@ -1221,6 +1227,8 @@ export const settingsDefaults: Record<string, unknown> = {
   install_steam_audio_drivers: true,
   audio_format: 'opus',
   high_quality_audio: false,
+  audio_714_source: 'off',
+  audio_usb_sample_format: 'pcm24',
   audio_sink: '',
   audio_sink_capture_only: false,
   virtual_sink: '',
@@ -1273,7 +1281,11 @@ export const knownSettingsKeys = new Set(
 );
 knownSettingsKeys.add('adapter_pnp_id');
 
-export const restartRequiredKeys = new Set(['address_family', 'cert', 'pkey', 'port', 'upnp']);
+export const restartRequiredKeys = new Set([
+  'address_family', 'cert', 'pkey', 'port', 'upnp',
+  'audio_usb_bridge_executable', 'audio_usb_bridge_sha256',
+  'audio_usb_controller_instance', 'audio_usb_evidence_root', 'audio_usb_session_seconds',
+]);
 
 export function matchesPlatform(
   field: { platform?: SettingsField['platform'] },

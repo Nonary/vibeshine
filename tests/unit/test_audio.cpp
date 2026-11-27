@@ -124,7 +124,9 @@ TEST(AudioStreamPolicy, SelectsChannelAndQualityVariant) {
   EXPECT_EQ(stream_index(6, true), 3);
   EXPECT_EQ(stream_index(8, false), 4);
   EXPECT_EQ(stream_index(8, true), 5);
-  EXPECT_EQ(stream_index(3, true), 0);
+  EXPECT_EQ(stream_index(12, false), 6);
+  EXPECT_EQ(stream_index(12, true), -1);
+  EXPECT_EQ(stream_index(3, true), -1);
 }
 
 TEST(AudioStreamPolicy, AppliesCustomSurroundLayoutWithoutMutatingDefault) {

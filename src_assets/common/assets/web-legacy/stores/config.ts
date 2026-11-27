@@ -123,6 +123,8 @@ const defaultGroups = [
     id: 'av',
     name: 'Audio/Video',
     options: {
+      audio_714_source: 'off',
+      audio_usb_sample_format: 'pcm24',
       audio_sink: '',
       audio_sink_capture_only: 'disabled',
       virtual_sink: '',

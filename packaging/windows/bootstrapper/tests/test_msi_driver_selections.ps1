@@ -9,21 +9,22 @@ function Rows($Query,$Names) {
 }
 $actions=@(Rows 'SELECT `Action`,`Source`,`Target` FROM `CustomAction`' @('name','property','value'))
 $sequence=@(Rows 'SELECT `Action`,`Condition`,`Sequence` FROM `InstallExecuteSequence`' @('name','condition','step'))
-$names=@('RestoreSavedDisplayDriverSelection','DefaultDisplayDriverSelection','RestoreSavedGamepadDriverSelection','DefaultGamepadDriverSelection','EnsureDriverSelectionsRepair','ExtendDriverSelectionsRepair','DefaultDriverSelectionsRepairMode')
+$names=@('RestoreSavedDisplayDriverSelection','DefaultDisplayDriverSelection','RestoreSavedGamepadDriverSelection','DefaultGamepadDriverSelection','RestoreSavedVibeSpeakersSelection','DefaultVibeSpeakersSelection','EnsureDriverSelectionsRepair','ExtendDriverSelectionsRepair','DefaultDriverSelectionsRepairMode')
 $tested=@($sequence|Where-Object{$_.name -in $names}|Sort-Object {[int]$_.step})
-if($tested.Count -ne 7){throw 'Missing MSI driver preference actions'}
+if($tested.Count -ne $names.Count){throw 'Missing MSI driver preference actions'}
 $cost=[int]($sequence|Where-Object{$_.name -eq 'CostInitialize'}).step
 if(@($tested|Where-Object{[int]$_.step -ge $cost}).Count -ne 0){throw 'Repair choices must precede component costing'}
 $components=@(Rows 'SELECT `Feature_`,`Component_` FROM `FeatureComponents`' @('feature','component'))
 $prefs=@($components|Where-Object{$_.feature -eq 'InstallerDriverSelections'})
 if($prefs.Count -ne 1 -or $prefs[0].component -ne 'InstallerDriverSelectionPreferences'){throw 'Preference maintenance is not isolated'}
 $keys=@(Rows 'SELECT `Root`,`Key`,`Name`,`Value`,`Component_` FROM `Registry`' @('root','key','name','value','component')|Where-Object{$_.component -eq 'InstallerDriverSelectionPreferences'})
-if($keys.Count -ne 2 -or @($keys|Where-Object{$_.root -ne '2'}).Count -ne 0){throw 'Preferences must contain only two HKLM values'}
+$prefNames=@('DisplayEnabled','GamepadEnabled','VibeSpeakersEnabled')
+if($keys.Count -ne $prefNames.Count -or (Compare-Object $prefNames @($keys.name)) -or @($keys|Where-Object{$_.root -ne '2'}).Count -ne 0){throw 'Unexpected HKLM driver preferences'}
 # Open only a metadata session. Never call DoAction, InstallProduct or configure a feature.
 $session=$installer.OpenPackage([IO.Path]::GetFullPath($MsiPath),1)
 function Set-Property($Name,$Value){$null=$session.GetType().InvokeMember('Property',[Reflection.BindingFlags]::SetProperty,$null,$session,@($Name,[string]$Value))}
 function Get-Property($Name){return $session.GetType().InvokeMember('Property',[Reflection.BindingFlags]::GetProperty,$null,$session,@($Name))}
-$cleared=@('Installed','REMOVE','REINSTALL','REINSTALLMODE','INSTALL_DISPLAY_DRIVERS','INSTALL_VIRTUAL_GAMEPAD_DRIVER','SAVED_DISPLAY_DRIVER_SELECTION','SAVED_GAMEPAD_DRIVER_SELECTION')
+$cleared=@('Installed','REMOVE','REINSTALL','REINSTALLMODE','INSTALL_DISPLAY_DRIVERS','INSTALL_VIRTUAL_GAMEPAD_DRIVER','INSTALL_VIBE_SPEAKERS','SAVED_DISPLAY_DRIVER_SELECTION','SAVED_GAMEPAD_DRIVER_SELECTION','SAVED_VIBE_SPEAKERS_SELECTION')
 $cases=@(
  @{name='fresh';input=@{};display='1';gamepad='1';repair='';mode=''},
  @{name='old missing preferences';input=@{Installed='1'};display='1';gamepad='1';repair='InstallerDriverSelections';mode='m'},
@@ -35,6 +36,9 @@ $cases=@(
  @{name='targeted repair';input=@{Installed='1';REINSTALL='ProductFeature'};display='1';gamepad='1';repair='ProductFeature,InstallerDriverSelections';mode='m'},
  @{name='targeted explicit mode';input=@{Installed='1';REINSTALL='ProductFeature';REINSTALLMODE='omus'};display='1';gamepad='1';repair='ProductFeature,InstallerDriverSelections';mode='omus'},
  @{name='preference repair already present';input=@{Installed='1';REINSTALL='ProductFeature,InstallerDriverSelections';REINSTALLMODE='m'};display='1';gamepad='1';repair='ProductFeature,InstallerDriverSelections';mode='m'},
+ @{name='saved Vibe Speakers opt-in';input=@{Installed='1';SAVED_VIBE_SPEAKERS_SELECTION='1'};display='1';gamepad='1';vibe='1';repair='InstallerDriverSelections';mode='m'},
+ @{name='Vibe Speakers caller opt-out';input=@{Installed='1';SAVED_VIBE_SPEAKERS_SELECTION='1';INSTALL_VIBE_SPEAKERS='0'};display='1';gamepad='1';repair='InstallerDriverSelections';mode='m'},
+ @{name='Vibe Speakers caller opt-in';input=@{Installed='1';SAVED_VIBE_SPEAKERS_SELECTION='0';INSTALL_VIBE_SPEAKERS='1'};display='1';gamepad='1';vibe='1';repair='InstallerDriverSelections';mode='m'},
  @{name='uninstall';input=@{Installed='1';REMOVE='ALL'};display='1';gamepad='1';repair='';mode=''}
 )
 foreach($case in $cases){
@@ -50,7 +54,8 @@ foreach($case in $cases){
    Set-Property $action.property ($session.FormatRecord($record))
   }
  }
- $expected=@{INSTALL_DISPLAY_DRIVERS=$case.display;INSTALL_VIRTUAL_GAMEPAD_DRIVER=$case.gamepad;REINSTALL=$case.repair;REINSTALLMODE=$case.mode}
+ $vibe=if($case.ContainsKey('vibe')){$case.vibe}else{'0'}
+ $expected=@{INSTALL_DISPLAY_DRIVERS=$case.display;INSTALL_VIRTUAL_GAMEPAD_DRIVER=$case.gamepad;INSTALL_VIBE_SPEAKERS=$vibe;REINSTALL=$case.repair;REINSTALLMODE=$case.mode}
  foreach($name in $expected.Keys){if((Get-Property $name) -cne $expected[$name]){throw "$($case.name): $name expected '$($expected[$name])', got '$(Get-Property $name)'"}}
 }
-Write-Host '11 native MSI condition/property-format cases, registry-only feature and pre-costing scheduling passed. No MSI actions, registry writes or installations executed.'
+Write-Host "$($cases.Count) native MSI condition/property-format cases, registry-only feature and pre-costing scheduling passed. No MSI actions, registry writes or installations executed."

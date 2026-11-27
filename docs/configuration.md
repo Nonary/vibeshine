@@ -1177,6 +1177,27 @@ dualsense_haptics_gain = 1.5
     <tr><td>Example</td><td colspan="2"><code>high_quality_audio = enabled</code></td></tr>
 </table>
 
+### audio_714_source
+
+Windows native capture selection: `off` (Default) or `vibe_usb` (Vibe Speakers).
+The normal Windows installer includes the optional source and prepares its
+owned controller in the background. Changes take effect at the next session; existing
+device selections are retained for Default capture.
+See [Vibe Speakers](vibe-speakers.md) for setup, profiles and restore.
+
+### audio_usb_sample_format
+
+`pcm24` (default): 24 valid PCM bits in 32-bit containers. `pcm16`: explicit
+16-bit compatibility mode. The negotiated 2/6/8/12-channel session chooses the
+corresponding owned USB profile; no implicit height generation or downmix.
+
+### audio_714_bitrate
+
+Native12 total Opus bitrate: `600000` (default), `1536000` or `2048000` bit/s.
+The fixed normal profile is 12 channels / 8 streams / 4 coupled, identity-mapped,
+48 kHz, 240 frames. Excess packet sizes and unsupported HQ native12 are rejected.
+Legacy encoder quality settings are preserved.
+
 ### install_steam_audio_drivers
 
 <table>

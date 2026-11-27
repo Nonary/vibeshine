@@ -1,0 +1,60 @@
+{
+  "status": "acceptance specification, not executed production tests",
+  "cases": [
+    {
+      "name": "normal714",
+      "params": "12,8,4,0,1,2,3,4,5,6,7,8,9,10,11",
+      "expected": "accept_normal714"
+    },
+    {
+      "name": "zero_streams",
+      "params": "12,0,12,0,1,2,3,4,5,6,7,8,9,10,11",
+      "expected": "reject"
+    },
+    {
+      "name": "coupled_exceeds_streams",
+      "params": "12,1,11,0,1,2,3,4,5,6,7,8,9,10,11",
+      "expected": "reject"
+    },
+    {
+      "name": "missing_token",
+      "params": "12,,8,4,0,1,2,3,4,5,6,7,8,9,10,11",
+      "expected": "reject"
+    },
+    {
+      "name": "negative_streams",
+      "params": "12,-1,13,0,1,2,3,4,5,6,7,8,9,10,11",
+      "expected": "reject"
+    },
+    {
+      "name": "oversized_integer",
+      "params": "9999999999999999999999999999999999999999999999999999999999999999,8,4,0,1,2,3,4,5,6,7,8,9,10,11",
+      "expected": "reject_without_undefined_behaviour"
+    },
+    {
+      "name": "extra_token",
+      "params": "12,8,4,0,1,2,3,4,5,6,7,8,9,10,11,12",
+      "expected": "reject"
+    },
+    {
+      "name": "truncated_mapping",
+      "params": "12,8,4,0,1,2,3,4,5,6,7,8,9,10",
+      "expected": "reject"
+    },
+    {
+      "name": "prefix_120",
+      "params": "120,8,4,0,1,2,3,4,5,6,7,8,9,10,11",
+      "expected": "reject"
+    },
+    {
+      "name": "mapping_out_of_bounds",
+      "params": "12,8,4,0,1,2,3,4,5,6,7,8,9,10,12",
+      "expected": "reject"
+    },
+    {
+      "name": "hq_not_supported_in_initial_release",
+      "params": "12,12,0,0,1,2,3,4,5,6,7,8,9,10,11",
+      "expected": "do_not_offer_or_select_until_client_and_packet_budget_validated"
+    }
+  ]
+}

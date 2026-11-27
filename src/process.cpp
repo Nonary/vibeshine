@@ -1777,7 +1777,7 @@ namespace proc {
       _env["LD_PRELOAD"] = platf::mangohud::without_preload(existing_preload);
     }
 #endif
-    int channelCount = launch_session->surround_info & 65535;
+    const auto channelCount = launch_session->surround_info & 0xFFFFU;
     switch (channelCount) {
       case 2:
         _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "2.0";
@@ -1787,6 +1787,12 @@ namespace proc {
         break;
       case 8:
         _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "7.1";
+        break;
+      case 12:
+        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "7.1.4";
+        break;
+      default:
+        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "";
         break;
     }
     _env["SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS"] = launch_session->surround_params;

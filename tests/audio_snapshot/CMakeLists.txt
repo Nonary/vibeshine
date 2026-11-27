@@ -6,7 +6,8 @@ find_package(Threads REQUIRED)
 get_filename_component(REPOSITORY "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 add_executable(audio_snapshot_tests
     "${REPOSITORY}/tests/unit/test_audio_context.cpp"
-    "${REPOSITORY}/src/audio_context.cpp")
+    "${REPOSITORY}/src/audio_context.cpp"
+    "${REPOSITORY}/src/audio_atmos_device.cpp")
 target_include_directories(audio_snapshot_tests PRIVATE "${REPOSITORY}")
 target_link_libraries(audio_snapshot_tests PRIVATE Threads::Threads)
 target_compile_definitions(audio_snapshot_tests PRIVATE SUNSHINE_ENABLE_WEBRTC)

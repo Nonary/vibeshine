@@ -31,6 +31,7 @@ extern "C" {
 #endif
 
 // local includes
+#include "audio_protocol.h"
 #include "config.h"
 #include "host_stream_control.h"
 #include "globals.h"
@@ -1804,9 +1805,9 @@ namespace rtsp_stream {
     // Offer only the configured Dolby codec when its FFmpeg encoder is available.
     // ANNOUNCE must explicitly accept this exact offer before the encoder is selected.
     session->audio_codec_offered.clear();
-    if (config::audio.format == "ac3"sv && audio::ac3_available()) {
+    if ((session->surround_info & 0xFFFFU) != 12 && config::audio_714_startup_settings().source != "vibe_usb" && config::audio.format == "ac3"sv && audio::ac3_available()) {
       session->audio_codec_offered = "AC3";
-    } else if (config::audio.format == "eac3"sv && audio::eac3_available()) {
+    } else if ((session->surround_info & 0xFFFFU) != 12 && config::audio_714_startup_settings().source != "vibe_usb" && config::audio.format == "eac3"sv && audio::eac3_available()) {
       session->audio_codec_offered = "EAC3";
     }
     if (!session->audio_codec_offered.empty()) {
@@ -1855,37 +1856,44 @@ namespace rtsp_stream {
       ss << pyrowave::protocol::DESCRIBE_BITSTREAM_ATTRIBUTE << pyrowave::protocol::BITSTREAM_ID << std::endl;
     }
 
-    if (!session->surround_params.empty()) {
-      // If we have our own surround parameters, advertise them twice first
-      ss << "a=fmtp:97 surround-params="sv << session->surround_params << std::endl;
-      ss << "a=fmtp:97 surround-params="sv << session->surround_params << std::endl;
+    if (config::audio_714_startup_settings().source == "vibe_usb") {
+      ss << "a=x-vibe-audio.freshAfterPing:1" << std::endl;
     }
-
-    for (int x = 0; x < audio::MAX_STREAM_CONFIG; ++x) {
-      auto &stream_config = audio::stream_configs[x];
-      std::uint8_t mapping[platf::speaker::MAX_SPEAKERS];
-
-      auto mapping_p = stream_config.mapping;
-
-      /**
-       * GFE advertises incorrect mapping for normal quality configurations,
-       * as a result, Moonlight rotates all channels from index '3' to the right
-       * To work around this, rotate channels to the left from index '3'
-       */
-      if (x == audio::SURROUND51 || x == audio::SURROUND71) {
-        std::copy_n(mapping_p, stream_config.channelCount, mapping);
-        std::rotate(mapping + 3, mapping + 4, mapping + audio::MAX_STREAM_CONFIG);
-
-        mapping_p = mapping;
+    const auto requested_channels = static_cast<int>(session->surround_info & 0xFFFFU);
+    std::optional<audio::policy::stream_layout_t> custom_layout;
+    if (!session->surround_params.empty()) {
+      custom_layout = audio::protocol::parse_surround_params(session->surround_params);
+      if (!custom_layout || custom_layout->channels != requested_channels) {
+        respond(socket->sock, *session, &option, 400, "INVALID AUDIO PARAMETERS", req->sequenceNumber, {});
+        return false;
       }
-
-      ss << "a=fmtp:97 surround-params="sv << stream_config.channelCount << stream_config.streams << stream_config.coupledStreams;
-
-      std::for_each_n(mapping_p, stream_config.channelCount, [&ss](std::uint8_t digit) {
-        ss << (char) (digit + '0');
-      });
-
-      ss << std::endl;
+    }
+    if (requested_channels == 12) {
+      std::string reason;
+      if (!audio::discrete_714_available(reason)) {
+        BOOST_LOG(warning) << "unavailable_12ch: " << reason;
+        respond(socket->sock, *session, &option, 503, "UNAVAILABLE 12CH SOURCE", req->sequenceNumber, {});
+        return false;
+      }
+      // Only the agreed normal topology is offered, exactly once. A second
+      // offer would be interpreted as HQ by historical clients.
+      ss << "a=fmtp:97 surround-params="
+         << audio::protocol::format_surround_params(audio::protocol::discrete_layout(), false) << std::endl;
+    } else {
+      if (custom_layout) {
+        ss << "a=fmtp:97 surround-params=" << audio::protocol::format_surround_params(*custom_layout, true) << std::endl;
+        ss << "a=fmtp:97 surround-params=" << audio::protocol::format_surround_params(*custom_layout, false) << std::endl;
+      }
+      for (int x = 0; x < audio::MAX_STREAM_CONFIG; ++x) {
+        const auto &stream_config = audio::stream_configs[x];
+        if (stream_config.channelCount == 12) continue;
+        audio::policy::stream_layout_t layout {stream_config.channelCount, stream_config.streams, stream_config.coupledStreams, {}};
+        std::copy_n(stream_config.mapping, stream_config.channelCount, layout.mapping.begin());
+        // The formatter rotates only the active 6/8 channels, never the number
+        // of profile entries. HQ and 12ch mappings are already in native order.
+        ss << "a=fmtp:97 surround-params="
+           << audio::protocol::format_surround_params(layout, x == audio::SURROUND51 || x == audio::SURROUND71) << std::endl;
+      }
     }
 
     respond(socket->sock, *session, &option, 200, "OK", req->sequenceNumber, ss.str());
@@ -1965,45 +1973,11 @@ namespace rtsp_stream {
 
     std::string_view payload {req->payload, (size_t) req->payloadLength};
 
-    std::vector<std::string_view> lines;
-
-    auto whitespace = [](char ch) {
-      return ch == '\n' || ch == '\r';
-    };
-
-    {
-      auto pos = std::begin(payload);
-      auto begin = pos;
-      while (pos != std::end(payload)) {
-        if (whitespace(*pos++)) {
-          lines.emplace_back(begin, pos - begin - 1);
-
-          while (pos != std::end(payload) && whitespace(*pos)) {
-            ++pos;
-          }
-          begin = pos;
-        }
-      }
-    }
-
     std::string_view client;
-    std::unordered_map<std::string_view, std::string_view> args;
-
-    for (auto line : lines) {
-      auto type = line.substr(0, 2);
-      if (type == "s="sv) {
-        client = line.substr(2);
-      } else if (type == "a=") {
-        auto pos = line.find(':');
-
-        auto name = line.substr(2, pos - 2);
-        auto val = line.substr(pos + 1);
-
-        if (val[val.size() - 1] == ' ') {
-          val = val.substr(0, val.size() - 1);
-        }
-        args.emplace(name, val);
-      }
+    audio::protocol::attribute_map_t args;
+    if (!audio::protocol::parse_announce_attributes(payload, args, client)) {
+      respond(socket->sock, *session, &option, 400, "MALFORMED ANNOUNCE", req->sequenceNumber, {});
+      return false;
     }
 
     // Initialize any omitted parameters to defaults
@@ -2031,12 +2005,21 @@ namespace rtsp_stream {
     std::int64_t configuredBitrateKbps;
     config.audio.flags[audio::config_t::HOST_AUDIO] = session->host_audio;
     try {
-      config.audio.channels = (int) util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
-      config.audio.mask = (int) util::from_view(args.at("x-nv-audio.surround.channelMask"sv));
-      config.audio.packetDuration = (int) util::from_view(args.at("x-nv-aqos.packetDuration"sv));
-
-      config.audio.flags[audio::config_t::HIGH_QUALITY] =
-        util::from_view(args.at("x-nv-audio.surround.AudioQuality"sv));
+      const auto channels = audio::protocol::parse_uint32(args.at("x-nv-audio.surround.numChannels"sv));
+      const auto mask = audio::protocol::parse_uint32(args.at("x-nv-audio.surround.channelMask"sv));
+      const auto duration = audio::protocol::parse_uint32(args.at("x-nv-aqos.packetDuration"sv));
+      const auto quality = audio::protocol::parse_uint32(args.at("x-nv-audio.surround.AudioQuality"sv));
+      if (!channels || !mask || !duration || !quality || *channels > 12 ||
+          audio::policy::stream_index(static_cast<int>(*channels), false) < 0 ||
+          *mask > 0xFFFFU || *duration == 0 || *duration > 120 || *quality > 1 ||
+          *channels != (session->surround_info & 0xFFFFU)) {
+        respond(socket->sock, *session, &option, 400, "INVALID AUDIO PARAMETERS", req->sequenceNumber, {});
+        return false;
+      }
+      config.audio.channels = static_cast<int>(*channels);
+      config.audio.mask = static_cast<int>(*mask);
+      config.audio.packetDuration = static_cast<int>(*duration);
+      config.audio.flags[audio::config_t::HIGH_QUALITY] = *quality != 0;
 
       config.controlProtocolType = (int) util::from_view(args.at("x-nv-general.useReliableUdp"sv));
       config.packetsize = (int) util::from_view(args.at("x-nv-video[0].packetSize"sv));
@@ -2124,28 +2107,25 @@ namespace rtsp_stream {
           config.audio.flags[audio::config_t::HIGH_QUALITY] = (content.find("0.0.0.0"sv) == std::string::npos);
         }
       }
-    } else if (session->surround_params.length() > 3) {
-      // Channels
-      std::uint8_t c = session->surround_params[0] - '0';
-      // Streams
-      std::uint8_t n = session->surround_params[1] - '0';
-      // Coupled streams
-      std::uint8_t m = session->surround_params[2] - '0';
-      auto valid = false;
-      if ((c == 6 || c == 8) && c == config.audio.channels && n + m == c && session->surround_params.length() == c + 3) {
-        config.audio.customStreamParams.channelCount = c;
-        config.audio.customStreamParams.streams = n;
-        config.audio.customStreamParams.coupledStreams = m;
-        valid = true;
-        for (std::uint8_t i = 0; i < c; i++) {
-          config.audio.customStreamParams.mapping[i] = session->surround_params[i + 3] - '0';
-          if (config.audio.customStreamParams.mapping[i] >= c) {
-            valid = false;
-            break;
-          }
-        }
+    }
+    std::optional<audio::policy::stream_layout_t> custom_layout;
+    if (!session->surround_params.empty()) {
+      custom_layout = audio::protocol::parse_surround_params(session->surround_params);
+      if (!custom_layout || custom_layout->channels != config.audio.channels) {
+        respond(socket->sock, *session, &option, 400, "INVALID CUSTOM AUDIO PARAMETERS", req->sequenceNumber, {});
+        return false;
       }
-      config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
+      config.audio.customStreamParams.channelCount = custom_layout->channels;
+      config.audio.customStreamParams.streams = custom_layout->streams;
+      config.audio.customStreamParams.coupledStreams = custom_layout->coupled_streams;
+      std::copy_n(custom_layout->mapping.begin(), custom_layout->channels, config.audio.customStreamParams.mapping);
+      config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = true;
+    }
+    if (config.audio.channels == 12 && !audio::protocol::validate_714_request(
+          config.audio.channels, static_cast<std::uint32_t>(config.audio.mask), config.audio.packetDuration,
+          config.audio.flags[audio::config_t::HIGH_QUALITY], custom_layout)) {
+      respond(socket->sock, *session, &option, 400, "UNSUPPORTED 12CH PROFILE", req->sequenceNumber, {});
+      return false;
     }
     // Select Dolby only when ANNOUNCE accepts the exact codec offered in DESCRIBE.
     const auto audio_accept = args.find("x-ss-audio-codec-accept"sv);
@@ -2174,7 +2154,7 @@ namespace rtsp_stream {
       eac3_encoder_available,
       config::audio.high_quality_audio
     );
-    if (config::audio.format != "opus"sv && session->audio_codec_offered.empty()) {
+    if (config.audio.channels != 12 && config::audio.format != "opus"sv && session->audio_codec_offered.empty()) {
       BOOST_LOG(warning) << "Dolby audio format ["sv << config::audio.format
                          << "] was selected, but its FFmpeg encoder is unavailable; using Opus"sv;
     } else if (!session->audio_codec_offered.empty() && !client_accepted_audio_codec) {
@@ -2184,6 +2164,13 @@ namespace rtsp_stream {
     if (session->continuous_audio) {
       BOOST_LOG(info) << "Client requested continuous audio"sv;
       config.audio.flags[audio::config_t::CONTINUOUS_AUDIO] = true;
+    }
+
+    std::string audio_reason;
+    if (!audio::prepare_session(config.audio, audio_reason)) {
+      BOOST_LOG(warning) << "Audio session rejected before capture: " << audio_reason;
+      respond(socket->sock, *session, &option, 400, "UNSUPPORTED AUDIO SOURCE OR PROFILE", req->sequenceNumber, {});
+      return false;
     }
 
     if (config.monitor.vrr_low_latency) {
@@ -2303,7 +2290,15 @@ namespace rtsp_stream {
 
       // Account for the selected audio codec's bitrate without changing the Opus calculation.
       int audioBitrateAdjustment {};
-      if (config.audio.use_ac3 || config.audio.use_eac3) {
+      if (config.audio.channels == 12) {
+        audioBitrateAdjustment = audio::protocol::reservation_714_kbps(
+          config.audio.session_bitrate, (config.encryptionFlagsEnabled & SS_ENC_AUDIO) != 0
+        );
+        if (audioBitrateAdjustment < 0) {
+          respond(socket->sock, *session, &option, 400, "INVALID 12CH BITRATE", req->sequenceNumber, {});
+          return false;
+        }
+      } else if (config.audio.use_ac3 || config.audio.use_eac3) {
         audioBitrateAdjustment = audio::dolby_bitrate_kbps(
           config.audio.use_eac3,
           config.audio.high_quality_dolby,
@@ -2314,15 +2309,15 @@ namespace rtsp_stream {
       }
       // Audio adds two parity packets for every four data packets. Include
       // that fixed 50% FEC cost inside PyroWave's total wire budget too.
-      if (pyrowave_session) audioBitrateAdjustment = (audioBitrateAdjustment * 3 + 1) / 2;
-      configuredBitrateKbps -= pyrowave_session ? audioBitrateAdjustment :
-                                                   std::min((std::int64_t) audioBitrateAdjustment, configuredBitrateKbps / 5);
+      if (pyrowave_session && config.audio.channels != 12) audioBitrateAdjustment = (audioBitrateAdjustment * 3 + 1) / 2;
+      configuredBitrateKbps -= (pyrowave_session || config.audio.channels == 12) ? audioBitrateAdjustment :
+                                                                                 std::min((std::int64_t) audioBitrateAdjustment, configuredBitrateKbps / 5);
 
       // Reduce it by another 500Kbps to account for A/V packet overhead and control data
       // traffic (capped at 10% reduction).
       configuredBitrateKbps -= pyrowave_session ? 500 : std::min((std::int64_t) 500, configuredBitrateKbps / 10);
-      if (pyrowave_session && configuredBitrateKbps <= 0) {
-        BOOST_LOG(warning) << "PyroWave bandwidth budget cannot accommodate audio and control overhead";
+      if ((pyrowave_session || config.audio.channels == 12) && configuredBitrateKbps <= 0) {
+        BOOST_LOG(warning) << "Bandwidth budget cannot accommodate audio and control overhead";
         respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
         return false;
       }
