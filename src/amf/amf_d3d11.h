@@ -58,6 +58,9 @@ namespace amf {
     bool
     has_completed_output() override;
 
+    amf_encode_result
+    wait_for_input_claim(std::chrono::nanoseconds limit) override;
+
     bool
     has_retained_preanalysis_tail() override;
 
@@ -227,6 +230,10 @@ namespace amf {
     uint64_t accepted_input_count = 0;
     uint64_t completed_output_count = 0;
     std::optional<std::size_t> low_latency_pipeline_depth;
+    // amd_adaptive_backlog timing; inert unless the session opted in.
+    lifecycle::adaptive_backlog_t<std::chrono::steady_clock> adaptive_backlog;
+    std::optional<std::chrono::steady_clock::time_point> prepared_input_reserved_at;
+    std::optional<std::chrono::steady_clock::duration> pending_input_preparation;
     std::deque<uint64_t> accepted_frame_indices;
     bool preanalysis_enabled = false;
     int preanalysis_lookahead_depth = 0;
