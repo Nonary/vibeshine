@@ -66,6 +66,7 @@ extern "C" {
 #include "session_history.h"
 #include "steam_controller_protocol.h"
 #include "stream.h"
+#include "audio_transport_policy.h"
 #include "stream_broadcast_runtime.h"
 #include "sync.h"
 #include "system_tray.h"
@@ -524,29 +525,9 @@ namespace stream {
 
 #pragma pack(pop)
 
-  constexpr std::size_t round_to_pkcs7_padded(std::size_t size) {
-    return ((size + 15) / 16) * 16;
-  }
-
-  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = 4096;
-
-  using audio_aes_t = std::array<char, round_to_pkcs7_padded(MAX_AUDIO_PACKET_SIZE)>;
-
   using av_session_id_t = std::variant<asio::ip::address, std::string>;  // IP address or SS-Ping-Payload from RTSP handshake
   using message_queue_t = std::shared_ptr<safe::queue_t<std::pair<udp::endpoint, std::string>>>;
   using message_queue_queue_t = std::shared_ptr<safe::queue_t<std::tuple<socket_e, av_session_id_t, message_queue_t>>>;
-
-  // return bytes written on success
-  // return -1 on error
-  static inline int encode_audio(bool encrypted, const audio::buffer_t &plaintext, uint8_t *destination, crypto::aes_t &iv, crypto::cipher::cbc_t &cbc) {
-    // If encryption isn't enabled
-    if (!encrypted) {
-      std::copy(std::begin(plaintext), std::end(plaintext), destination);
-      return (int) plaintext.size();
-    }
-
-    return cbc.encrypt(std::string_view {(char *) std::begin(plaintext), plaintext.size()}, destination, &iv);
-  }
 
   static inline void while_starting_do_nothing(std::atomic<session::state_e> &state) {
     while (state.load(std::memory_order_acquire) == session::state_e::STARTING) {
@@ -3347,33 +3328,42 @@ namespace stream {
 
       auto &shards_p = session->audio.shards_p;
 
-      auto bytes = encode_audio(session->config.encryptionFlagsEnabled & SS_ENC_AUDIO, packet_data, shards_p[sequenceNumber % RTPA_DATA_SHARDS], iv, session->audio.cipher);
-      if (bytes < 0) {
-        BOOST_LOG(error) << "Couldn't encode audio packet"sv;
-        break;
-      }
-
-      BOOST_LOG(verbose) << "Audio [seq "sv << sequenceNumber << ", pts "sv << timestamp << "] ::  send..."sv;
-
       audio_packet.rtp.sequenceNumber = util::endian::big(sequenceNumber);
       audio_packet.rtp.timestamp = util::endian::big(timestamp);
 
-      session->audio.sequenceNumber++;
-      session->audio.timestamp += session->config.audio.packetDuration;
-
       auto peer_address = session->audio.peer.address();
       try {
-        auto send_info = platf::send_info_t {
-          (const char *) &audio_packet,
-          sizeof(audio_packet),
-          (const char *) shards_p[sequenceNumber % RTPA_DATA_SHARDS],
-          (size_t) bytes,
-          (uintptr_t) sock.native_handle(),
-          peer_address,
-          session->audio.peer.port(),
-          session->localAddress,
-        };
-        platf::send(send_info);
+        auto bytes = encode_and_write_audio(
+          session->config.encryptionFlagsEnabled & SS_ENC_AUDIO,
+          packet_data,
+          shards_p[sequenceNumber % RTPA_DATA_SHARDS],
+          MAX_AUDIO_PACKET_BUFFER_SIZE,
+          [&session, &iv](std::string_view plaintext, std::uint8_t *destination) {
+            return session->audio.cipher.encrypt(plaintext, destination, &iv);
+          },
+          [&](const std::uint8_t *data, std::size_t size) {
+            auto send_info = platf::send_info_t {
+              (const char *) &audio_packet,
+              sizeof(audio_packet),
+              (const char *) data,
+              size,
+              (uintptr_t) sock.native_handle(),
+              peer_address,
+              session->audio.peer.port(),
+              session->localAddress,
+            };
+            platf::send(send_info);
+          }
+        );
+        if (bytes < 0) {
+          BOOST_LOG(error) << "Couldn't encode audio packet"sv;
+          break;
+        }
+
+        BOOST_LOG(verbose) << "Audio [seq "sv << sequenceNumber << ", pts "sv << timestamp << "] ::  send..."sv;
+
+        session->audio.sequenceNumber++;
+        session->audio.timestamp += session->config.audio.packetDuration;
 
         auto &fec_packet = session->audio.fec_packet;
         // initialize the FEC header at the beginning of the FEC block
@@ -4587,7 +4577,7 @@ namespace stream {
       }
 
       if (!session->audio_disabled) {
-        constexpr auto max_block_size = crypto::cipher::round_to_pkcs7_padded(MAX_AUDIO_PACKET_SIZE);
+        constexpr auto max_block_size = MAX_AUDIO_PACKET_BUFFER_SIZE;
         util::buffer_t<char> shards {RTPA_TOTAL_SHARDS * max_block_size};
         util::buffer_t<uint8_t *> shards_p {RTPA_TOTAL_SHARDS};
         for (auto x = 0; x < RTPA_TOTAL_SHARDS; ++x) shards_p[x] = (uint8_t *) &shards[x * max_block_size];

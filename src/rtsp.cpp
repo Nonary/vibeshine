@@ -48,6 +48,7 @@ extern "C" {
 #endif
 #include "hardware_metrics_session.h"
 #include "rtsp.h"
+#include "rtsp_audio_policy.h"
 #include "rtsp_pending_policy.h"
 #include "stream.h"
 #include "sync.h"
@@ -132,6 +133,15 @@ namespace {
 #endif
 
 namespace rtsp_stream {
+  // The legacy RTSP C API exposes mutable pointers although it only reads these
+  // protocol/header constants while constructing a response.
+  char rtsp_protocol[] = "RTSP/1.0";
+  char cseq_header[] = "CSeq";
+  char session_header[] = "Session";
+  char session_value[] = "DEADBEEFCAFE;timeout = 90";
+  char transport_header[] = "Transport";
+  char connect_data_header[] = "X-SS-Connect-Data";
+  char ping_payload_header[] = "X-SS-Ping-Payload";
   void free_msg(PRTSP_MESSAGE msg) {
     freeMessage(msg);
 
@@ -173,10 +183,10 @@ namespace rtsp_stream {
   class socket_t;
 
   using msg_t = util::safe_ptr<RTSP_MESSAGE, free_msg>;
-  using cmd_func_t = std::function<bool(rtsp_server_t *server, std::shared_ptr<socket_t>, std::shared_ptr<launch_session_t>, msg_t &&)>;
+  using cmd_func_t = std::function<bool(rtsp_server_t *server, std::shared_ptr<socket_t>, std::shared_ptr<launch_session_t>, const msg_t &)>;
 
   void print_msg(PRTSP_MESSAGE msg);
-  bool cmd_not_found(rtsp_server_t *server, std::shared_ptr<socket_t>, std::shared_ptr<launch_session_t>, msg_t &&req);
+  bool cmd_not_found(rtsp_server_t *server, std::shared_ptr<socket_t>, std::shared_ptr<launch_session_t>, const msg_t &req);
   void respond(tcp::socket &sock, launch_session_t &session, POPTION_ITEM options, int statuscode, const char *status_msg, int seqn, const std::string_view &payload);
 
   void apply_rtx_hdr_stream_policy(video::config_t &config) {
@@ -672,7 +682,7 @@ namespace rtsp_stream {
       handle_plaintext_payload(socket, ec, buf_size);
     }
 
-    void handle_data(msg_t &&req) {
+    void handle_data(msg_t req) {
       handle_data_fn(shared_from_this(), std::move(req));
     }
 
@@ -735,14 +745,14 @@ namespace rtsp_stream {
       return 0;
     }
 
-    void handle_msg(std::shared_ptr<socket_t> socket, msg_t &&req) {
+    void handle_msg(std::shared_ptr<socket_t> socket, msg_t req) {
       auto session = socket->session;
       auto func = _map_cmd_cb.find(req->message.request.command);
       bool defer_socket_shutdown = false;
       if (func != std::end(_map_cmd_cb)) {
-        defer_socket_shutdown = func->second(this, socket, session, std::move(req));
+        defer_socket_shutdown = func->second(this, socket, session, req);
       } else {
-        cmd_not_found(this, socket, session, std::move(req));
+        cmd_not_found(this, socket, session, req);
       }
 
       if (!defer_socket_shutdown) {
@@ -1768,37 +1778,39 @@ namespace rtsp_stream {
 
   void respond(tcp::socket &sock, launch_session_t &session, POPTION_ITEM options, int statuscode, const char *status_msg, int seqn, const std::string_view &payload) {
     msg_t resp {new msg_t::element_type};
-    createRtspResponse(resp.get(), nullptr, 0, const_cast<char *>("RTSP/1.0"), statuscode, const_cast<char *>(status_msg), seqn, options, const_cast<char *>(payload.data()), (int) payload.size());
+    std::string mutable_status {status_msg};
+    std::string mutable_payload {payload};
+    createRtspResponse(resp.get(), nullptr, 0, rtsp_protocol, statuscode, mutable_status.data(), seqn, options, mutable_payload.data(), (int) mutable_payload.size());
 
     respond(sock, session, resp);
   }
 
-  bool cmd_not_found(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, msg_t &&req) {
+  bool cmd_not_found(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     respond(socket->sock, *session, nullptr, 404, "NOT FOUND", req->sequenceNumber, {});
     return false;
   }
 
-  bool cmd_option(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, msg_t &&req) {
+  bool cmd_option(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
-    option.option = const_cast<char *>("CSeq");
+    option.option = cseq_header;
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = const_cast<char *>(seqn_str.c_str());
+    option.content = seqn_str.data();
 
     respond(socket->sock, *session, &option, 200, "OK", req->sequenceNumber, {});
     return false;
   }
 
-  bool cmd_describe(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, msg_t &&req) {
+  bool cmd_describe(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
-    option.option = const_cast<char *>("CSeq");
+    option.option = cseq_header;
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = const_cast<char *>(seqn_str.c_str());
+    option.content = seqn_str.data();
 
     std::stringstream ss;
 
@@ -1894,7 +1906,7 @@ namespace rtsp_stream {
     return false;
   }
 
-  bool cmd_setup(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, msg_t &&req) {
+  bool cmd_setup(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     OPTION_ITEM options[4] {};
 
     auto &seqn = options[0];
@@ -1902,10 +1914,10 @@ namespace rtsp_stream {
     auto &port_option = options[2];
     auto &payload_option = options[3];
 
-    seqn.option = const_cast<char *>("CSeq");
+    seqn.option = cseq_header;
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    seqn.content = const_cast<char *>(seqn_str.c_str());
+    seqn.content = seqn_str.data();
 
     std::string_view target {req->message.request.target};
     auto begin = std::find(std::begin(target), std::end(target), '=') + 1;
@@ -1920,30 +1932,30 @@ namespace rtsp_stream {
     } else if (type == "control"sv) {
       port = net::map_port(stream::CONTROL_PORT);
     } else {
-      cmd_not_found(server, socket, session, std::move(req));
+      cmd_not_found(server, socket, session, req);
       return false;
     }
 
     seqn.next = &session_option;
 
-    session_option.option = const_cast<char *>("Session");
-    session_option.content = const_cast<char *>("DEADBEEFCAFE;timeout = 90");
+    session_option.option = session_header;
+    session_option.content = session_value;
 
     session_option.next = &port_option;
 
     // Moonlight merely requires 'server_port=<port>'
     auto port_value = std::format("server_port={}", static_cast<int>(port));
 
-    port_option.option = const_cast<char *>("Transport");
+    port_option.option = transport_header;
     port_option.content = port_value.data();
 
     // Send identifiers that will be echoed in the other connections
     auto connect_data = std::to_string(session->control_connect_data);
     if (type == "control"sv) {
-      payload_option.option = const_cast<char *>("X-SS-Connect-Data");
+      payload_option.option = connect_data_header;
       payload_option.content = connect_data.data();
     } else {
-      payload_option.option = const_cast<char *>("X-SS-Ping-Payload");
+      payload_option.option = ping_payload_header;
       payload_option.content = session->av_ping_payload.data();
     }
 
@@ -1953,62 +1965,41 @@ namespace rtsp_stream {
     return false;
   }
 
-  bool cmd_announce(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, msg_t &&req) {
-    // Capture before parsing: cancellation may clear this launch while the
-    // io_context is still validating ANNOUNCE, before worker submission.
-    const auto intake_ticket = host_stream_control::request_ticket();
-    OPTION_ITEM option {};
-
-    // I know these string literals will not be modified
-    option.option = const_cast<char *>("CSeq");
-
-    auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = const_cast<char *>(seqn_str.c_str());
-
-    std::string_view payload {req->payload, (size_t) req->payloadLength};
-
+  std::unordered_map<std::string_view, std::string_view> parse_announce_attributes(std::string_view payload) {
     std::vector<std::string_view> lines;
 
     auto whitespace = [](char ch) {
       return ch == '\n' || ch == '\r';
     };
 
-    {
-      auto pos = std::begin(payload);
-      auto begin = pos;
-      while (pos != std::end(payload)) {
-        if (whitespace(*pos++)) {
-          lines.emplace_back(begin, pos - begin - 1);
+    auto pos = std::begin(payload);
+    auto begin = pos;
+    while (pos != std::end(payload)) {
+      if (whitespace(*pos++)) {
+        lines.emplace_back(begin, pos - begin - 1);
 
-          while (pos != std::end(payload) && whitespace(*pos)) {
-            ++pos;
-          }
-          begin = pos;
+        while (pos != std::end(payload) && whitespace(*pos)) {
+          ++pos;
         }
+        begin = pos;
       }
     }
 
-    std::string_view client;
     std::unordered_map<std::string_view, std::string_view> args;
-
     for (auto line : lines) {
-      auto type = line.substr(0, 2);
-      if (type == "s="sv) {
-        client = line.substr(2);
-      } else if (type == "a=") {
+      if (line.substr(0, 2) == "a="sv) {
         auto pos = line.find(':');
-
         auto name = line.substr(2, pos - 2);
         auto val = line.substr(pos + 1);
 
-        if (val[val.size() - 1] == ' ') {
-          val = val.substr(0, val.size() - 1);
+        if (!val.empty() && val.back() == ' ') {
+          val.remove_suffix(1);
         }
         args.emplace(name, val);
       }
     }
 
-    // Initialize any omitted parameters to defaults
+    // Initialize any omitted parameters to defaults.
     args.try_emplace("x-nv-video[0].encoderCscMode"sv, "0"sv);
     args.try_emplace("x-nv-vqos[0].bitStreamFormat"sv, "0"sv);
     args.try_emplace("x-nv-video[0].dynamicRangeMode"sv, "0"sv);
@@ -2024,16 +2015,222 @@ namespace rtsp_stream {
     args.try_emplace("x-ss-video[0].chromaSamplingType"sv, "0"sv);
     args.try_emplace("x-ss-video[0].intraRefresh"sv, "0"sv);
     args.try_emplace("x-nv-video[0].clientRefreshRateX100"sv, "0"sv);
+    return args;
+  }
 
-    stream::config_t config {};
-    if (auto timing = args.find("x-ml-video.captureTiming"sv); timing != args.end()) {
-      config.capture_timing = timing->second == "1"sv;
+  bool configure_pyrowave_announce(
+    stream::config_t &config,
+    const std::unordered_map<std::string_view, std::string_view> &args,
+    tcp::socket &socket,
+    launch_session_t &session,
+    OPTION_ITEM &option,
+    int sequence_number,
+    bool &pyrowave_session
+  ) {
+    pyrowave_session = config.monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT;
+    if (pyrowave_session) {
+      // Aurora's adaptive-FEC attribute or our record-framing feature bit selects
+      // record framing; other PyroWave clients get length-prefixed frames.
+      std::optional<std::uint32_t> pyrowave_features;
+      if (const auto it = args.find(pyrowave::protocol::ANNOUNCE_FEATURES); it != args.end()) {
+        pyrowave_features = (std::uint32_t) util::from_view(it->second);
+      }
+      const bool pyrowave_adaptive_fec = args.contains(pyrowave::protocol::ANNOUNCE_ADAPTIVE_FEC);
+      config.monitor.pyrowave_framing = pyrowave::policy::select_framing(pyrowave_adaptive_fec, pyrowave_features);
+      config.monitor.pyrowave_frame_header_bytes = pyrowave::protocol::FRAME_HEADER_BYTES +
+        (config.capture_timing ? pyrowave::protocol::CAPTURE_TIMING_BYTES : 0);
+      config.monitor.packetsize = config.packetsize;
+      config.monitor.pyrowave_min_parity_shards = std::max(2, config.minRequiredFecPackets);
+      if (const auto it = args.find("x-ss-video[0].pyrowaveLinkMbps"sv); it != args.end()) {
+        const auto link_mbps = util::from_view(it->second);
+        if (link_mbps <= 0 || link_mbps > 400000) {
+          respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+          return false;
+        }
+        config.monitor.pyrowave_peer_link_bps = std::uint64_t(link_mbps) * 1'000'000;
+      }
+      if (const auto it = args.find("x-ss-video[0].pyrowavePaceMbps"sv); it != args.end()) {
+        const auto pace_mbps = util::from_view(it->second);
+        if (pace_mbps <= 0 || pace_mbps > 400000) {
+          respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+          return false;
+        }
+        config.monitor.pyrowave_peer_pace_bps = std::uint64_t(pace_mbps) * 1'000'000;
+      }
+      if (const auto it = args.find("x-ss-video[0].pyrowaveHybrid"sv); it != args.end() && it->second != "0"sv) {
+        respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+        return false;
+      }
+      // Retired compression transports must not be negotiated as native framing.
+      if (const auto it = args.find("x-ss-video[0].pyrowaveCompression"sv); it != args.end() && it->second != "0"sv) {
+        respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+        return false;
+      }
+      BOOST_LOG(info) << "Client requested PyroWave: framing="sv
+                      << (config.monitor.pyrowave_framing == pyrowave::policy::framing_e::records ? "records"sv : "length-prefixed"sv)
+                      << ", features="sv << pyrowave_features.value_or(0)
+                      << ", adaptiveFec="sv << (pyrowave_adaptive_fec ? "sent"sv : "absent"sv)
+                      << ", packetSize="sv << config.packetsize;
     }
-    config.gen1_framegen_fix = false;
-    config.gen2_framegen_fix = false;
-    config.frame_generation_enabled = false;
+    return true;
+  }
 
-    std::int64_t configuredBitrateKbps;
+  bool configure_announce_audio(
+    audio::config_t &audio_config,
+    const std::unordered_map<std::string_view, std::string_view> &args,
+    const msg_t &req,
+    tcp::socket &socket,
+    std::shared_ptr<launch_session_t> session,
+    OPTION_ITEM &option,
+    int sequence_number,
+    audio::dolby_codec_e &selected_audio_codec
+  ) {
+    // A client that explicitly accepts Dolby negotiates quality through AudioQuality.
+    // Keep the legacy Host-based stereo quality detection exclusively for Opus.
+    const auto audio_accept = args.find("x-ss-audio-codec-accept"sv);
+    const std::string_view accepted_audio_codec =
+      audio_accept == args.end() ? std::string_view {} : std::string_view {audio_accept->second};
+    const bool client_accepted_audio_codec =
+      !session->audio_codec_offered.empty() && audio_accept != args.end() &&
+      audio_accept->second == session->audio_codec_offered;
+
+    if (audio_config.channels == 2 && !client_accepted_audio_codec) {
+      for (auto option = req->options; option != nullptr; option = option->next) {
+        if ("Host"sv == option->option) {
+          std::string_view content {option->content};
+          BOOST_LOG(debug) << "Found Host: "sv << content;
+          audio_config.flags[audio::config_t::HIGH_QUALITY] = (content.find("0.0.0.0"sv) == std::string::npos);
+        }
+      }
+    } else if (audio_config.channels != 2 && session->surround_params.length() > 3) {
+      // Channels
+      std::uint8_t c = session->surround_params[0] - '0';
+      // Streams
+      std::uint8_t n = session->surround_params[1] - '0';
+      // Coupled streams
+      std::uint8_t m = session->surround_params[2] - '0';
+      auto valid = false;
+      if ((c == 6 || c == 8) && c == audio_config.channels && n + m == c && session->surround_params.length() == c + 3) {
+        audio_config.customStreamParams.channelCount = c;
+        audio_config.customStreamParams.streams = n;
+        audio_config.customStreamParams.coupledStreams = m;
+        valid = true;
+        for (std::uint8_t i = 0; i < c; i++) {
+          audio_config.customStreamParams.mapping[i] = session->surround_params[i + 3] - '0';
+          if (audio_config.customStreamParams.mapping[i] >= c) {
+            valid = false;
+            break;
+          }
+        }
+      }
+      audio_config.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
+    }
+    // Select Dolby only when ANNOUNCE accepts the exact codec offered in DESCRIBE.
+    const bool ac3_encoder_available = session->audio_codec_offered == "AC3"sv && audio::ac3_available();
+    const bool eac3_encoder_available = session->audio_codec_offered == "EAC3"sv && audio::eac3_available();
+    const bool selected_encoder_available = ac3_encoder_available || eac3_encoder_available;
+    const bool supported_dolby_channel_count = audio_config.channels == 2 || audio_config.channels == 6;
+
+    // Once a client has explicitly accepted an advertised codec, do not silently
+    // change the negotiated codec if its encoder or requested channel layout is unsupported.
+    if (client_accepted_audio_codec && (!selected_encoder_available || !supported_dolby_channel_count)) {
+      BOOST_LOG(error) << "Client accepted a Dolby codec that cannot be provided for the requested stream";
+      respond(socket, *session, &option, 400, "BAD REQUEST", sequence_number, {});
+      return false;
+    }
+    selected_audio_codec = audio::configure_dolby_audio(
+      audio_config,
+      session->audio_codec_offered,
+      accepted_audio_codec,
+      ac3_encoder_available,
+      eac3_encoder_available,
+      audio_config.flags[audio::config_t::HIGH_QUALITY]
+    );
+    if (config::audio.format != "opus"sv && session->audio_codec_offered.empty()) {
+      BOOST_LOG(warning) << "Dolby audio format ["sv << config::audio.format
+                         << "] was selected, but its FFmpeg encoder is unavailable; using Opus"sv;
+    } else if (!session->audio_codec_offered.empty() && !client_accepted_audio_codec) {
+      BOOST_LOG(info) << "Client did not accept "sv << session->audio_codec_offered << "; falling back to Opus"sv;
+    }
+
+    if (session->continuous_audio) {
+      BOOST_LOG(info) << "Client requested continuous audio"sv;
+      audio_config.flags[audio::config_t::CONTINUOUS_AUDIO] = true;
+    }
+
+
+    return true;
+  }
+
+  bool adjust_announce_video_bitrate(
+    stream::config_t &config,
+    std::int64_t configuredBitrateKbps,
+    bool pyrowave_session,
+    tcp::socket &socket,
+    launch_session_t &session,
+    OPTION_ITEM &option,
+    int sequence_number
+  ) {
+    // If the client sent a configured bitrate, we will choose the actual bitrate ourselves
+    // by using FEC percentage and audio quality settings. If the calculated bitrate ends up
+    // too low, we'll allow it to exceed the limits rather than reducing the encoding bitrate
+    // down to nearly nothing.
+    if (configuredBitrateKbps) {
+      BOOST_LOG(debug) << "Client configured bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
+
+      // Preserve the original wire-bandwidth budget the client asked for so the
+      // UI can show it alongside the post-adjustment encoder bitrate.
+      config.monitor.client_requested_bitrate = static_cast<int>(configuredBitrateKbps);
+
+      // If the FEC percentage isn't too high, adjust the configured bitrate to ensure video
+      // traffic doesn't exceed the user's selected bitrate when the FEC shards are included.
+      // PyroWave only adds parity to its few critical packets (see stream.cpp), so it
+      // reserves its baseline parity and packet overhead in the per-frame budget.
+      if (config::stream.fec_percentage <= 80 && !pyrowave_session) {
+        configuredBitrateKbps /= 100.f / (100 - config::stream.fec_percentage);
+      }
+
+      // Account for the selected audio codec's bitrate without changing the Opus calculation.
+      int audioBitrateAdjustment {};
+      if (config.audio.use_ac3 || config.audio.use_eac3) {
+        audioBitrateAdjustment = audio::dolby_bitrate_kbps(
+          config.audio.use_eac3,
+          config.audio.high_quality_dolby,
+          config.audio.channels
+        );
+      } else {
+        audioBitrateAdjustment = (config.audio.flags[audio::config_t::HIGH_QUALITY] ? 256 : 96) * config.audio.channels;
+      }
+      // Audio adds two parity packets for every four data packets. Include
+      // that fixed 50% FEC cost inside PyroWave's total wire budget too.
+      if (pyrowave_session) audioBitrateAdjustment = (audioBitrateAdjustment * 3 + 1) / 2;
+      configuredBitrateKbps -= pyrowave_session ? audioBitrateAdjustment :
+                                                   std::min((std::int64_t) audioBitrateAdjustment, configuredBitrateKbps / 5);
+
+      // Reduce it by another 500Kbps to account for A/V packet overhead and control data
+      // traffic (capped at 10% reduction).
+      configuredBitrateKbps -= pyrowave_session ? 500 : std::min((std::int64_t) 500, configuredBitrateKbps / 10);
+      if (pyrowave_session && configuredBitrateKbps <= 0) {
+        BOOST_LOG(warning) << "PyroWave bandwidth budget cannot accommodate audio and control overhead";
+        respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+        return false;
+      }
+
+      BOOST_LOG(debug) << "Final adjusted video encoding bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
+      config.monitor.bitrate = (int) configuredBitrateKbps;
+    }
+    return true;
+  }
+
+  bool parse_announce_stream_config(
+    stream::config_t &config,
+    const std::unordered_map<std::string_view, std::string_view> &args,
+    std::shared_ptr<socket_t> socket,
+    std::shared_ptr<launch_session_t> session,
+    const msg_t &req,
+    OPTION_ITEM &option,
+    std::int64_t &configuredBitrateKbps
+  ) {
     config.audio.flags[audio::config_t::HOST_AUDIO] = session->host_audio;
     try {
       config.audio.channels = (int) util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
@@ -2117,136 +2314,16 @@ namespace rtsp_stream {
       respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return false;
     }
+    return true;
+  }
 
-    // When using stereo audio, the audio quality is (strangely) indicated by whether the Host field
-    // in the RTSP message matches a local interface's IP address. Fortunately, Moonlight always sends
-    // 0.0.0.0 when it wants low quality, so it is easy to check without enumerating interfaces.
-    if (config.audio.channels == 2) {
-      for (auto option = req->options; option != nullptr; option = option->next) {
-        if ("Host"sv == option->option) {
-          std::string_view content {option->content};
-          BOOST_LOG(debug) << "Found Host: "sv << content;
-          config.audio.flags[audio::config_t::HIGH_QUALITY] = (content.find("0.0.0.0"sv) == std::string::npos);
-        }
-      }
-    } else if (session->surround_params.length() > 3) {
-      // Channels
-      std::uint8_t c = session->surround_params[0] - '0';
-      // Streams
-      std::uint8_t n = session->surround_params[1] - '0';
-      // Coupled streams
-      std::uint8_t m = session->surround_params[2] - '0';
-      auto valid = false;
-      if ((c == 6 || c == 8) && c == config.audio.channels && n + m == c && session->surround_params.length() == c + 3) {
-        config.audio.customStreamParams.channelCount = c;
-        config.audio.customStreamParams.streams = n;
-        config.audio.customStreamParams.coupledStreams = m;
-        valid = true;
-        for (std::uint8_t i = 0; i < c; i++) {
-          config.audio.customStreamParams.mapping[i] = session->surround_params[i + 3] - '0';
-          if (config.audio.customStreamParams.mapping[i] >= c) {
-            valid = false;
-            break;
-          }
-        }
-      }
-      config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
-    }
-    // Select Dolby only when ANNOUNCE accepts the exact codec offered in DESCRIBE.
-    const auto audio_accept = args.find("x-ss-audio-codec-accept"sv);
-    const std::string_view accepted_audio_codec =
-      audio_accept == args.end() ? std::string_view {} : std::string_view {audio_accept->second};
-    const bool client_accepted_audio_codec =
-      !session->audio_codec_offered.empty() && audio_accept != args.end() &&
-      audio_accept->second == session->audio_codec_offered;
-    const bool ac3_encoder_available = session->audio_codec_offered == "AC3"sv && audio::ac3_available();
-    const bool eac3_encoder_available = session->audio_codec_offered == "EAC3"sv && audio::eac3_available();
-    const bool selected_encoder_available = ac3_encoder_available || eac3_encoder_available;
-    const bool supported_dolby_channel_count = config.audio.channels == 2 || config.audio.channels == 6;
-
-    // Once a client has explicitly accepted an advertised codec, do not silently
-    // change the negotiated codec if its encoder or requested channel layout is unsupported.
-    if (client_accepted_audio_codec && (!selected_encoder_available || !supported_dolby_channel_count)) {
-      BOOST_LOG(error) << "Client accepted a Dolby codec that cannot be provided for the requested stream";
-      respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-      return false;
-    }
-    const auto selected_audio_codec = audio::configure_dolby_audio(
-      config.audio,
-      session->audio_codec_offered,
-      accepted_audio_codec,
-      ac3_encoder_available,
-      eac3_encoder_available,
-      config::audio.high_quality_audio
-    );
-    if (config::audio.format != "opus"sv && session->audio_codec_offered.empty()) {
-      BOOST_LOG(warning) << "Dolby audio format ["sv << config::audio.format
-                         << "] was selected, but its FFmpeg encoder is unavailable; using Opus"sv;
-    } else if (!session->audio_codec_offered.empty() && !client_accepted_audio_codec) {
-      BOOST_LOG(info) << "Client did not accept "sv << session->audio_codec_offered << "; falling back to Opus"sv;
-    }
-
-    if (session->continuous_audio) {
-      BOOST_LOG(info) << "Client requested continuous audio"sv;
-      config.audio.flags[audio::config_t::CONTINUOUS_AUDIO] = true;
-    }
-
-    if (config.monitor.vrr_low_latency) {
-      BOOST_LOG(info) << "Client requested VRR low-latency stream policy";
-    }
-
-    const bool pyrowave_session = config.monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT;
-    if (pyrowave_session) {
-      // Aurora's adaptive-FEC attribute or our record-framing feature bit selects
-      // record framing; other PyroWave clients get length-prefixed frames.
-      std::optional<std::uint32_t> pyrowave_features;
-      if (const auto it = args.find(pyrowave::protocol::ANNOUNCE_FEATURES); it != args.end()) {
-        pyrowave_features = (std::uint32_t) util::from_view(it->second);
-      }
-      const bool pyrowave_adaptive_fec = args.contains(pyrowave::protocol::ANNOUNCE_ADAPTIVE_FEC);
-      config.monitor.pyrowave_framing = pyrowave::policy::select_framing(pyrowave_adaptive_fec, pyrowave_features);
-      config.monitor.pyrowave_frame_header_bytes = pyrowave::protocol::FRAME_HEADER_BYTES +
-        (config.capture_timing ? pyrowave::protocol::CAPTURE_TIMING_BYTES : 0);
-      config.monitor.packetsize = config.packetsize;
-      config.monitor.pyrowave_min_parity_shards = std::max(2, config.minRequiredFecPackets);
-      if (const auto it = args.find("x-ss-video[0].pyrowaveLinkMbps"sv); it != args.end()) {
-        const auto link_mbps = util::from_view(it->second);
-        if (link_mbps <= 0 || link_mbps > 400000) {
-          respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-          return false;
-        }
-        config.monitor.pyrowave_peer_link_bps = std::uint64_t(link_mbps) * 1'000'000;
-      }
-      if (const auto it = args.find("x-ss-video[0].pyrowavePaceMbps"sv); it != args.end()) {
-        const auto pace_mbps = util::from_view(it->second);
-        if (pace_mbps <= 0 || pace_mbps > 400000) {
-          respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-          return false;
-        }
-        config.monitor.pyrowave_peer_pace_bps = std::uint64_t(pace_mbps) * 1'000'000;
-      }
-      if (const auto it = args.find("x-ss-video[0].pyrowaveHybrid"sv); it != args.end() && it->second != "0"sv) {
-        respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-        return false;
-      }
-      // Retired compression transports must not be negotiated as native framing.
-      if (const auto it = args.find("x-ss-video[0].pyrowaveCompression"sv); it != args.end() && it->second != "0"sv) {
-        respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-        return false;
-      }
-      BOOST_LOG(info) << "Client requested PyroWave: framing="sv
-                      << (config.monitor.pyrowave_framing == pyrowave::policy::framing_e::records ? "records"sv : "length-prefixed"sv)
-                      << ", features="sv << pyrowave_features.value_or(0)
-                      << ", adaptiveFec="sv << (pyrowave_adaptive_fec ? "sent"sv : "absent"sv)
-                      << ", packetSize="sv << config.packetsize;
-    }
-
-    const bool prefer_10bit_sdr = effective_10bit_sdr_requested(*session);
+  void configure_announce_dynamic_range(stream::config_t &config, const launch_session_t &session, bool pyrowave_session) {
+    const bool prefer_10bit_sdr = effective_10bit_sdr_requested(session);
     const bool hevc_main10 = config.monitor.videoFormat == 1 && video::active_hevc_mode >= 3;
     const bool av1_main10 = config.monitor.videoFormat == 2 && video::active_av1_mode >= 3;
     const bool pyrowave_10bit = pyrowave_session && video::active_pyrowave_mode >= 2;
     const bool supports_10bit_dynamic_range = hevc_main10 || av1_main10 || pyrowave_10bit;
-    config.monitor.force_sdr = session->force_sdr;
+    config.monitor.force_sdr = session.force_sdr;
     if (prefer_10bit_sdr) {
       if (supports_10bit_dynamic_range) {
         BOOST_LOG(info) << "Client requested HDR, but 10-bit SDR is enabled for it; encoding Main10 without HDR";
@@ -2260,12 +2337,98 @@ namespace rtsp_stream {
     } else if (config.monitor.dynamicRange == 0) {
       // A PyroWave bitstream does not carry its bit depth: the client sizes its planes
       // from the profile it negotiated, so never upgrade an 8-bit PyroWave request.
-      if (session->enable_hdr && supports_10bit_dynamic_range && !pyrowave_session) {
+      if (session.enable_hdr && supports_10bit_dynamic_range && !pyrowave_session) {
         BOOST_LOG(info) << "RTSP ANNOUNCE requested SDR while launch HDR is enabled; using HDR 10-bit encode";
         config.monitor.dynamicRange = 1;
       }
     }
     apply_rtx_hdr_stream_policy(config.monitor);
+  }
+
+  bool validate_announce_video_and_encryption(
+    const stream::config_t &config,
+    bool pyrowave_session,
+    tcp::socket &socket,
+    launch_session_t &session,
+    OPTION_ITEM &option,
+    int sequence_number
+  ) {
+    if (config.monitor.videoFormat == 1 && video::active_hevc_mode == 1) {
+      BOOST_LOG(warning) << "HEVC is disabled, yet the client requested HEVC"sv;
+
+      respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+      return false;
+    }
+
+    if (config.monitor.videoFormat == 2 && video::active_av1_mode == 1) {
+      BOOST_LOG(warning) << "AV1 is disabled, yet the client requested AV1"sv;
+
+      respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+      return false;
+    }
+
+    if (pyrowave_session && video::active_pyrowave_mode < 2) {
+      BOOST_LOG(warning) << "PyroWave is disabled or unsupported, yet the client requested PyroWave"sv;
+
+      respond(socket, session, &option, 400, "BAD REQUEST", sequence_number, {});
+      return false;
+    }
+
+    // Check that any required encryption is enabled
+    auto encryption_mode = net::encryption_mode_for_address(socket.remote_endpoint().address());
+    if (encryption_mode == config::ENCRYPTION_MODE_MANDATORY &&
+        (config.encryptionFlagsEnabled & (SS_ENC_VIDEO | SS_ENC_AUDIO)) != (SS_ENC_VIDEO | SS_ENC_AUDIO)) {
+      BOOST_LOG(error) << "Rejecting client that cannot comply with mandatory encryption requirement"sv;
+
+      respond(socket, session, &option, 403, "Forbidden", sequence_number, {});
+      return false;
+    }
+    return true;
+  }
+
+  bool cmd_announce(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
+    // Capture before parsing: cancellation may clear this launch while the
+    // io_context is still validating ANNOUNCE, before worker submission.
+    const auto intake_ticket = host_stream_control::request_ticket();
+    OPTION_ITEM option {};
+
+    // I know these string literals will not be modified
+    option.option = cseq_header;
+
+    auto seqn_str = std::to_string(req->sequenceNumber);
+    option.content = seqn_str.data();
+
+    auto args = parse_announce_attributes(std::string_view {req->payload, (size_t) req->payloadLength});
+
+    stream::config_t config {};
+    if (auto timing = args.find("x-ml-video.captureTiming"sv); timing != args.end()) {
+      config.capture_timing = timing->second == "1"sv;
+    }
+    config.gen1_framegen_fix = false;
+    config.gen2_framegen_fix = false;
+    config.frame_generation_enabled = false;
+
+    std::int64_t configuredBitrateKbps;
+    if (!parse_announce_stream_config(config, args, socket, session, req, option, configuredBitrateKbps)) {
+      return false;
+    }
+
+    audio::dolby_codec_e selected_audio_codec {};
+    if (!configure_announce_audio(config.audio, args, req, socket->sock, session, option, req->sequenceNumber, selected_audio_codec)) {
+      return false;
+    }
+    const bool high_quality_audio_selected = config.audio.high_quality_dolby;
+
+    if (config.monitor.vrr_low_latency) {
+      BOOST_LOG(info) << "Client requested VRR low-latency stream policy";
+    }
+
+    bool pyrowave_session = false;
+    if (!configure_pyrowave_announce(config, args, socket->sock, *session, option, req->sequenceNumber, pyrowave_session)) {
+      return false;
+    }
+
+    configure_announce_dynamic_range(config, *session, pyrowave_session);
 
     if (pyrowave_session) {
       std::uint64_t routed_bps = 0;
@@ -2294,83 +2457,11 @@ namespace rtsp_stream {
     const int bitrate_limit_kbps = pyrowave_session ? std::numeric_limits<int>::max() : video::policy::MAX_ENCODER_BITRATE_KBPS;
     configuredBitrateKbps = std::min<std::int64_t>(configuredBitrateKbps, bitrate_limit_kbps);
 
-    // If the client sent a configured bitrate, we will choose the actual bitrate ourselves
-    // by using FEC percentage and audio quality settings. If the calculated bitrate ends up
-    // too low, we'll allow it to exceed the limits rather than reducing the encoding bitrate
-    // down to nearly nothing.
-    if (configuredBitrateKbps) {
-      BOOST_LOG(debug) << "Client configured bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
-
-      // Preserve the original wire-bandwidth budget the client asked for so the
-      // UI can show it alongside the post-adjustment encoder bitrate.
-      config.monitor.client_requested_bitrate = static_cast<int>(configuredBitrateKbps);
-
-      // If the FEC percentage isn't too high, adjust the configured bitrate to ensure video
-      // traffic doesn't exceed the user's selected bitrate when the FEC shards are included.
-      // PyroWave only adds parity to its few critical packets (see stream.cpp), so it
-      // reserves its baseline parity and packet overhead in the per-frame budget.
-      if (config::stream.fec_percentage <= 80 && !pyrowave_session) {
-        configuredBitrateKbps /= 100.f / (100 - config::stream.fec_percentage);
-      }
-
-      // Account for the selected audio codec's bitrate without changing the Opus calculation.
-      int audioBitrateAdjustment {};
-      if (config.audio.use_ac3 || config.audio.use_eac3) {
-        audioBitrateAdjustment = audio::dolby_bitrate_kbps(
-          config.audio.use_eac3,
-          config.audio.high_quality_dolby,
-          config.audio.channels
-        );
-      } else {
-        audioBitrateAdjustment = (config.audio.flags[audio::config_t::HIGH_QUALITY] ? 256 : 96) * config.audio.channels;
-      }
-      // Audio adds two parity packets for every four data packets. Include
-      // that fixed 50% FEC cost inside PyroWave's total wire budget too.
-      if (pyrowave_session) audioBitrateAdjustment = (audioBitrateAdjustment * 3 + 1) / 2;
-      configuredBitrateKbps -= pyrowave_session ? audioBitrateAdjustment :
-                                                   std::min((std::int64_t) audioBitrateAdjustment, configuredBitrateKbps / 5);
-
-      // Reduce it by another 500Kbps to account for A/V packet overhead and control data
-      // traffic (capped at 10% reduction).
-      configuredBitrateKbps -= pyrowave_session ? 500 : std::min((std::int64_t) 500, configuredBitrateKbps / 10);
-      if (pyrowave_session && configuredBitrateKbps <= 0) {
-        BOOST_LOG(warning) << "PyroWave bandwidth budget cannot accommodate audio and control overhead";
-        respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-        return false;
-      }
-
-      BOOST_LOG(debug) << "Final adjusted video encoding bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
-      config.monitor.bitrate = (int) configuredBitrateKbps;
-    }
-
-    if (config.monitor.videoFormat == 1 && video::active_hevc_mode == 1) {
-      BOOST_LOG(warning) << "HEVC is disabled, yet the client requested HEVC"sv;
-
-      respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+    if (!adjust_announce_video_bitrate(config, configuredBitrateKbps, pyrowave_session, socket->sock, *session, option, req->sequenceNumber)) {
       return false;
     }
 
-    if (config.monitor.videoFormat == 2 && video::active_av1_mode == 1) {
-      BOOST_LOG(warning) << "AV1 is disabled, yet the client requested AV1"sv;
-
-      respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-      return false;
-    }
-
-    if (pyrowave_session && video::active_pyrowave_mode < 2) {
-      BOOST_LOG(warning) << "PyroWave is disabled or unsupported, yet the client requested PyroWave"sv;
-
-      respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-      return false;
-    }
-
-    // Check that any required encryption is enabled
-    auto encryption_mode = net::encryption_mode_for_address(socket->sock.remote_endpoint().address());
-    if (encryption_mode == config::ENCRYPTION_MODE_MANDATORY &&
-        (config.encryptionFlagsEnabled & (SS_ENC_VIDEO | SS_ENC_AUDIO)) != (SS_ENC_VIDEO | SS_ENC_AUDIO)) {
-      BOOST_LOG(error) << "Rejecting client that cannot comply with mandatory encryption requirement"sv;
-
-      respond(socket->sock, *session, &option, 403, "Forbidden", req->sequenceNumber, {});
+    if (!validate_announce_video_and_encryption(config, pyrowave_session, socket->sock, *session, option, req->sequenceNumber)) {
       return false;
     }
 
@@ -2388,7 +2479,7 @@ namespace rtsp_stream {
     const std::string client_uuid = session->client_uuid;
     auto launch_session = make_startup_launch_session_snapshot(*session);
     try {
-      server->run_startup([server, socket = std::move(socket), session = std::move(session), launch_session, config = std::move(config), remote_address = std::move(remote_address), client_uuid, sequence_number, selected_audio_codec](bool admitted) mutable {
+      server->run_startup([server, socket = std::move(socket), session = std::move(session), launch_session, config = std::move(config), remote_address = std::move(remote_address), client_uuid, sequence_number, selected_audio_codec, high_quality_audio_selected](bool admitted) mutable {
         // Apply deferred updates and take the hot-apply gate on the startup worker so
         // display/config churn cannot stall the RTSP io_context.
         std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
@@ -2402,9 +2493,9 @@ namespace rtsp_stream {
           // must also reject a second ANNOUNCE while awaiting control attach.
           server->post([server, socket = std::move(socket), session = std::move(session), sequence_number]() mutable {
             OPTION_ITEM completion_option {};
-            completion_option.option = const_cast<char *>("CSeq");
+            completion_option.option = cseq_header;
             auto completion_seqn = std::to_string(sequence_number);
-            completion_option.content = const_cast<char *>(completion_seqn.c_str());
+            completion_option.content = completion_seqn.data();
             BOOST_LOG(info) << "Discarding canceled, expired or duplicate RTSP startup request.";
             respond(socket->sock, *session, &completion_option, 503, "Service Unavailable", sequence_number, {});
             server->shutdown_socket(*socket);
@@ -2482,11 +2573,14 @@ namespace rtsp_stream {
         _hot_apply_gate.unlock();
         lifecycle_lock.unlock();
         server->post([server, socket = std::move(socket), session = std::move(session), sequence_number, startup_failed, startup_status, startup_error = std::move(startup_error),
-                      audio_codec_name = std::string(audio::dolby_codec_name(selected_audio_codec))]() mutable {
+                      send_audio_codec_header = should_send_audio_codec_header(selected_audio_codec),
+                      send_audio_quality_header = should_send_audio_quality_header(selected_audio_codec),
+                      audio_codec_name = std::string(audio::dolby_codec_name(selected_audio_codec)),
+                      high_quality_audio_selected]() mutable {
           OPTION_ITEM completion_option {};
-          completion_option.option = const_cast<char *>("CSeq");
+          completion_option.option = cseq_header;
           auto completion_seqn = std::to_string(sequence_number);
-          completion_option.content = const_cast<char *>(completion_seqn.c_str());
+          completion_option.content = completion_seqn.data();
 
           if (startup_failed) {
             if (startup_error.empty()) {
@@ -2498,9 +2592,23 @@ namespace rtsp_stream {
           } else {
             OPTION_ITEM audio_codec_option {};
             std::string audio_codec_header {"X-SS-Audio-Codec"};
-            audio_codec_option.option = audio_codec_header.data();
-            audio_codec_option.content = audio_codec_name.data();
-            completion_option.next = &audio_codec_option;
+            OPTION_ITEM audio_quality_option {};
+            std::string audio_quality_header {"x-nv-audio.surround.AudioQuality"};
+            std::string audio_quality_value {high_quality_audio_selected ? "1" : "0"};
+            if (send_audio_codec_header) {
+              audio_codec_option.option = audio_codec_header.data();
+              audio_codec_option.content = audio_codec_name.data();
+              completion_option.next = &audio_codec_option;
+            }
+            if (send_audio_quality_header) {
+              audio_quality_option.option = audio_quality_header.data();
+              audio_quality_option.content = audio_quality_value.data();
+              if (send_audio_codec_header) {
+                audio_codec_option.next = &audio_quality_option;
+              } else {
+                completion_option.next = &audio_quality_option;
+              }
+            }
             respond(socket->sock, *session, &completion_option, 200, "OK", sequence_number, {});
           }
 
@@ -2520,14 +2628,14 @@ namespace rtsp_stream {
     return true;
   }
 
-  bool cmd_play(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, msg_t &&req) {
+  bool cmd_play(rtsp_server_t *server, std::shared_ptr<socket_t> socket, std::shared_ptr<launch_session_t> session, const msg_t &req) {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
-    option.option = const_cast<char *>("CSeq");
+    option.option = cseq_header;
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = const_cast<char *>(seqn_str.c_str());
+    option.content = seqn_str.data();
 
     respond(socket->sock, *session, &option, 200, "OK", req->sequenceNumber, {});
     return false;

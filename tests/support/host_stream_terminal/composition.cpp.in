@@ -63,6 +63,10 @@ bool eac3_available(){return eac3_encoder;}
 @DOLBY_BITRATE@
 @DOLBY_NAME@
 }
+namespace rtsp_stream {
+@RTSP_AUDIO_POLICY@
+@RTSP_AUDIO_QUALITY_POLICY@
+}
 namespace stream {
 struct monitor_t {
  int height=0,width=0,framerate=0,encodingFramerate=0,framerateX100=0,bitrate=0,client_requested_bitrate=0,slicesPerFrame=0,numRefFrames=0,encoderCscMode=0,videoFormat=0,dynamicRange=0,chromaSamplingType=0,enableIntraRefresh=0,packetsize=0,pyrowave_min_parity_shards=0;
@@ -106,7 +110,7 @@ void maybe_apply_deferred() {}
 std::shared_mutex apply_gate;
 std::shared_lock<std::shared_mutex> acquire_apply_read_gate(){return std::shared_lock(apply_gate);}
 }
-namespace config {struct {std::string format="opus";bool high_quality_audio=false;} audio;}
+namespace config {struct {std::string format="opus";} audio;}
 namespace video {int active_hevc_mode=3,active_av1_mode=3,active_pyrowave_mode=2;}
 namespace net {int encryption_mode_for_address(int) {return 0;}}
 namespace platf {std::uint64_t routed_link_bps(int,int){return 0;}}
@@ -154,11 +158,18 @@ struct Request {int sequenceNumber=1;char *payload=nullptr;int payloadLength=0;O
 struct Address {operator int() const{return 0;} std::string to_string() const{return "local";}};
 struct Endpoint {Address address() const{return {};}};
 struct Socket {Endpoint local_endpoint(boost::system::error_code &) {return {};} Endpoint remote_endpoint(boost::system::error_code &) {return {};} Endpoint remote_endpoint(){return {};}};
+// Production ANNOUNCE helpers use tcp::socket; the harness substitutes its controlled socket.
+namespace tcp { using socket = Socket; }
 struct socket_t {Socket sock;};
-int response_status=0;std::string response_audio_codec;
+int response_status=0;std::string response_audio_codec,response_audio_quality;
 void respond(Socket &,launch_session_t &,OPTION_ITEM *option,int status,const char *,int,std::initializer_list<int>) {
- response_status=status;
- for(;option;option=option->next)if(option->option && std::string_view(option->option)=="X-SS-Audio-Codec")response_audio_codec=option->content;
+ response_status=status;response_audio_codec.clear();response_audio_quality.clear();
+ for(;option;option=option->next) {
+   if(!option->option)continue;
+   const std::string_view name(option->option);
+   if(name=="X-SS-Audio-Codec")response_audio_codec=option->content;
+   if(name=="x-nv-audio.surround.AudioQuality")response_audio_quality=option->content;
+ }
 }
 struct Pool {std::vector<std::function<void()>> queue;template<class F> void push(F f){queue.emplace_back(std::move(f));} void run(){auto q=std::move(queue);queue.clear();for(auto &f:q)f();}};
 namespace boost::asio {template<class F> void post(Pool &pool,F f){pool.push(std::move(f));}}
@@ -200,7 +211,17 @@ struct rtsp_server_t {
 @CLEAR@
 };
 rtsp_server_t server;
+namespace rtsp_stream {
+@CSEQ_HEADER@
+@ANNOUNCE_ATTRIBUTES@
+@ANNOUNCE_PYROWAVE@
+@ANNOUNCE_AUDIO@
+@ANNOUNCE_BITRATE@
+@ANNOUNCE_STREAM_CONFIG@
+@ANNOUNCE_DYNAMIC_RANGE@
+@ANNOUNCE_VALIDATION@
 @ANNOUNCE@
+}
 namespace rtsp_stream {void terminate_sessions(bool p){server.clear(true,p);}}
 // The non-WEBRTC branch of the unchanged real close body still executes map
 // removal, teardown publication, history and capture-finalizer ordering.
@@ -226,7 +247,7 @@ void reset() {
  remote_session::monitor_transport_losses=0;
  server.monitor_retry_requests=0;
  config::stream={};stream::session::start_result=0;stream::session::allocated_packetsize=0;
- audio::ac3_encoder=true;audio::eac3_encoder=true;config::audio={};stream::session::allocated_audio={};response_status=0;response_audio_codec.clear();
+ audio::ac3_encoder=true;audio::eac3_encoder=true;config::audio={};stream::session::allocated_audio={};response_status=0;response_audio_codec.clear();response_audio_quality.clear();
  join_pause.reset(false);expiry_pause.reset(false);parser_pause.reset(false);peer_pause.reset(false);
  server._session_state->sessions.clear();server.pending_launches.clear();server.startup_pool.queue.clear();server.io_context.queue.clear();
  topology.shutdown(true);topology.set_runtime_callbacks({});
@@ -265,7 +286,7 @@ int main() {
  std::string payload;
  for(auto key:{"x-nv-audio.surround.numChannels","x-nv-audio.surround.channelMask","x-nv-audio.surround.AudioQuality","x-nv-video[0].packetSize","x-nv-video[0].clientViewportHt","x-nv-video[0].clientViewportWd","x-nv-video[0].maxFPS","x-nv-vqos[0].bw.maximumBitrateKbps","x-nv-video[0].videoEncoderSlicesPerFrame","x-nv-video[0].maxNumReferenceFrames"}) payload+="a="+std::string(key)+":2\n";
  auto request=std::make_shared<Request>();request->payload=payload.data();request->payloadLength=payload.size();
- auto announce=std::async(std::launch::async,[&]{return cmd_announce(&server,std::make_shared<socket_t>(),session,std::move(request));});parser_pause.reached();terminal();const int calls=finalizer_calls;parser_pause.resume();check(announce.get(),"actual ANNOUNCE reaches queued response after parser cancellation");server.startup_pool.run();server.io_context.run();
+ auto announce=std::async(std::launch::async,[&]{return rtsp_stream::cmd_announce(&server,std::make_shared<socket_t>(),session,std::move(request));});parser_pause.reached();terminal();const int calls=finalizer_calls;parser_pause.resume();check(announce.get(),"actual ANNOUNCE reaches queued response after parser cancellation");server.startup_pool.run();server.io_context.run();
  check(running==0 && finalizer_calls==calls,"actual pre-parser ANNOUNCE ticket prevents late runtime finalizer");
  parser_pause.reset(false);
  // Socket aliases and queued metadata may outlive pending-map removal; neither
@@ -277,7 +298,7 @@ int main() {
  pending->display_power_guard=pending->audio_context_guard;
  server.pending_launches.emplace(1,rtsp_server_t::Pending{pending,std::chrono::steady_clock::now()+1s});
  auto queued_request=std::make_shared<Request>();queued_request->payload=payload.data();queued_request->payloadLength=payload.size();
- check(cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(queued_request)),"actual ANNOUNCE queues metadata with pending resource owner");
+ check(rtsp_stream::cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(queued_request)),"actual ANNOUNCE queues metadata with pending resource owner");
  terminal();check(resource.expired(),"pending socket/queued aliases release runtime holds before recovery");
  server.startup_pool.run();server.io_context.run();pending.reset();check(!late_resource,"canceled queued/socket destruction has no late resource finalizer");
  // Control: a legitimate worker transfers its holds to active capture; map
@@ -285,7 +306,7 @@ int main() {
  reset();pending=std::make_shared<launch_session_t>();pending->audio_context_guard=std::make_shared<int>(1);resource=pending->audio_context_guard;
  server.pending_launches.emplace(1,rtsp_server_t::Pending{pending,std::chrono::steady_clock::now()+1s});
  auto valid_request=std::make_shared<Request>();valid_request->payload=payload.data();valid_request->payloadLength=payload.size();
- check(cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(valid_request)),"fresh ANNOUNCE is accepted");server.startup_pool.run();check(running==1 && !resource.expired(),"active capture retains admitted resource handoff");terminal();check(resource.expired(),"terminal joins active resource handoff before recovery");server.io_context.run();
+ check(rtsp_stream::cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(valid_request)),"fresh ANNOUNCE is accepted");server.startup_pool.run();check(running==1 && !resource.expired(),"active capture retains admitted resource handoff");terminal();check(resource.expired(),"terminal joins active resource handoff before recovery");server.io_context.run();
  // Pacing rejection follows the actual worker's error response and monitor
  // retirement path, never publishing an active session or retaining its holds.
  reset();pending=std::make_shared<launch_session_t>();pending->role=remote_session::role_e::monitor;
@@ -293,19 +314,19 @@ int main() {
  server.pending_launches.emplace(1,rtsp_server_t::Pending{pending,std::chrono::steady_clock::now()+1s});
  stream::session::start_result=stream::session::START_PACING_REJECTED;
  auto rejected_request=std::make_shared<Request>();rejected_request->payload=payload.data();rejected_request->payloadLength=payload.size();
- check(cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(rejected_request)),"pacing rejection reaches the admitted startup worker");
+ check(rtsp_stream::cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(rejected_request)),"pacing rejection reaches the admitted startup worker");
  server.startup_pool.run();server.io_context.run();
  check(response_status==400 && running==0 && server._session_state->sessions.empty(),"pacing rejection returns bad request without publishing capture");
  check(resource.expired() && server.pending_launches.empty() && remote_session::monitor_transport_losses==1,"pacing rejection retires monitor resources and makes it retryable");
  terminal();
  // The real parser may lower, but never raise, a client packet size. Invalid
  // overrides are ignored rather than changing an otherwise valid request.
- for(const auto [override_size,expected]:std::array<std::pair<int,int>,5>{{{0,1200},{800,800},{1600,1200},{100,1200},{65536,1200}}}) {
+ for(const auto &[override_size,expected]:std::array<std::pair<int,int>,5>{{{0,1200},{800,800},{1600,1200},{100,1200},{65536,1200}}}) {
    reset();config::stream.packetsize=override_size;pending=std::make_shared<launch_session_t>();
    server.pending_launches.emplace(1,rtsp_server_t::Pending{pending,std::chrono::steady_clock::now()+1s});
    auto packet_payload=payload;packet_payload.replace(packet_payload.find("packetSize:2"),12,"packetSize:1200");
    auto packet_request=std::make_shared<Request>();packet_request->payload=packet_payload.data();packet_request->payloadLength=packet_payload.size();
-   check(cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(packet_request)),"packet override ANNOUNCE is accepted");
+   check(rtsp_stream::cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(packet_request)),"packet override ANNOUNCE is accepted");
    server.startup_pool.run();server.io_context.run();
    check(response_status==200 && stream::session::allocated_packetsize==expected,"packet override preserves validated downward-only negotiation");
    terminal();
@@ -349,19 +370,24 @@ int main() {
    {"AC3","AC3","",8,true,false,400},
    {"","EAC3","Opus",2,true,false,200},
  }}) {
-   reset();audio::ac3_encoder=test.encoder;audio::eac3_encoder=test.encoder;config::audio.high_quality_audio=test.quality;
+   reset();audio::ac3_encoder=test.encoder;audio::eac3_encoder=test.encoder;
    pending=std::make_shared<launch_session_t>();pending->audio_codec_offered=test.offered;
    pending->audio_context_guard=std::make_shared<int>(1);resource=pending->audio_context_guard;
    server.pending_launches.emplace(1,rtsp_server_t::Pending{pending,std::chrono::steady_clock::now()+1s});
-   auto audio_payload=payload;const auto channels=audio_payload.find("numChannels:2");audio_payload.replace(channels,13,"numChannels:"+std::to_string(test.channels));
+   auto audio_payload=payload;const auto quality=audio_payload.find("AudioQuality:2");audio_payload.replace(quality,std::string("AudioQuality:2").size(),"AudioQuality:"+std::to_string(test.quality?1:0));const auto channels=audio_payload.find("numChannels:2");audio_payload.replace(channels,13,"numChannels:"+std::to_string(test.channels));
    if(*test.accepted)audio_payload+="a=x-ss-audio-codec-accept:"+std::string(test.accepted)+"\n";
    auto audio_request=std::make_shared<Request>();audio_request->payload=audio_payload.data();audio_request->payloadLength=audio_payload.size();
-   const bool admitted=cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(audio_request));
+   const bool admitted=rtsp_stream::cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(audio_request));
    check(admitted==(test.status==200),"actual ANNOUNCE rejects accepted Dolby with unavailable encoder or unsupported channels");
    server.startup_pool.run();server.io_context.run();
-   check(response_status==test.status && response_audio_codec==test.expected,"actual ANNOUNCE response reports the negotiated codec or rejection");
+   const bool dolby = test.status == 200 &&
+                     (std::string_view(test.expected) == "AC3" ||
+                      std::string_view(test.expected) == "EAC3");
+   check(response_status==test.status && response_audio_codec==(dolby?test.expected:"") &&
+         response_audio_quality==(dolby?(test.quality?"1":"0"):""),
+         "actual ANNOUNCE reports negotiated Dolby codec and host-confirmed quality, omitting both headers for Opus");
    if(admitted) {
-     const auto &selected=stream::session::allocated_audio;const bool dolby=std::string_view(test.expected)!="Opus";
+     const auto &selected=stream::session::allocated_audio;
      check(selected.use_ac3==(std::string_view(test.expected)=="AC3") && selected.use_eac3==(std::string_view(test.expected)=="EAC3") &&
            selected.high_quality_dolby==(dolby && test.quality) && selected.packetDuration==(dolby?32:5) &&
            (!dolby || (selected.flags[audio::config_t::HIGH_QUALITY] && !selected.flags[audio::config_t::CUSTOM_SURROUND_PARAMS])),

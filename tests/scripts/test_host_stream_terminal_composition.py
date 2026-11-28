@@ -20,7 +20,7 @@ p.add_argument('--boost-include', default='')
 a = p.parse_args()
 root=a.source.resolve(); out=a.build_dir.resolve(); out.mkdir(parents=True, exist_ok=True)
 rtsp=(root/'src/rtsp.cpp').read_text(); nv=(root/'src/nvhttp.cpp').read_text(); web=(root/'src/webrtc_stream.cpp').read_text()
-audio_header=(root/'src/audio.h').read_text(); audio_source=(root/'src/audio.cpp').read_text()
+audio_header=(root/'src/audio.h').read_text(); audio_codec_header=(root/'src/audio_codec.h').read_text(); audio_policy=(root/'src/rtsp_audio_policy.h').read_text(); audio_source=(root/'src/audio.cpp').read_text()
 def body(s, signature, indent):
     start=s.index(signature); end=s.index('\n'+indent+'}',start)+len('\n'+indent+'}')
     return s[start:end]
@@ -37,10 +37,12 @@ fragments={
 'PACING_RESULT':constants('src/stream.h',('START_PACING_REJECTED',)),
 'AUDIO_PARAMS':body(audio_header,'  struct stream_params_t {','  ')+';',
 'AUDIO_CONFIG':body(audio_header,'  struct config_t {','  ')+';',
-'DOLBY_CODEC':audio_header[audio_header.index('  enum class dolby_codec_e'):audio_header.index(';',audio_header.index('  enum class dolby_codec_e'))+1],
+'DOLBY_CODEC':audio_codec_header[audio_codec_header.index('  enum class dolby_codec_e'):audio_codec_header.index(';',audio_codec_header.index('  enum class dolby_codec_e'))+1],
 'DOLBY_CONFIGURE':body(audio_source,'  dolby_codec_e configure_dolby_audio(','  '),
 'DOLBY_BITRATE':body(audio_source,'  int dolby_bitrate_kbps(','  '),
 'DOLBY_NAME':body(audio_source,'  std::string_view dolby_codec_name(','  '),
+'RTSP_AUDIO_POLICY':body(audio_policy,'  constexpr bool should_send_audio_codec_header(','  '),
+'RTSP_AUDIO_QUALITY_POLICY':body(audio_policy,'  constexpr bool should_send_audio_quality_header(','  '),
 'CLEAR':body(rtsp,'    void clear(bool all = true','    '),
 'CANCEL_PENDING':body(rtsp,'    void cancel_pending_launch(','    '),
 'EXPIRE':body(rtsp,'    void expire_pending()','    '),
@@ -54,6 +56,14 @@ fragments={
 'RECONCILE_MONITOR_LOCKED':body(rtsp,'    void reconcile_abandoned_monitor_locked(','    '),
 'RETIRE_FAILED_MONITOR_START':body(rtsp,'    void retire_failed_monitor_start_locked(','    '),
 'RECONCILE_MONITOR':body(rtsp,'    void reconcile_abandoned_monitor(','    '),
+'CSEQ_HEADER':re.search(r'  char cseq_header\[\] = "[^"]+";',rtsp).group(0),
+'ANNOUNCE_ATTRIBUTES':body(rtsp,'  std::unordered_map<std::string_view, std::string_view> parse_announce_attributes(','  '),
+'ANNOUNCE_PYROWAVE':body(rtsp,'  bool configure_pyrowave_announce(','  '),
+'ANNOUNCE_AUDIO':body(rtsp,'  bool configure_announce_audio(','  '),
+'ANNOUNCE_BITRATE':body(rtsp,'  bool adjust_announce_video_bitrate(','  '),
+'ANNOUNCE_STREAM_CONFIG':body(rtsp,'  bool parse_announce_stream_config(','  '),
+'ANNOUNCE_DYNAMIC_RANGE':body(rtsp,'  void configure_announce_dynamic_range(','  '),
+'ANNOUNCE_VALIDATION':body(rtsp,'  bool validate_announce_video_and_encryption(','  '),
 'ANNOUNCE':body(rtsp,'  bool cmd_announce(','  '),
 'SNAPSHOT':body(rtsp,'  std::shared_ptr<launch_session_t> make_startup_launch_session_snapshot(','  '),
 'CLOSE_WEBRTC':body(web,'  bool close_session(std::string_view id)','  '),

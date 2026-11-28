@@ -425,8 +425,6 @@
     "audio_format_opus": "Opus (predeterminado)",
     "audio_format_ac3": "AC-3 (Dolby Digital)",
     "audio_format_eac3": "E-AC-3 (Dolby Digital Plus)",
-    "high_quality_audio": "Audio de alta calidad",
-    "high_quality_audio_desc": "Usa una tasa de bits Dolby más alta a costa de un mayor consumo de ancho de banda. Esta opción no afecta a Opus.",
     "audio_sink": "Salida de audio",
     "audio_sink_desc_linux": "El nombre de la salida de audio usado para Audio Loopback. Si no especifica esta variable, pulseaudio seleccionará el dispositivo de monitor predeterminado. Puede encontrar el nombre de la salida de audio usando cualquiera de los comandos:",
     "audio_sink_desc_macos": "El nombre de la salida de audio usado para Audio Loopback. Vibeshine sólo puede acceder a micrófonos en macOS debido a limitaciones del sistema. Para transmitir audio del sistema usando Soundflower o BlackHole.",

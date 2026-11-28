@@ -4,6 +4,7 @@
  */
 #include "../tests_common.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -11,7 +12,11 @@
 #include <src/audio_lifecycle_policy.h>
 #include <src/audio_lifecycle_state.h>
 #include <src/audio_policy.h>
+#include <src/audio_transport_policy.h>
+#include <src/crypto.h>
+#include <src/rtsp_audio_policy.h>
 #include <thread>
+#include <vector>
 
 using namespace audio::policy;
 
@@ -257,4 +262,116 @@ TEST(AudioCapturePolicy, FailedReinitializeStopsWithoutEmitting) {
   EXPECT_EQ(summary.emitted, 0u);
   EXPECT_EQ(summary.reacquisitions, 1u);
   EXPECT_TRUE(summary.stopped);
+}
+
+TEST(AudioPacketTransportPolicy, EnforcesPayloadAndPaddedCiphertextCapacity) {
+  EXPECT_EQ(stream::MAX_AUDIO_PACKET_SIZE, 2560U);
+  EXPECT_EQ(stream::MAX_AUDIO_PACKET_BUFFER_SIZE, 2576U);
+
+  EXPECT_TRUE(stream::audio_packet_fits(2560, false, 2560));
+  EXPECT_FALSE(stream::audio_packet_fits(2561, false, 2576));
+  EXPECT_TRUE(stream::audio_packet_fits(2560, true, 2576));
+  EXPECT_FALSE(stream::audio_packet_fits(2560, true, 2575));
+
+  // Both sizes require 1408 bytes under PKCS#7; aligned plaintext requires
+  // an additional complete padding block.
+  EXPECT_EQ(stream::audio_cbc_ciphertext_size(1400), 1408U);
+  EXPECT_EQ(stream::audio_cbc_ciphertext_size(1401), 1408U);
+  EXPECT_EQ(stream::audio_cbc_ciphertext_size(2560), 2576U);
+  EXPECT_TRUE(stream::audio_packet_fits(1400, true, 1408));
+  EXPECT_TRUE(stream::audio_packet_fits(1401, true, 1408));
+  EXPECT_FALSE(stream::audio_packet_fits(1408, true, 1408));
+}
+
+TEST(RtspAudioPolicy, AddsCodecResponseHeaderOnlyForDolby) {
+  EXPECT_FALSE(rtsp_stream::should_send_audio_codec_header(audio::dolby_codec_e::opus));
+  EXPECT_TRUE(rtsp_stream::should_send_audio_codec_header(audio::dolby_codec_e::ac3));
+  EXPECT_TRUE(rtsp_stream::should_send_audio_codec_header(audio::dolby_codec_e::eac3));
+}
+
+TEST(AudioPacketTransport, EncryptsAndWritesLargestSupportedFrame) {
+  const crypto::aes_t key(16, 0x5a);
+  crypto::aes_t iv(16, 0x3c);
+  crypto::cipher::cbc_t cipher {key, true};
+  const std::vector<std::uint8_t> plaintext(stream::MAX_AUDIO_PACKET_SIZE, 0x42);
+  std::array<std::uint8_t, stream::MAX_AUDIO_PACKET_BUFFER_SIZE> destination {};
+  int writes = 0;
+  std::size_t written = 0;
+
+  const auto bytes = stream::encode_and_write_audio(
+    true,
+    plaintext,
+    destination.data(),
+    destination.size(),
+    [&cipher, &iv](std::string_view input, std::uint8_t *output) {
+      return cipher.encrypt(input, output, &iv);
+    },
+    [&writes, &written](const std::uint8_t *, std::size_t size) {
+      ++writes;
+      written = size;
+    }
+  );
+
+  EXPECT_EQ(bytes, static_cast<int>(stream::MAX_AUDIO_PACKET_BUFFER_SIZE));
+  EXPECT_EQ(writes, 1);
+  EXPECT_EQ(written, stream::MAX_AUDIO_PACKET_BUFFER_SIZE);
+}
+
+TEST(AudioPacketTransport, WritesLargestSupportedFrameWithoutEncryption) {
+  const std::vector<std::uint8_t> plaintext(stream::MAX_AUDIO_PACKET_SIZE, 0x42);
+  std::array<std::uint8_t, stream::MAX_AUDIO_PACKET_SIZE> destination {};
+  int writes = 0;
+  std::size_t written = 0;
+
+  const auto bytes = stream::encode_and_write_audio(
+    false,
+    plaintext,
+    destination.data(),
+    destination.size(),
+    [](std::string_view, std::uint8_t *) { return -1; },
+    [&writes, &written](const std::uint8_t *, std::size_t size) {
+      ++writes;
+      written = size;
+    }
+  );
+
+  EXPECT_EQ(bytes, static_cast<int>(stream::MAX_AUDIO_PACKET_SIZE));
+  EXPECT_EQ(writes, 1);
+  EXPECT_EQ(written, stream::MAX_AUDIO_PACKET_SIZE);
+}
+
+TEST(AudioPacketTransport, RejectsInsufficientCapacityBeforeWriting) {
+  const crypto::aes_t key(16, 0x5a);
+  crypto::aes_t iv(16, 0x3c);
+  crypto::cipher::cbc_t cipher {key, true};
+  const std::vector<std::uint8_t> plaintext(stream::MAX_AUDIO_PACKET_SIZE, 0x42);
+  std::array<std::uint8_t, stream::MAX_AUDIO_PACKET_BUFFER_SIZE> destination {};
+  int encryptions = 0;
+  int writes = 0;
+
+  const auto encrypted_bytes = stream::encode_and_write_audio(
+    true,
+    plaintext,
+    destination.data(),
+    destination.size() - 1,
+    [&cipher, &iv, &encryptions](std::string_view input, std::uint8_t *output) {
+      ++encryptions;
+      return cipher.encrypt(input, output, &iv);
+    },
+    [&writes](const std::uint8_t *, std::size_t) { ++writes; }
+  );
+  EXPECT_EQ(encrypted_bytes, -1);
+  EXPECT_EQ(encryptions, 0);
+  EXPECT_EQ(writes, 0);
+
+  const auto plaintext_bytes = stream::encode_and_write_audio(
+    false,
+    plaintext,
+    destination.data(),
+    stream::MAX_AUDIO_PACKET_SIZE - 1,
+    [](std::string_view, std::uint8_t *) { return -1; },
+    [&writes](const std::uint8_t *, std::size_t) { ++writes; }
+  );
+  EXPECT_EQ(plaintext_bytes, -1);
+  EXPECT_EQ(writes, 0);
 }
