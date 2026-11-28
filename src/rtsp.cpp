@@ -2035,6 +2035,8 @@ namespace rtsp_stream {
       }
       const bool pyrowave_adaptive_fec = args.contains(pyrowave::protocol::ANNOUNCE_ADAPTIVE_FEC);
       config.monitor.pyrowave_framing = pyrowave::policy::select_framing(pyrowave_adaptive_fec, pyrowave_features);
+      config.monitor.pyrowave_frame_header_bytes = pyrowave::protocol::FRAME_HEADER_BYTES +
+        (config.capture_timing ? pyrowave::protocol::CAPTURE_TIMING_BYTES : 0);
       config.monitor.packetsize = config.packetsize;
       config.monitor.pyrowave_min_parity_shards = std::max(2, config.minRequiredFecPackets);
       if (const auto it = args.find("x-ss-video[0].pyrowaveLinkMbps"sv); it != args.end()) {
@@ -2397,6 +2399,9 @@ namespace rtsp_stream {
     auto args = parse_announce_attributes(std::string_view {req->payload, (size_t) req->payloadLength});
 
     stream::config_t config {};
+    if (auto timing = args.find("x-ml-video.captureTiming"sv); timing != args.end()) {
+      config.capture_timing = timing->second == "1"sv;
+    }
     config.gen1_framegen_fix = false;
     config.gen2_framegen_fix = false;
     config.frame_generation_enabled = false;
@@ -2423,27 +2428,32 @@ namespace rtsp_stream {
 
     configure_announce_dynamic_range(config, *session, pyrowave_session);
 
-#if defined(_WIN32) || defined(__linux__)
     if (pyrowave_session) {
+      std::uint64_t routed_bps = 0;
+#if defined(_WIN32) || defined(__linux__)
       boost::system::error_code local_ec, remote_ec;
       const auto local = socket->sock.local_endpoint(local_ec);
       const auto remote = socket->sock.remote_endpoint(remote_ec);
       if (!local_ec && !remote_ec) {
-        const auto link_bps = pyrowave::bandwidth::pacing_link_bps(
-          platf::routed_link_bps(local.address(), remote.address()), config.monitor.pyrowave_peer_link_bps);
-        if (link_bps) {
-          const auto limit_kbps = static_cast<std::int64_t>(link_bps / 1000);
-          const auto requested = configuredBitrateKbps ? configuredBitrateKbps : config.monitor.bitrate;
-          configuredBitrateKbps = std::min<std::int64_t>(requested, limit_kbps);
-          if (configuredBitrateKbps < requested) {
-            BOOST_LOG(warning) << "PyroWave bandwidth capped at " << configuredBitrateKbps
-                               << " kbps for the routed wired link, including FEC and headers";
-          }
+        routed_bps = platf::routed_link_bps(local.address(), remote.address());
+      }
+#endif
+      const auto link_kbps = pyrowave::bandwidth::pacing_link_bps(routed_bps, config.monitor.pyrowave_peer_link_bps) / 1000;
+      if (link_kbps > 0) {
+        config.monitor.pyrowave_link_bitrate_limit_kbps = static_cast<int>(
+          std::min<std::uint64_t>(link_kbps, std::numeric_limits<int>::max())
+        );
+        const auto requested = configuredBitrateKbps ? configuredBitrateKbps : config.monitor.bitrate;
+        configuredBitrateKbps = std::min<std::int64_t>(requested, config.monitor.pyrowave_link_bitrate_limit_kbps);
+        if (configuredBitrateKbps < requested) {
+          BOOST_LOG(warning) << "PyroWave bandwidth capped at " << configuredBitrateKbps
+                             << " kbps for the routed or peer link, including FEC and headers";
         }
       }
     }
 
-#endif
+    const int bitrate_limit_kbps = pyrowave_session ? std::numeric_limits<int>::max() : video::policy::MAX_ENCODER_BITRATE_KBPS;
+    configuredBitrateKbps = std::min<std::int64_t>(configuredBitrateKbps, bitrate_limit_kbps);
 
     if (!adjust_announce_video_bitrate(config, configuredBitrateKbps, pyrowave_session, socket->sock, *session, option, req->sequenceNumber)) {
       return false;
