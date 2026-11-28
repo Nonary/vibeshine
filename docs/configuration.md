@@ -2084,8 +2084,7 @@ dd_remove_virtual_display_after_restore = disabled
         <td>Description</td>
         <td colspan="2">
             Engine used to apply and restore display settings.
-            In automatic mode the new v2 state-machine engine runs on pre-release builds only;
-            stable releases keep the legacy engine unless you opt in with @code{}v2@endcode.
+            Automatic mode uses v2 on all builds. Select @code{}legacy@endcode to opt into the legacy engine.
             @note{Applies to Windows only.}
         </td>
     </tr>
@@ -2100,7 +2099,7 @@ dd_remove_virtual_display_after_restore = disabled
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            dd_display_helper_engine = v2
+            dd_display_helper_engine = legacy
             @endcode</td>
     </tr>
 </table>
@@ -5166,6 +5165,16 @@ cannot accidentally exclude a different app. Example:
 Steam compatibility/runtime/tool manifests are also excluded by default based
 on their manifest type and known runtime IDs. Set `steam_include_tools = true`
 to import those records intentionally.
+
+### steam_big_picture_on_stream
+
+On Windows and Linux desktop hosts, open Steam Big Picture before launching
+a synchronized game through Steam. Ending the app session exits Big Picture
+even if it was already open. A resumable disconnect leaves Big Picture open.
+This setting applies to Steam-mediated launches. Linux direct launches and
+SteamOS Gaming Mode keep their normal behavior.
+
+Default: disabled.
 
 ### steam_include_tools
 

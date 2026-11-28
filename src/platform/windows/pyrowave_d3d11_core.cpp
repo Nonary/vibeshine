@@ -883,7 +883,8 @@ namespace pyrowave::d3d11 {
         return result_e::failed;
       }
       const auto &frame = packet_span[0];
-      auto written = pyrowave::policy::write_record_frame(std::span<const std::uint8_t>(state.scratch.data() + frame.offset, frame.size), framing.shard_payload, out, framing.max_frame_bytes);
+      auto written = pyrowave::policy::write_record_frame(std::span<const std::uint8_t>(state.scratch.data() + frame.offset, frame.size),
+        framing.shard_payload, out, framing.max_frame_bytes, framing.frame_header_bytes);
       if (!written) {
         state.error("the encoder produced a malformed bitstream");
         return result_e::failed;

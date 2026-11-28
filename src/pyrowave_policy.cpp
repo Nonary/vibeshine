@@ -48,8 +48,8 @@ namespace pyrowave::policy {
     }
 
     /// Bytes left in the current shard at frame byte `position` (never 0).
-    std::size_t shard_remaining(std::size_t position, std::size_t shard_payload) {
-      return shard_payload - (position + FRAME_HEADER_BYTES) % shard_payload;
+    std::size_t shard_remaining(std::size_t position, std::size_t shard_payload, std::size_t header_bytes) {
+      return shard_payload - (position + header_bytes) % shard_payload;
     }
 
     /**
@@ -156,12 +156,12 @@ namespace pyrowave::policy {
     return framing_e::length_prefixed;
   }
 
-  std::size_t shard_payload_bytes(int packetsize) {
+  std::size_t shard_payload_bytes(int packetsize, std::size_t header_bytes) {
     if (packetsize <= SHARD_OVERHEAD_BYTES) {
       return 0;
     }
     const auto shard = std::size_t(packetsize - SHARD_OVERHEAD_BYTES);
-    if (shard < FRAME_HEADER_BYTES + SEQUENCE_HEADER_BYTES + PADDING_RECORD_MIN_BYTES || shard % 4 != 0) {
+    if (shard < header_bytes + SEQUENCE_HEADER_BYTES + PADDING_RECORD_MIN_BYTES || shard % 4 != 0) {
       return 0;
     }
     return shard;
@@ -171,7 +171,8 @@ namespace pyrowave::policy {
     std::span<const std::uint8_t> bitstream,
     std::size_t shard_payload,
     std::vector<std::uint8_t> &out,
-    std::size_t frame_limit
+    std::size_t frame_limit,
+    std::size_t header_bytes
   ) {
     // Split the frame into its sequence header and block records.
     if (bitstream.size() < 8 || (read_u32(bitstream.data()) >> 31) == 0 ||
@@ -206,10 +207,10 @@ namespace pyrowave::policy {
     const std::uint32_t sequence_word = read_u32(bitstream.data());
     const std::uint32_t coarse_blocks = coarse_block_count((sequence_word & 0x3fff) + 1, ((sequence_word >> 14) & 0x3fff) + 1);
 
-    // Frame byte p sits at offset p + FRAME_HEADER_BYTES of the shard stream,
+    // Frame byte p follows the negotiated frame header in the shard stream,
     // because the short frame header precedes the frame in the first shard.
     const auto remaining = [&]() {
-      return shard_remaining(out.size() - frame_start, shard_payload);
+      return shard_remaining(out.size() - frame_start, shard_payload, header_bytes);
     };
     const auto place = [&](const record_t &record) {
       out.insert(out.end(), bitstream.begin() + record.offset, bitstream.begin() + record.offset + record.size);
@@ -457,17 +458,17 @@ namespace pyrowave::policy {
     return info;
   }
 
-  std::vector<bool> record_start_shards(std::span<const std::uint8_t> frame, std::size_t shard_payload) {
+  std::vector<bool> record_start_shards(std::span<const std::uint8_t> frame, std::size_t shard_payload, std::size_t header_bytes) {
     if (!shard_payload || frame.empty()) {
       return {};
     }
-    std::vector<bool> starts((frame.size() + FRAME_HEADER_BYTES + shard_payload - 1) / shard_payload, false);
+    std::vector<bool> starts((frame.size() + header_bytes + shard_payload - 1) / shard_payload, false);
     for (std::size_t position = 0; position < frame.size();) {
       if (frame.size() - position < 8) {
         return {};
       }
-      if ((position + FRAME_HEADER_BYTES) % shard_payload == 0 || position == 0) {
-        starts[(position + FRAME_HEADER_BYTES) / shard_payload] = true;
+      if ((position + header_bytes) % shard_payload == 0 || position == 0) {
+        starts[(position + header_bytes) / shard_payload] = true;
       }
       const std::uint32_t word0 = read_u32(frame.data() + position);
       std::size_t bytes;
@@ -701,17 +702,17 @@ namespace pyrowave::policy {
     return result;
   }
 
-  std::size_t max_frame_bytes(int packetsize, bool critical_fec) {
+  std::size_t max_frame_bytes(int packetsize, bool critical_fec, std::size_t header_bytes) {
     if (packetsize <= SHARD_OVERHEAD_BYTES) {
       return 0;
     }
     const auto max_shards = critical_fec ? 3000u : 4000u;
     return std::min<std::size_t>(max_shards, protocol::MAX_FEC_BLOCKS * protocol::MAX_DATA_SHARDS_PER_BLOCK) *
-             std::size_t(packetsize - SHARD_OVERHEAD_BYTES) - FRAME_HEADER_BYTES;
+             std::size_t(packetsize - SHARD_OVERHEAD_BYTES) - header_bytes;
   }
 
-  std::size_t max_bitstream_bytes(int packetsize, bool length_prefixed, bool critical_fec) {
-    auto capacity = max_frame_bytes(packetsize, critical_fec);
+  std::size_t max_bitstream_bytes(int packetsize, bool length_prefixed, bool critical_fec, std::size_t header_bytes) {
+    auto capacity = max_frame_bytes(packetsize, critical_fec, header_bytes);
     if (length_prefixed) {
       // At worst each block and the sequence header occupy their own packet.
       // Each packet needs a length word, plus the frame's packet-count word.

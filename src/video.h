@@ -86,6 +86,7 @@ namespace video {
     // framing aligns to, and the framing the client asked for in ANNOUNCE.
     int packetsize = 0;
     pyrowave::policy::framing_e pyrowave_framing = pyrowave::policy::framing_e::records;
+    std::size_t pyrowave_frame_header_bytes = pyrowave::protocol::FRAME_HEADER_BYTES;
     std::size_t pyrowave_min_parity_shards = 2;
     std::uint64_t pyrowave_peer_link_bps = 0;
     // Highest loss-free frame pace the client calibrated (0 = not calibrated).
@@ -94,6 +95,8 @@ namespace video {
     // is PyroWave, which pins and reads each capture image's own texture and
     // keyed mutex, so the capture must give every image a stable copy.
     bool shared_capture_pyrowave = false;
+    // Route/peer link ceiling, independent of the initial PyroWave wire budget.
+    int pyrowave_link_bitrate_limit_kbps = 0;
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);

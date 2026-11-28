@@ -623,6 +623,8 @@ if(SUNSHINE_TEST_ENABLE_COMPONENT)
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/stream_protocol.cpp"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/stream_protocol.h"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/pyrowave_policy.h"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_policy.h"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video.cpp"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/nvhttp.cpp"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/rtsp.cpp"
             VERBATIM)
@@ -711,6 +713,8 @@ sunshine_register_component(NAME test_component_steam_sync TEST_SOURCE test_stea
     LINK_LIBRARIES nlohmann_json::nlohmann_json ${STEAM_DISCOVERY_TEST_LIBRARIES})
 sunshine_register_component(NAME test_component_steam_process_tracker TEST_SOURCE test_steam_process_tracker.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/steam_process_tracker.cpp")
+sunshine_register_component(NAME test_component_steam_big_picture_stream_policy TEST_SOURCE test_steam_big_picture_stream_policy.cpp
+    PRODUCT_SOURCES)
 sunshine_register_component(NAME test_component_steam_auto_sync TEST_SOURCE test_steam_auto_sync.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/steam_auto_sync_policy.cpp"
                     "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/steam_integration.cpp"
@@ -924,6 +928,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(test_component_linux_steamos_replace_sunshine PROPERTIES LABELS "component")
     find_program(SUNSHINE_TEST_PYTHON_EXECUTABLE NAMES python3)
     if(SUNSHINE_TEST_PYTHON_EXECUTABLE)
+        add_test(NAME test_component_linux_vaapi_output_lut
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_vaapi_output_lut.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_linux_vaapi_output_lut PROPERTIES LABELS "component" TIMEOUT 45)
         add_test(NAME test_component_cached_game_launch_composition
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/scripts/test_cached_game_launch_composition.py"
@@ -1367,6 +1376,16 @@ if(SUNSHINE_TEST_ENABLE_COMPONENT AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
                 "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_wgc_source_admission.py"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
         set_tests_properties(test_component_wgc_source_admission PROPERTIES LABELS "component" TIMEOUT 30)
+        add_test(NAME test_component_wgc_delivery
+            COMMAND "${SUNSHINE_TEST_WGC_PYTHON_EXECUTABLE}" -B
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_wgc_delivery.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_wgc_delivery PROPERTIES LABELS "component" TIMEOUT 30)
+        add_test(NAME test_component_wgc_rtp_timestamps
+            COMMAND "${SUNSHINE_TEST_WGC_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_wgc_rtp_timestamps.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_wgc_rtp_timestamps PROPERTIES LABELS "component" TIMEOUT 30)
         add_test(NAME test_component_wgc_gpu_priority
             COMMAND "${SUNSHINE_TEST_WGC_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_wgc_gpu_priority.py"

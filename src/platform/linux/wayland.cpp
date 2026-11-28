@@ -450,6 +450,7 @@ namespace wl {
 
     // Start the actual copy
     zwp_linux_buffer_params_v1_destroy(params);
+    self->copy_started = std::chrono::steady_clock::now();
     zwlr_screencopy_frame_v1_copy(frame, buffer);
   }
 
@@ -479,6 +480,7 @@ namespace wl {
     // Frame is ready for use, GBM buffer now contains screen content
     current_frame->destroy();
     current_frame = get_next_frame();
+    current_frame->host_processing_timestamp = copy_started;
 
     std::uint64_t sec = (std::uint64_t(tv_sec_hi) << 32) | tv_sec_lo;
     auto ready_ts = std::chrono::seconds(sec) + std::chrono::nanoseconds(tv_nsec);

@@ -58,14 +58,17 @@ namespace {
 
 int main(int argc, char *argv[]) {
   std::string engine;
+  bool restore_mode = false;
   constexpr const char *kEnginePrefix = "--engine=";
   for (int i = 1; i < argc; ++i) {
     if (std::strncmp(argv[i], kEnginePrefix, std::strlen(kEnginePrefix)) == 0) {
       engine = argv[i] + std::strlen(kEnginePrefix);
+    } else if (std::strcmp(argv[i], "--restore") == 0) {
+      restore_mode = true;
     }
   }
 
-  if (engine.empty()) {
+  if (engine.empty() && restore_mode) {
     engine = engine_from_state_files().value_or("v2");
   }
 

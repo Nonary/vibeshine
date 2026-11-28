@@ -93,8 +93,9 @@ namespace pyrowave::host {
           encode_rate_logger {debug, "PyroWave: encode rate", "fps"},
           budget_logger {debug, "PyroWave: frame budget", "bytes"} {
         framing.framing = params.framing;
-        framing.shard_payload = policy::shard_payload_bytes(params.packetsize);
-        framing.max_frame_bytes = policy::max_frame_bytes(params.packetsize, params.critical_fec);
+        framing.frame_header_bytes = params.frame_header_bytes;
+        framing.shard_payload = policy::shard_payload_bytes(params.packetsize, params.frame_header_bytes);
+        framing.max_frame_bytes = policy::max_frame_bytes(params.packetsize, params.critical_fec, params.frame_header_bytes);
 
         BOOST_LOG(info) << "PyroWave encoder session: "sv << params.width << 'x' << params.height
                         << (params.yuv444 ? " 4:4:4"sv : " 4:2:0"sv) << ", "sv << params.colorspace.bit_depth << "-bit "sv

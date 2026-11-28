@@ -126,10 +126,27 @@ The host keeps sending the usual HDR mode and metadata control messages.
 
 PyroWave frames use Vibeshine's existing video transport: RTP, the
 `NV_VIDEO_PACKET` header and FEC block layout (up to four blocks), optional
-AES-GCM, and the 8-byte short frame header in front of the first payload. The frame
+AES-GCM, and a short frame header in front of the first payload. The base header
+is 8 bytes, with an optional timestamp when both peers negotiate capture timing. The frame
 header `frameType` is always `2` (IDR). moonlight-common-c trims the last payload
 to `lastPayloadLen` as it does for AV1. The host ignores IDR and
 reference-invalidation requests for PyroWave sessions.
+
+### Capture timing
+
+The host advertises `x-ss-video.captureTiming:1` in DESCRIBE. The client opts
+in with `x-ml-video.captureTiming:1` in ANNOUNCE. For any codec, the opt-in
+appends an unsigned little-endian 64-bit host-monotonic capture-start timestamp
+to the eight-byte short frame header. The timestamp is in microseconds, with
+zero for unavailable. The extra bytes count toward payload length, shard
+alignment, FEC, and encryption. The RTP timestamp retains its presentation
+semantics.
+
+On the session control channel, unsequenced message `0x5510` carries the
+client's monotonic send timestamp. The `0x5511` reply carries that timestamp
+followed by host receive and send timestamps from the same clock as capture.
+Each field is an unsigned little-endian 64-bit microsecond count. The client
+records its own receipt time to estimate the host clock offset.
 
 Every PyroWave frame is independent, so a lost packet costs at most
 that frame, and with record framing usually only the detail it carried (see

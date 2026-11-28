@@ -8,6 +8,8 @@
  */
 #pragma once
 
+#include "pyrowave_protocol.h"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -19,10 +21,10 @@
 
 namespace pyrowave::policy {
   /// Frame payload capacity from the negotiated packet size and video header fields.
-  std::size_t max_frame_bytes(int packetsize, bool critical_fec = false);
+  std::size_t max_frame_bytes(int packetsize, bool critical_fec = false, std::size_t header_bytes = protocol::FRAME_HEADER_BYTES);
 
   /// Codec budget leaving enough space for compatibility packet length prefixes.
-  std::size_t max_bitstream_bytes(int packetsize, bool length_prefixed, bool critical_fec = false);
+  std::size_t max_bitstream_bytes(int packetsize, bool length_prefixed, bool critical_fec = false, std::size_t header_bytes = protocol::FRAME_HEADER_BYTES);
 
   /// Packets per pacing quantum, using the routed link speed or stream bitrate.
   /// A client-calibrated pace replaces the default 80% link headroom; neither
@@ -51,7 +53,7 @@ namespace pyrowave::policy {
    * @return 0 when record alignment is impossible (unknown size, too small, or not
    *         a multiple of four bytes); the frame is then written without padding.
    */
-  std::size_t shard_payload_bytes(int packetsize);
+  std::size_t shard_payload_bytes(int packetsize, std::size_t header_bytes = protocol::FRAME_HEADER_BYTES);
 
   /// A PyroWave packet inside an encoded bitstream. Layout-compatible with `pyrowave_packet`.
   struct packet_t {
@@ -112,7 +114,8 @@ namespace pyrowave::policy {
     std::span<const std::uint8_t> bitstream,
     std::size_t shard_payload,
     std::vector<std::uint8_t> &out,
-    std::size_t frame_limit = 0
+    std::size_t frame_limit = 0,
+    std::size_t header_bytes = protocol::FRAME_HEADER_BYTES
   );
 
   /// Append a length-prefixed frame (`[u32 LE count] { [u32 LE size] [bytes] }`) to `out`.
@@ -151,7 +154,8 @@ namespace pyrowave::policy {
    * FRAME_HEADER_BYTES. A record here is a sequence header, block or padding record.
    * @return One entry per shard, or empty when the frame cannot be walked.
    */
-  std::vector<bool> record_start_shards(std::span<const std::uint8_t> frame, std::size_t shard_payload);
+  std::vector<bool> record_start_shards(std::span<const std::uint8_t> frame, std::size_t shard_payload,
+                                       std::size_t header_bytes = protocol::FRAME_HEADER_BYTES);
 
   /**
    * @brief Parse a record-framed frame the way a receiver does.

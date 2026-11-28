@@ -84,6 +84,7 @@ namespace pipewire {
     struct spa_hook stream_listener {};
     struct spa_video_info format {};
     struct pw_buffer *current_buffer = nullptr;
+    std::chrono::steady_clock::time_point current_buffer_processing_start;
     uint64_t drm_format = 0;
     std::shared_ptr<shared_state_t> shared;
     std::mutex frame_mutex;
@@ -380,6 +381,7 @@ namespace pipewire {
       if (buf->datas[0].chunk->size != 0) {
         auto *img_descriptor = static_cast<egl::img_descriptor_t *>(img);
         fill_img_metadata(img_descriptor, buf);
+        img_descriptor->host_processing_timestamp = stream_data.current_buffer_processing_start;
         if (buf->datas[0].type == SPA_DATA_DmaBuf) {
           fill_img_dmabuf(img_descriptor, buf, stream_data);
         } else {
@@ -528,6 +530,7 @@ namespace pipewire {
     }
 
     static void on_process(void *user_data) {
+      const auto processing_start = std::chrono::steady_clock::now();
       const auto d = static_cast<struct stream_data_t *>(user_data);
       struct pw_buffer *b = nullptr;
 
@@ -557,6 +560,7 @@ namespace pipewire {
           pw_stream_queue_buffer(d->stream, d->current_buffer);
         }
         d->current_buffer = b;
+        d->current_buffer_processing_start = processing_start;
         d->frame_ready = true;
       }
       // 3. Optimized Path: Software/MemPtr
@@ -587,6 +591,7 @@ namespace pipewire {
           d->local_stride = b->buffer->datas[0].chunk->stride;
           d->frame_ready = true;
           d->current_buffer = b;
+          d->current_buffer_processing_start = processing_start;
         }
 
         // Keep the producer's metadata valid until this frame is replaced.

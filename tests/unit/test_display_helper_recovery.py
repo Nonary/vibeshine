@@ -64,6 +64,16 @@ has_settlement = all(signature in legacy_source for signature in settlement_sign
 # Windows display stack and asynchronous pipe. The actual REVERT handler is compiled below.
 handle_apply = function(legacy_source, "bool handle_apply(ServiceState &state, std::span<const uint8_t> payload, std::string &error_msg, bool &refresh_shell)")
 assert "state.stop_restore_polling();" in handle_apply, "APPLY caller must stop restore polling"
+legacy_preparation = function(legacy_source, "bool prepare_virtual_screen_apply(")
+assert handle_apply.index("prepare_virtual_screen_apply(cfg, requested_virtual_layout)") < handle_apply.index("state.last_cfg = cfg")
+assert "if (!validated && !virtual_screen)" in handle_apply, "virtual preflight failure must not reset the global display stack"
+assert "soft_test_display_settings(cfg, sunshine_topology, virtual_screen)" in handle_apply
+assert "verify_last_configuration_sticky(ServiceState::kVerificationSettleDelay, {}, virtual_screen)" in handle_apply
+payload_builder = function(integration_source, "std::optional<std::string> build_helper_apply_payload(")
+assert "request.virtual_display_arrangement && request.session_overrides.virtual_display_override.value_or(false)" in payload_builder
+assert 'j["sunshine_virtual_screen"] = true;' in payload_builder
+engine_selection = function(integration_source, "static bool use_legacy_helper_engine()")
+helper_main = function((root / "tools/display_settings_helper_main.cpp").read_text(), "int main(int argc, char *argv[])").replace("int main(", "int select_standalone_engine(", 1)
 handle_revert = function(legacy_source, "void handle_revert(ServiceState &state, std::atomic<bool> &running, std::span<const uint8_t> payload)")
 if has_settlement:
     handle_misc = function(legacy_source, "void handle_misc(")
@@ -121,6 +131,7 @@ program = r'''
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <mutex>
 #include <optional>
@@ -172,10 +183,76 @@ namespace integration_fake {
   }
 }
 namespace config {
-  struct VideoDD { bool config_revert_on_disconnect = false; };
-  struct Video { VideoDD dd; };
-  Video video;
+  struct video_t {
+    struct dd_t {
+      enum class helper_engine_e { automatic, v2, legacy };
+      bool config_revert_on_disconnect = false;
+      helper_engine_e display_helper_engine = helper_engine_e::automatic;
+    } dd;
+  };
+  video_t video;
 }
+namespace display_device {
+  struct SingleDisplayConfiguration {
+    enum class DevicePreparation { VerifyOnly, EnsureActive, EnsurePrimary, EnsureOnlyDisplay };
+    DevicePreparation m_device_prep;
+    std::string m_device_id;
+  };
+}
+std::optional<std::string> engine_from_state_files() { return "legacy"; }
+int run_legacy_helper(int, char **) { return 1; }
+int run_v2_helper(int, char **) { return 2; }
+''' + engine_selection + '\n' + helper_main + '\n' + legacy_preparation + r'''
+
+void test_engine_defaults_and_restore() {
+  using Engine = config::video_t::dd_t::helper_engine_e;
+  assert(!use_legacy_helper_engine());
+  config::video.dd.display_helper_engine = Engine::v2;
+  assert(!use_legacy_helper_engine());
+  config::video.dd.display_helper_engine = Engine::legacy;
+  assert(use_legacy_helper_engine());
+  config::video.dd.display_helper_engine = Engine::automatic;
+
+  char executable[] = "helper";
+  char restore[] = "--restore";
+  char legacy[] = "--engine=legacy";
+  char v2[] = "--engine=v2";
+  char *defaults[] = {executable};
+  char *opt_in[] = {executable, legacy};
+  char *boot_restore[] = {executable, restore};
+  char *explicit_restore[] = {executable, restore, v2};
+  assert(select_standalone_engine(1, defaults) == 2);
+  assert(select_standalone_engine(2, opt_in) == 1);
+  assert(select_standalone_engine(2, boot_restore) == 1);
+  assert(select_standalone_engine(3, explicit_restore) == 2);
+}
+
+void test_legacy_virtual_screen_uses_exact_layout_target() {
+  using Config = display_device::SingleDisplayConfiguration;
+  using Prep = Config::DevicePreparation;
+  const std::array cases {
+    std::pair {"extended", Prep::EnsureActive},
+    std::pair {"extended_isolated", Prep::EnsureActive},
+    std::pair {"extended_primary", Prep::EnsurePrimary},
+    std::pair {"extended_primary_isolated", Prep::EnsurePrimary},
+    std::pair {"exclusive", Prep::EnsureOnlyDisplay},
+  };
+  for (const auto &[layout, expected] : cases) {
+    Config cfg {Prep::VerifyOnly, "owned-vdd"};
+    assert(prepare_virtual_screen_apply(cfg, layout));
+    assert(cfg.m_device_prep == expected && cfg.m_device_id == "owned-vdd");
+  }
+  Config cfg {Prep::VerifyOnly, ""};
+  assert(!prepare_virtual_screen_apply(cfg, "extended"));
+  cfg.m_device_id = "owned-vdd";
+  assert(!prepare_virtual_screen_apply(cfg, std::nullopt));
+  assert(!prepare_virtual_screen_apply(cfg, "unknown"));
+  assert(cfg.m_device_prep == Prep::VerifyOnly);
+  cfg.m_device_prep = Prep::EnsureOnlyDisplay;
+  assert(prepare_virtual_screen_apply(cfg, "extended"));
+  assert(cfg.m_device_prep == Prep::EnsureActive && cfg.m_device_id == "owned-vdd");
+}
+
 namespace remote_display_topology {
   struct Topology {
     bool generic_virtual_display_cleanup_allowed() { ++integration_fake::ownership_checks; return integration_fake::cleanup_allowed; }
@@ -663,6 +740,8 @@ static void test_ping_does_not_clear_an_explicit_restore_request() {
 }
 
 int main() {
+  test_engine_defaults_and_restore();
+  test_legacy_virtual_screen_uses_exact_layout_target();
 #if HAS_OWNERSHIP_POLICY
   test_paused_normal_restore_retains_removal_guard();
 #endif

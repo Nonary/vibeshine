@@ -149,6 +149,14 @@ using namespace std::literals;
 
 namespace stream {
   namespace {
+    constexpr uint16_t capture_clock_request = 0x5510;
+    constexpr uint16_t capture_clock_reply = 0x5511;
+
+    uint64_t capture_clock_microseconds(std::chrono::steady_clock::time_point time = std::chrono::steady_clock::now()) {
+      const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(time.time_since_epoch()).count();
+      return micros > 0 ? static_cast<uint64_t>(micros) : 0;
+    }
+
     std::string current_server_version() {
       std::string version = PROJECT_VERSION;
 #ifdef PROJECT_VERSION_PRERELEASE
@@ -560,8 +568,9 @@ namespace stream {
       _map_type_cb.emplace(type, std::move(cb));
     }
 
-    int send(const std::string_view &payload, net::peer_t peer, bool haptics = false) {
-      auto packet = enet_packet_create(payload.data(), payload.size(), haptics ? 0 : ENET_PACKET_FLAG_RELIABLE);
+    int send(const std::string_view &payload, net::peer_t peer, bool haptics = false, bool unreliable = false) {
+      const auto flags = haptics ? 0 : (unreliable ? ENET_PACKET_FLAG_UNSEQUENCED : ENET_PACKET_FLAG_RELIABLE);
+      auto packet = enet_packet_create(payload.data(), payload.size(), flags);
       if (!packet) return -1;
       if (enet_peer_send(peer, haptics ? ML_HAPTICS_CHANNEL : 0, packet)) {
         enet_packet_destroy(packet);
@@ -655,7 +664,15 @@ namespace stream {
       std::string ping_payload;
 
       std::uint32_t lowseq;
+#ifdef _WIN32
+      // The UDP sender owns this unwrapped clock for the lifetime of the session.
+      std::optional<std::int64_t> last_sent_rtp_tick;
+#endif
       udp::endpoint peer;
+#ifdef _WIN32
+      // Owned by the video broadcast thread.
+      video_send_fallback_t send_fallback;
+#endif
 
       std::optional<crypto::cipher::gcm_t> cipher;
       std::uint64_t gcm_iv_counter;
@@ -663,6 +680,7 @@ namespace stream {
       safe::mail_raw_t::event_t<bool> idr_events;
       safe::mail_raw_t::event_t<std::pair<int64_t, int64_t>> invalidate_ref_frames_events;
       safe::mail_raw_t::event_t<int> bitrate_events;
+      int bitrate_limit_kbps = video::policy::MAX_ENCODER_BITRATE_KBPS;
       // The HTTP bitrate control path runs concurrently with the UDP sender.
       // Keep its per-frame pacing input atomic instead of racing on monitor config.
       std::atomic<int> pacing_bitrate_kbps {0};
@@ -840,7 +858,8 @@ namespace stream {
       for (auto *session : *ctx.control_server._sessions) {
         if (session) {
           sessions.push_back({session->device_uuid, session->config.monitor.bitrate, session->config.monitor.client_requested_bitrate,
-                              session->video.pacing_bitrate_kbps, session->video.idr_events, session->video.bitrate_events});
+                              session->video.pacing_bitrate_kbps, session->video.idr_events, session->video.bitrate_events,
+                              session->video.bitrate_limit_kbps});
         }
       }
       return action(sessions);
@@ -908,7 +927,7 @@ namespace stream {
     return !starting || reserve(*starting, 0);
   }
 
-  int set_bitrate_for_sessions(const std::string &client_uuid, int bitrate_kbps) {
+  bitrate_update_t set_bitrate_for_sessions(const std::string &client_uuid, int bitrate_kbps) {
     return broadcast_controls.set_bitrate_for_sessions(client_uuid, bitrate_kbps);
   }
 
@@ -1690,6 +1709,31 @@ namespace stream {
   }
 
   void controlBroadcastThread(control_server_t *server) {
+    server->map(capture_clock_request, [server](session_t *session, const std::string_view &request) {
+      const auto received = capture_clock_microseconds();
+      if (!session->config.capture_timing || !session->control.peer || request.size() != sizeof(uint64_t)) {
+        return;
+      }
+
+      constexpr size_t timing_bytes = 3 * sizeof(uint64_t);
+      const bool encrypted = session->config.controlProtocolType == 13;
+      const control_header_v2 header {util::endian::little(capture_clock_reply), util::endian::little(static_cast<uint16_t>(timing_bytes))};
+      const auto header_bytes = encrypted ? sizeof(header) : sizeof(header.type);
+      std::array<char, sizeof(header) + timing_bytes> reply;
+      std::memcpy(reply.data(), &header, header_bytes);
+      std::memcpy(reply.data() + header_bytes, request.data(), request.size());
+      const auto host_received = util::endian::little(received);
+      const auto host_sent = util::endian::little(capture_clock_microseconds());
+      std::memcpy(reply.data() + header_bytes + sizeof(uint64_t), &host_received, sizeof(host_received));
+      std::memcpy(reply.data() + header_bytes + 2 * sizeof(uint64_t), &host_sent, sizeof(host_sent));
+      std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(reply.size()) + crypto::cipher::tag_size>
+        encrypted_reply;
+      const auto payload = encode_control(session, {reply.data(), header_bytes + timing_bytes}, encrypted_reply);
+      if (!payload.empty()) {
+        server->send(payload, session->control.peer, false, true);
+      }
+    });
+
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
       if (session->video.adaptive_pacing_enabled) {
@@ -2029,7 +2073,7 @@ namespace stream {
           // The gamepad feedback queues below are drained only by this loop, so a
           // session with a controller attached needs the short wait too: a Steam
           // haptic click or a rumble stop must not sit for up to 150 ms.
-          haptics_client |= (session->config.mlFeatureFlags & ML_FF_HAPTICS_PCM) != 0 ||
+          haptics_client |= (session->config.mlFeatureFlags & (ML_FF_HAPTICS_PCM | controller_speaker_pcm::session_feature)) != 0 ||
                             input::has_gamepad(session->input);
 
           if (now > session->pingTimeout) {
@@ -2383,6 +2427,13 @@ namespace stream {
       }
 
       auto lowseq = session->video.lowseq;
+#ifdef _WIN32
+      auto &send_fallback = session->video.send_fallback;
+      const bool send_individually = send_fallback.send_individually(packet_pop_timestamp);
+      bool segmented_would_block = false;
+#else
+      constexpr bool send_individually = false;
+#endif
       const auto send_cancelled = [&] {
         return shutdown_event->peek() || session->shutdown_event->peek() ||
                session->state.load(std::memory_order_acquire) == session::state_e::STOPPING;
@@ -2406,13 +2457,21 @@ namespace stream {
       }
 
       video_short_frame_header_t frame_header = {};
+      boost::endian::little_uint64_at capture_timestamp {};
+      const auto frame_header_size = sizeof(frame_header) + (session->config.capture_timing ? sizeof(capture_timestamp) : 0);
       frame_header.headerType = 0x01;  // Short header type
       frame_header.frameType = packet->is_idr()                     ? 2 :
                                packet->after_ref_frame_invalidation ? 5 :
                                                                       1;
-      frame_header.lastPayloadLen = (payload.size() + sizeof(frame_header)) % (session->config.packetsize - sizeof(NV_VIDEO_PACKET));
+      frame_header.lastPayloadLen = (payload.size() + frame_header_size) % (session->config.packetsize - sizeof(NV_VIDEO_PACKET));
       if (frame_header.lastPayloadLen == 0) {
         frame_header.lastPayloadLen = session->config.packetsize - sizeof(NV_VIDEO_PACKET);
+      }
+
+      const auto capture_now = std::chrono::steady_clock::now();
+      if (session->config.capture_timing && packet->host_processing_timestamp &&
+          *packet->host_processing_timestamp <= capture_now) {
+        capture_timestamp = capture_clock_microseconds(*packet->host_processing_timestamp);
       }
 
       auto host_processing_timestamp = packet->host_processing_timestamp ? packet->host_processing_timestamp : packet->frame_timestamp;
@@ -2446,13 +2505,19 @@ namespace stream {
       auto payload_blocksize = blocksize - sizeof(video_packet_raw_t);
 
       // The frame header precedes the frame in the first packet
-      const std::size_t total_shards = (sizeof(frame_header) + payload.size() + payload_blocksize - 1) / payload_blocksize;
+      const std::size_t total_shards = (frame_header_size + payload.size() + payload_blocksize - 1) / payload_blocksize;
       const std::size_t critical_shards = pyrowave_session && packet->pyrowave_critical_bytes ?
-                                            std::min(total_shards, (sizeof(frame_header) + packet->pyrowave_critical_bytes + payload_blocksize - 1) / payload_blocksize) :
+                                            std::min(total_shards, (frame_header_size + packet->pyrowave_critical_bytes + payload_blocksize - 1) / payload_blocksize) :
                                             0;
       frame_header.pyrowave_critical_packets = std::uint16_t(std::min<std::size_t>(critical_shards, std::numeric_limits<std::uint16_t>::max()));
 
-      auto payload_new = concat_and_insert(sizeof(video_packet_raw_t), payload_blocksize, std::string_view {(char *) &frame_header, sizeof(frame_header)}, payload);
+      std::array<char, sizeof(frame_header) + sizeof(capture_timestamp)> frame_header_bytes;
+      std::memcpy(frame_header_bytes.data(), &frame_header, sizeof(frame_header));
+      if (session->config.capture_timing) {
+        std::memcpy(frame_header_bytes.data() + sizeof(frame_header), &capture_timestamp, sizeof(capture_timestamp));
+      }
+      auto payload_new = concat_and_insert(sizeof(video_packet_raw_t), payload_blocksize,
+        std::string_view {frame_header_bytes.data(), frame_header_size}, payload);
 
       payload = std::string_view {(char *) payload_new.data(), payload_new.size()};
 
@@ -2565,8 +2630,16 @@ namespace stream {
       BOOST_LOG(verbose) << "Generating "sv << fec_blocks_needed << " FEC blocks"sv;
 
       std::size_t frame_packets_accepted = 0;
+#ifdef _WIN32
+      std::int64_t frame_rtp_tick = 0;
+#endif
       const auto bytes_per_packet = blocksize + (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
       auto account_accepted_packets = util::fail_guard([&] {
+#ifdef _WIN32
+        if (frame_packets_accepted != 0) {
+          session->video.last_sent_rtp_tick = frame_rtp_tick;
+        }
+#endif
         // These counters feed session-history bitrate. Preserve actual socket
         // traffic even when only a prefix of the frame was accepted.
         session->stats.packets_sent.fetch_add(frame_packets_accepted, std::memory_order_relaxed);
@@ -2574,7 +2647,7 @@ namespace stream {
       });
 
       try {
-        // Keep zero's legacy timing. Explicit ceilings count the
+        // Keep the legacy default pace for ordinary streams below it. Explicit ceilings count the
         // full video datagram and are never raised to cover encoder/FEC demand:
         // startup and bitrate admission reject demand that cannot fit instead.
         const auto pacing_ceiling = config::stream.pacing_max_bitrate_kbps;
@@ -2582,6 +2655,18 @@ namespace stream {
           pacing_ceiling, blocksize + (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0));
         size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
         ratecontrol_packets_in_1ms = std::max<size_t>(1, ratecontrol_packets_in_1ms);
+        if (!pyrowave_session) {
+          const auto &monitor = session->config.monitor;
+          const auto datagram_bytes = blocksize + (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
+          const auto demand_bps = pacing::nominal_wire_demand_bps(
+            session->video.pacing_bitrate_kbps.load(std::memory_order_relaxed),
+            monitor.framerate, sizeof(video_short_frame_header_t), blocksize - sizeof(video_packet_raw_t),
+            datagram_bytes, config::stream.fec_percentage, session->config.minRequiredFecPackets
+          );
+          const auto bits_per_packet_ms = std::uint64_t(datagram_bytes) * 8 * 1000;
+          const auto demand_packets = (demand_bps + bits_per_packet_ms - 1) / bits_per_packet_ms;
+          ratecontrol_packets_in_1ms = std::max(ratecontrol_packets_in_1ms, static_cast<size_t>(demand_packets));
+        }
         if (pacing_ceiling > 0 && capped_batch_packets == 0) {
           BOOST_LOG(error) << "Configured pacing ceiling has an invalid video datagram"sv;
           session::stop(*session);
@@ -2633,7 +2718,7 @@ namespace stream {
                                   (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
           ratecontrol_packets_in_1ms = pyrowave::policy::pacing_packets_per_ms(
             link_bps, stream_kbps, payload_blocksize, wire_bytes,
-            packet->data_size() + sizeof(frame_header), monitor.framerate, monitor.pyrowave_peer_pace_bps
+            packet->data_size() + frame_header_size, monitor.framerate, monitor.pyrowave_peer_pace_bps
           );
           // Keep the adaptive rate intact. The cumulative deadline below takes
           // the slower of this rate and the exact operator bit-time ceiling.
@@ -2671,7 +2756,7 @@ namespace stream {
           const auto needed_bps = pacing::nominal_wire_demand_bps(
             stream_kbps,
             monitor.framerate,
-            sizeof(frame_header),
+            frame_header_size,
             payload_blocksize,
             wire_bytes,
             // The configured value: oversized frames zero fecPercentage for
@@ -2771,14 +2856,24 @@ namespace stream {
           // had the encode time to deliver those presents.
           packet->frame_timestamp = platf::dxgi::present_timing::refine_send_timestamp(*packet->frame_timestamp);
         }
-#endif
+        // A repeat sent during a capture stall can have a newer stamp than
+        // the recovered image's source time. Advance only the RTP wire clock
+        // in that case and keep the source stamp for timing diagnostics.
+        using rtp_tick = std::chrono::duration<std::int64_t, std::ratio<1, 90000>>;
+        frame_rtp_tick = std::chrono::round<rtp_tick>(*packet->frame_timestamp - video_epoch).count();
+        if (session->video.last_sent_rtp_tick && frame_rtp_tick <= *session->video.last_sent_rtp_tick) {
+          frame_rtp_tick = *session->video.last_sent_rtp_tick + 1;
+        }
+        const auto timestamp = static_cast<std::uint32_t>(frame_rtp_tick);
+#else
         using rtp_tick = std::chrono::duration<uint32_t, std::ratio<1, 90000>>;
         const uint32_t timestamp = std::chrono::round<rtp_tick>(*packet->frame_timestamp - video_epoch).count();
+#endif
 
         // PyroWave record framing: flag the shards that start with a record, where a
         // client that lost a record header resumes parsing.
         const auto record_starts = critical_shards ?
-                                     pyrowave::policy::record_start_shards({packet->data(), packet->data_size()}, payload_blocksize) :
+                                     pyrowave::policy::record_start_shards({packet->data(), packet->data_size()}, payload_blocksize, frame_header_size) :
                                      std::vector<bool> {};
         std::size_t block_first_shard = 0;
 
@@ -2927,7 +3022,13 @@ namespace stream {
               const auto send_result = send_video_batch(
                 current_batch_size,
                 batch_info.allow_fallback,
-                [&] { return platf::send_batch(batch_info); },
+                [&] {
+                  const bool sent = platf::send_batch(batch_info);
+#ifdef _WIN32
+                  segmented_would_block = batch_info.segmented_send_would_block;
+#endif
+                  return sent;
+                },
                 [&](std::size_t y) {
                   auto send_info = platf::send_info_t {
                     shards.prefix(next_shard_to_send + y),
@@ -2940,9 +3041,11 @@ namespace stream {
                     session->localAddress,
                   };
                   send_info.send_cancelled = send_cancelled;
+                  send_info.retry_on_pressure = !send_individually;
                   return platf::send(send_info);
                 },
-                send_cancelled
+                send_cancelled,
+                send_individually
               );
               burst_fallback_batches += send_result.used_fallback;
               frame_packets_accepted += send_result.packets_accepted;
@@ -3143,6 +3246,11 @@ namespace stream {
           wire_timeline_state.previous_frame = current_wire_frame;
         }
 
+#ifdef _WIN32
+        if (send_fallback.frame_sent(send_individually, std::chrono::steady_clock::now())) {
+          BOOST_LOG(info) << "Windows video UDP: individual sends recovered a frame after segmented sends would block"sv;
+        }
+#endif
         // Update per-session performance counters
         session->stats.frames_sent.fetch_add(1, std::memory_order_relaxed);
         session->stats.last_frame_index.store(packet->frame_index(), std::memory_order_relaxed);
@@ -3154,6 +3262,9 @@ namespace stream {
           session->stats.video_send_failures.fetch_add(1, std::memory_order_relaxed);
           ++failed_video_frames;
           const auto now = std::chrono::steady_clock::now();
+#ifdef _WIN32
+          send_fallback.frame_failed(send_individually, segmented_would_block, now);
+#endif
           if (now >= next_send_failure_log) {
             BOOST_LOG(warning) << "Video frame send aborted: frame="sv << packet->frame_index()
                                << "; block="sv << e.block
@@ -3164,6 +3275,9 @@ namespace stream {
           }
         }
       } catch (const std::exception &e) {
+#ifdef _WIN32
+        send_fallback.frame_failed(send_individually, false, std::chrono::steady_clock::now());
+#endif
         BOOST_LOG(error) << "Broadcast video failed "sv << e.what();
         std::this_thread::sleep_for(100ms);
       }
@@ -3508,7 +3622,7 @@ namespace stream {
     return -1;
   }
 
-  void videoThread(session_t *session) {
+  void videoThread(session_t *session, video::config_t capture_config) {
     platf::set_thread_name("session::video");
     auto fg = util::fail_guard([&]() {
       session::stop(*session);
@@ -3527,7 +3641,7 @@ namespace stream {
     session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
 
     BOOST_LOG(debug) << "Start capturing Video"sv;
-    video::capture(session->mail, session->config.monitor, session);
+    video::capture(session->mail, std::move(capture_config), session);
   }
 
   void audioThread(session_t *session) {
@@ -4121,14 +4235,18 @@ namespace stream {
 #endif
       session.input = input::alloc(session.mail, session.config.guide_button, session.config.gcpersist);
 
-      // Preserve each protocol's original startup bitrate choice. Runtime
-      // bitrate changes update this atomic alongside the monitor metadata.
-      const auto &monitor = session.config.monitor;
+      // The capture thread starts from the negotiated settings. Runtime changes
+      // can arrive as soon as the session is published and use bitrate_events.
+      auto monitor = session.config.monitor;
       const bool pyrowave_session = monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT;
       const auto pacing_bitrate_kbps = pyrowave_session ?
                                          (monitor.client_requested_bitrate > 0 ? monitor.client_requested_bitrate : monitor.bitrate) :
                                          (monitor.bitrate > 0 ? monitor.bitrate : monitor.client_requested_bitrate);
       session.video.pacing_bitrate_kbps.store(pacing_bitrate_kbps, std::memory_order_relaxed);
+      if (pyrowave_session) {
+        session.video.bitrate_limit_kbps = monitor.pyrowave_link_bitrate_limit_kbps > 0 ?
+                                             monitor.pyrowave_link_bitrate_limit_kbps : std::numeric_limits<int>::max();
+      }
       // PyroWave keeps its own pacing; the controller only serves ordinary video.
       session.video.adaptive_pacing_enabled = config::stream.host_adaptive_pacing && !pyrowave_session;
       session.video.adaptive_pacing = pacing::adaptive_pacing_t {session.video.adaptive_pacing_enabled};
@@ -4173,7 +4291,7 @@ namespace stream {
       if (!session.audio_disabled) {
         session.audioThread = std::thread {audioThread, &session};
       }
-      session.videoThread = std::thread {videoThread, &session};
+      session.videoThread = std::thread {videoThread, &session, std::move(monitor)};
 
       session.state.store(state_e::RUNNING, std::memory_order_relaxed);
 

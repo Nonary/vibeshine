@@ -37,9 +37,14 @@ def section(begin, end, offset=0):
 
 updated = 'static bool pacing_admits_locked(' in source
 fractional = 'video_pacing_delay_ns(' in read('src/stream_protocol.h')
-helpers = section('  static video_pacing_reservation_t pacing_reservation_for_config(', '  int set_bitrate_for_sessions(') if updated else ''
-abr = section('  int set_bitrate_for_sessions(', '\n  static const char *state_name')
+session_limits = '  bitrate_update_t set_bitrate_for_sessions(' in source
+abr_start = '  bitrate_update_t set_bitrate_for_sessions(' if session_limits else '  int set_bitrate_for_sessions('
+helpers = section('  static video_pacing_reservation_t pacing_reservation_for_config(', abr_start) if updated else ''
+abr = section(abr_start, '\n  static const char *state_name')
 start_at = source.index('    int start(session_t &session,')
+monitor_snapshot = ('      auto monitor = session.config.monitor;' if '      auto monitor = session.config.monitor;' in source
+                    else '      const auto &monitor = session.config.monitor;')
+bitrate_init = section(monitor_snapshot, '      // PyroWave keeps its own pacing;', start_at)
 publish = section('      // Insert this session into the session list', '\n      auto addr =', start_at)
 if updated:
     assert 'constexpr int START_PACING_REJECTED = -2;' in read('src/stream.h')
@@ -63,8 +68,21 @@ fec_count = section('      auto payload_size = payload.size();', '\n      // If 
 splitter = section('        // The max number of data shards per block', '\n      }\n\n      // Pace standard video')
 detail_max = re.search(r'constexpr int MAX_DETAIL_FEC_PERCENTAGE = \d+;', read('src/pyrowave_policy.h')).group()
 http = read('src/nvhttp.cpp')
-http_at = http.index('    const int updated = stream::set_bitrate_for_sessions(')
-http_handler = http[http.index('\n', http_at) + 1:http.index('    BOOST_LOG(info) << "Client ["sv', http_at)]
+http_start = ('    const int requested_kbps = host_max_kbps > 0'
+              if '    const int requested_kbps = host_max_kbps > 0' in http
+              else '    constexpr int absolute_max_bitrate_kbps = ')
+http_at = http.index(http_start)
+http_handler = http[http_at:http.index('\n  }', http_at)]
+http_handler = http_handler.replace('config::video.max_bitrate', 'host_max_kbps')
+video = read('src/video.cpp')
+if '    const int initial_wire_kbps =' in video:
+    pyro_limits_at = video.index('    const int initial_wire_kbps =')
+    pyro_limits_end = video.index(';', video.index('    const int maximum_wire_kbps =', pyro_limits_at)) + 1
+else:
+    pyro_limits_at = video.index('    const int maximum_wire_kbps =')
+    pyro_limits_end = video.index(';', video.index('    const int audio_control_reserve_kbps =', pyro_limits_at)) + 1
+pyro_update_at = video.index('      if (latest_bitrate) {', video.index('  bool encode_run_pyrowave('))
+pyro_update_end = video.index('      if (idr_events->peek())', pyro_update_at)
 rtsp = read('src/rtsp.cpp')
 rtsp_at = rtsp.index('          stream_session = stream::session::alloc(config, *launch_session);')
 rtsp_mapping = rtsp[rtsp.index('\n', rtsp_at) + 1:rtsp.index('        } catch (const std::exception &e)', rtsp_at)]
@@ -78,17 +96,27 @@ if updated:
 runtime_header = read('src/stream_broadcast_runtime.h')
 runtime_types = runtime_header[runtime_header.index('  struct session_control_t'):]
 runtime_impl = read('src/stream_broadcast_runtime.cpp')
-runtime_impl = runtime_impl[runtime_impl.index('  int set_bitrate('):]
+runtime_impl_start = '  bitrate_update_t set_bitrate(' if session_limits else '  int set_bitrate('
+runtime_impl = runtime_impl[runtime_impl.index(runtime_impl_start):]
 controls = section('  static broadcast_runtime::controls_t<broadcast_ctx_t> broadcast_controls {', '\n  void request_idr_for_all_sessions(')
 controls = 'namespace stream::broadcast_runtime {\n' + runtime_types + '\nnamespace stream::broadcast_runtime {\n' + runtime_impl + '\n' + controls
+if session_limits:
+    runtime_result = runtime_header[runtime_header.index('namespace stream {'):runtime_header.index('namespace stream::broadcast_runtime {')]
+    default_limit = re.search(r'constexpr int DEFAULT_BITRATE_LIMIT_KBPS = \d+;', runtime_header)
+    if default_limit:
+        controls = controls.replace('namespace stream::broadcast_runtime {',
+                                    'namespace stream::broadcast_runtime {\n  ' + default_limit.group(), 1)
+    controls = runtime_result + 'using stream::bitrate_update_t;\n' + controls
 ratecontrol = section('        const auto ratecontrol_pace =', '\n\n        // Send less')
 template = (Path(__file__).with_suffix('.cpp.in')).read_text()
 program = template
-for key, text in {'CONTROLS': controls, 'RATECONTROL': ratecontrol, 'HELPERS': helpers, 'ABR': abr, 'PUBLISH': publish, 'PACER': pacer, 'CLAMP': clamp,
+for key, text in {'CONTROLS': controls, 'RATECONTROL': ratecontrol, 'HELPERS': helpers, 'ABR': abr, 'BITRATE_INIT': bitrate_init, 'PUBLISH': publish,
+                  'UPDATE_COUNT': '.sessions_updated' if session_limits else '', 'PACER': pacer, 'CLAMP': clamp,
                   'BATCHES': batches, 'FRAME_DELAY': frame_delay, 'CONDITION': condition, 'FEC_COUNT': fec_count, 'SPLITTER': splitter,
                   'DETAIL_MAX': detail_max, 'UPDATED': '1' if updated else '0',
                   'RATE_HELPERS': ('using stream::video_pacing_batch_packets; using stream::video_pacing_delay_ns;' if fractional else 'using stream::video_pacing_packets_per_ms;'),
-                  'HTTP_HANDLER': http_handler, 'RTSP_MAPPING': rtsp_mapping}.items():
+                  'HTTP_HANDLER': http_handler, 'RTSP_MAPPING': rtsp_mapping,
+                  'PYRO_LIMITS': video[pyro_limits_at:pyro_limits_end], 'PYRO_UPDATE': video[pyro_update_at:pyro_update_end]}.items():
     program = program.replace('@' + key + '@', text)
 
 # Real layout contracts used by the sender; the fixture's plain byte structs

@@ -4372,7 +4372,8 @@ namespace video {
         }
       }
 
-      auto bitrate = ((config::video.max_bitrate > 0) ? std::min(config.bitrate, config::video.max_bitrate) : config.bitrate) * 1000;
+      const int bitrate_kbps = config::video.max_bitrate > 0 ? std::min(config.bitrate, config::video.max_bitrate) : config.bitrate;
+      const auto bitrate = std::int64_t(bitrate_kbps) * 1000;
       BOOST_LOG(info) << "Streaming bitrate is " << bitrate;
       ctx->rc_max_rate = bitrate;
       ctx->bit_rate = bitrate;
@@ -4389,21 +4390,23 @@ namespace video {
       }
 
       if (!(encoder.flags & NO_RC_BUF_LIMIT)) {
+        std::int64_t buffer_size;
         if (!hardware && (ctx->slices > 1 || config.videoFormat == 1)) {
           // Use a larger rc_buffer_size for software encoding when slices are enabled,
           // because libx264 can severely degrade quality if the buffer is too small.
           // libx265 encounters this issue more frequently, so always scale the
           // buffer by 1.5x for software HEVC encoding.
-          ctx->rc_buffer_size = bitrate / ((config.framerate * 10) / 15);
+          buffer_size = bitrate / std::max(1, (config.framerate * 10) / 15);
         } else {
-          ctx->rc_buffer_size = bitrate / config.framerate;
+          buffer_size = bitrate / std::max(1, config.framerate);
 
 #ifndef __APPLE__
           if (encoder.name == "nvenc" && config::video.nv_legacy.vbv_percentage_increase > 0) {
-            ctx->rc_buffer_size += ctx->rc_buffer_size * config::video.nv_legacy.vbv_percentage_increase / 100;
+            buffer_size += buffer_size * config::video.nv_legacy.vbv_percentage_increase / 100;
           }
 #endif
         }
+        ctx->rc_buffer_size = static_cast<int>(std::min<std::int64_t>(buffer_size, std::numeric_limits<int>::max()));
       }
 
       // Allow the encoding device a final opportunity to set/unset or override any options
@@ -5444,7 +5447,7 @@ namespace video {
         config.client_requested_bitrate = *latest_bitrate;
         if (session->set_bitrate(*latest_bitrate)) {
           BOOST_LOG(info) << "Applied runtime bitrate "sv << *latest_bitrate << " kbps (live)"sv;
-        } else if (frame_nr > 1) {
+        } else {
           BOOST_LOG(info) << "Rebuilding encoder to apply runtime bitrate "sv << *latest_bitrate << " kbps"sv;
           break;
         }
@@ -6348,6 +6351,8 @@ namespace video {
     safe::mail_t mail,
     img_event_t images,
     config_t &config,
+    int maximum_wire_kbps,
+    int audio_control_reserve_kbps,
     std::shared_ptr<platf::display_t> disp,
     const sunshine_colorspace_t &colorspace,
     safe::signal_t &reinit_event,
@@ -6365,12 +6370,10 @@ namespace video {
     params.bitrate_kbps = config.bitrate;
     params.framing = config.pyrowave_framing;
     params.packetsize = config.packetsize;
+    params.frame_header_bytes = config.pyrowave_frame_header_bytes;
     params.critical_fec_percentage = config::stream.pyrowave_critical_fec_percentage;
     params.min_parity_shards = config.pyrowave_min_parity_shards;
     params.critical_fec = params.critical_fec_percentage > 0;
-
-    const int maximum_wire_kbps = config.client_requested_bitrate > 0 ? config.client_requested_bitrate : config.bitrate;
-    const int audio_control_reserve_kbps = std::max(0, maximum_wire_kbps - config.bitrate);
 
     auto encoder = pyrowave::host::make_encoder(params, disp);
     if (!encoder) {
@@ -6521,6 +6524,12 @@ namespace video {
       return;
     }
 
+    // Retain the link ceiling and original overhead across encoder reinitialization.
+    const int initial_wire_kbps = config.client_requested_bitrate > 0 ? config.client_requested_bitrate : config.bitrate;
+    const int audio_control_reserve_kbps = std::max(0, initial_wire_kbps - config.bitrate);
+    const int maximum_wire_kbps = config.pyrowave_link_bitrate_limit_kbps > 0 ?
+                                  config.pyrowave_link_bitrate_limit_kbps : std::numeric_limits<int>::max();
+
     if (!source_ctx.capture_ctx_queue->running()) {
       return;
     }
@@ -6566,7 +6575,8 @@ namespace video {
 
         // absolute mouse coordinates require that the dimensions of the screen are known
         publish_touch_port(touch_port_event, make_port(display.get(), config));
-        if (!encode_run_pyrowave(frame_nr, mail, images, config, display, colorspace, source_ctx.reinit_event, channel_data, std::move(hdr_info), last_hdr_info)) {
+        if (!encode_run_pyrowave(frame_nr, mail, images, config, maximum_wire_kbps, audio_control_reserve_kbps,
+                                display, colorspace, source_ctx.reinit_event, channel_data, std::move(hdr_info), last_hdr_info)) {
           // Shutdown, or an encoder failure: end the session either way.
           return;
         }
